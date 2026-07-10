@@ -6,13 +6,13 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use tempfile::tempdir;
 use xtask::local_package::{
-    LINUX_PACKAGE_LABEL, LINUX_RUNTIME_DEPENDENCIES, LinuxPackageRequest, MACOS_DMG_NAME,
-    MACOS_PACKAGE_LABEL, MACOS_ZIP_NAME, MAX_ARTIFACT_BYTES, MAX_EXECUTABLE_BYTES,
-    MacPackageRequest, assemble_macos_app, create_package_output_root, debian_package_plan,
-    finalize_linux_archive_manifest, finalize_macos_dmg_manifest, finalize_macos_zip_manifest,
-    linux_archive_plan, macos_adhoc_codesign_plan, macos_codesign_verify_plan, macos_dmg_plan,
-    macos_zip_plan, prepare_debian_staging, prepare_linux_layout, prepare_rpm_staging,
-    rpm_package_plan, sha256_regular_file,
+    LINUX_PACKAGE_LABEL, LINUX_RUNTIME_DEPENDENCIES, LinuxPackageRequest, MACOS_PACKAGE_LABEL,
+    MAX_ARTIFACT_BYTES, MAX_EXECUTABLE_BYTES, MacPackageRequest, assemble_macos_app,
+    create_package_output_root, debian_package_plan, finalize_linux_archive_manifest,
+    finalize_macos_dmg_manifest, finalize_macos_zip_manifest, linux_archive_plan,
+    macos_adhoc_codesign_plan, macos_codesign_verify_plan, macos_dmg_plan, macos_zip_plan,
+    prepare_debian_staging, prepare_linux_layout, prepare_rpm_staging, rpm_package_plan,
+    sha256_regular_file,
 };
 use xtask::local_package_cli::{
     CommandExecutor, LocalPackageCliError, LocalPackageCliRequest, ProcessCommandExecutor,
@@ -66,7 +66,7 @@ fn assembles_deterministic_arm64_app_bound_to_candidate_hash() {
             output
                 .join("_staging")
                 .join("app")
-                .join("FeatherMark.app/Contents/MacOS/FeatherMark")
+                .join("Rutile.app/Contents/MacOS/FeatherMark")
         )
         .unwrap(),
         bytes
@@ -76,7 +76,7 @@ fn assembles_deterministic_arm64_app_bound_to_candidate_hash() {
             output
                 .join("_staging")
                 .join("app")
-                .join("FeatherMark.app/Contents/MacOS/FeatherMark")
+                .join("Rutile.app/Contents/MacOS/FeatherMark")
         )
         .unwrap()
         .permissions()
@@ -88,23 +88,27 @@ fn assembles_deterministic_arm64_app_bound_to_candidate_hash() {
         output
             .join("_staging")
             .join("app")
-            .join("FeatherMark.app/Contents/Info.plist"),
+            .join("Rutile.app/Contents/Info.plist"),
     )
     .unwrap();
     assert!(plist.contains("<string>arm64</string>"));
+    assert!(plist.contains("<key>CFBundleDisplayName</key><string>Rutile</string>"));
+    assert!(plist.contains("<key>CFBundleExecutable</key><string>FeatherMark</string>"));
     assert!(plist.contains("<string>com.kyanitelabs.feathermark</string>"));
+    assert!(plist.contains("<key>CFBundleName</key><string>Rutile</string>"));
 
     let metadata: serde_json::Value = serde_json::from_slice(
         &fs::read(
             output
                 .join("_staging")
                 .join("app")
-                .join("FeatherMark.app/Contents/Resources/package-manifest-v1.json"),
+                .join("Rutile.app/Contents/Resources/package-manifest-v1.json"),
         )
         .unwrap(),
     )
     .unwrap();
     assert_eq!(metadata["label"], MACOS_PACKAGE_LABEL);
+    assert_eq!(metadata["schema"], "feathermark-local-package-v1");
     assert_eq!(metadata["build_input_sha256"], sha256(&mach_o_arm64()));
     assert_eq!(metadata["source_commit"], valid_source_commit());
     assert_eq!(metadata["version"], "0.1.0");
@@ -139,6 +143,12 @@ fn macos_plans_are_argument_vectors_and_dmg_manifest_hashes_existing_artifact() 
     assert_eq!(create.program, "hdiutil");
     assert_eq!(create.args.last().unwrap(), dmg.as_os_str());
     assert!(!create.args.iter().any(|arg| arg == "-ov"));
+    assert!(
+        create
+            .args
+            .windows(2)
+            .any(|pair| pair[0] == "-volname" && pair[1] == "Rutile")
+    );
     assert!(!create.args.iter().any(|arg| arg == "sh" || arg == "-c"));
 
     // Finalization reads existing artifacts; use distinct existing paths.
@@ -203,7 +213,7 @@ fn prepares_linux_layout_with_locked_gtk3_webkitgtk41_dependencies() {
     let executable = output
         .join("_staging")
         .join("archive")
-        .join("FeatherMark-linux-x86_64/bin/feathermark");
+        .join("Rutile-linux-x86_64/bin/feathermark");
     assert_eq!(fs::read(&executable).unwrap(), bytes);
     assert_eq!(
         fs::metadata(executable).unwrap().permissions().mode() & 0o777,
@@ -215,12 +225,13 @@ fn prepares_linux_layout_with_locked_gtk3_webkitgtk41_dependencies() {
             output
                 .join("_staging")
                 .join("archive")
-                .join("FeatherMark-linux-x86_64/package-manifest-v1.json"),
+                .join("Rutile-linux-x86_64/package-manifest-v1.json"),
         )
         .unwrap(),
     )
     .unwrap();
     assert_eq!(manifest["label"], LINUX_PACKAGE_LABEL);
+    assert_eq!(manifest["schema"], "feathermark-local-package-v1");
     assert_eq!(manifest["wayland_verified"], false);
     assert_eq!(manifest["rpm_runtime_verified"], false);
     let dependencies = manifest["runtime_dependencies"].as_array().unwrap();
@@ -293,6 +304,9 @@ fn prepares_debian_staging_with_locked_dependencies() {
         "Depends: libgtk-3-0, libgtksourceview-4-0, libwebkit2gtk-4.1-0, libjavascriptcoregtk-4.1-0"
     ));
     assert!(control.contains("Architecture: amd64"));
+    assert!(control.contains("Package: feathermark"));
+    assert!(control.contains("Maintainer: Kyanite Build <build@kyanitelabs.ai>"));
+    assert!(control.contains("Description: Rutile — A local-first writing studio by Kyanite."));
 
     let plan = debian_package_plan(&receipt.output, &root.join("out.deb")).unwrap();
     assert_eq!(plan.program, "dpkg-deb");
@@ -321,9 +335,12 @@ fn prepares_rpm_staging_with_locked_requirements() {
     .unwrap();
 
     let spec = fs::read_to_string(receipt.output.join("SPECS/feathermark.spec")).unwrap();
+    assert!(spec.contains("Name:           feathermark"));
     assert!(spec.contains("Version:        0.1.0"));
     assert!(spec.contains("BuildArch:      x86_64"));
     assert!(spec.contains("Requires:       gtk3, gtksourceview4, webkit2gtk4.1"));
+    assert!(spec.contains("Summary:        Rutile — A local-first writing studio by Kyanite."));
+    assert!(spec.contains("%description\nRutile — A local-first writing studio by Kyanite."));
     assert!(spec.contains(&format!("install -D -m 0755 {}", candidate.display())));
     assert!(!spec.contains("%post"));
 
@@ -691,11 +708,11 @@ fn run_local_package_macos_produces_manifests_and_cleans_staging() {
     assert_eq!(manifests.len(), 2);
     assert_eq!(
         manifests[0].artifact.as_os_str().to_string_lossy(),
-        MACOS_ZIP_NAME
+        "Rutile-0.1.0-macos-arm64.app.zip"
     );
     assert_eq!(
         manifests[1].artifact.as_os_str().to_string_lossy(),
-        MACOS_DMG_NAME
+        "Rutile-0.1.0-macos-arm64.dmg"
     );
     assert_eq!(manifests[0].build_input_sha256, sha256(&bytes));
     assert_eq!(manifests[0].packaged_executable_sha256, sha256(&bytes));
@@ -731,7 +748,7 @@ fn run_local_package_linux_produces_manifests_and_cleans_staging() {
     assert_eq!(manifests.len(), 3);
     assert_eq!(
         manifests[0].artifact.as_os_str().to_string_lossy(),
-        "FeatherMark-0.1.0-linux-x86_64.tar.zst"
+        "Rutile-0.1.0-linux-x86_64.tar.zst"
     );
     assert_eq!(manifests[0].build_input_sha256, sha256(&bytes));
     assert_eq!(manifests[0].packaged_executable_sha256, sha256(&bytes));

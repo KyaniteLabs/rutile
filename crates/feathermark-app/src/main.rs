@@ -40,7 +40,10 @@ fn main() {
     };
 
     if let Err(error) = result {
-        eprintln!("FeatherMark failed to start: {error}");
+        eprintln!(
+            "{} failed to start: {error}",
+            feathermark_app::brand::PRODUCT_NAME
+        );
         std::process::exit(1);
     }
 }

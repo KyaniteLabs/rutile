@@ -1,4 +1,4 @@
-//! Deterministic, local-only package assembly for FeatherMark release candidates.
+//! Deterministic, local-only package assembly for Rutile release candidates.
 //!
 //! This module prepares packages and command argument vectors. It never invokes
 //! signing, disk-image, archive, or shell programs itself.
@@ -19,12 +19,12 @@ pub const MAX_ARTIFACT_BYTES: u64 = 20 * 1024 * 1024;
 pub const MACOS_PACKAGE_LABEL: &str = "local-unnotarized-macos-arm64";
 pub const LINUX_PACKAGE_LABEL: &str = "linux-x86_64-unverified-wayland";
 
-pub const MACOS_APP_NAME: &str = "FeatherMark.app";
-pub const MACOS_ZIP_NAME: &str = "FeatherMark-0.1.0-macos-arm64.app.zip";
-pub const MACOS_DMG_NAME: &str = "FeatherMark-0.1.0-macos-arm64.dmg";
+pub const MACOS_APP_NAME: &str = "Rutile.app";
+pub const MACOS_ZIP_NAME: &str = "Rutile-0.1.0-macos-arm64.app.zip";
+pub const MACOS_DMG_NAME: &str = "Rutile-0.1.0-macos-arm64.dmg";
 
-pub const LINUX_ARCHIVE_DIR_NAME: &str = "FeatherMark-linux-x86_64";
-pub const LINUX_ARCHIVE_NAME: &str = "FeatherMark-0.1.0-linux-x86_64.tar.zst";
+pub const LINUX_ARCHIVE_DIR_NAME: &str = "Rutile-linux-x86_64";
+pub const LINUX_ARCHIVE_NAME: &str = "Rutile-0.1.0-linux-x86_64.tar.zst";
 pub const LINUX_DEB_NAME: &str = "feathermark_0.1.0_amd64.deb";
 pub const LINUX_RPM_NAME: &str = "feathermark-0.1.0-1.x86_64.rpm";
 
@@ -206,10 +206,10 @@ pub fn assemble_macos_app(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
 <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"https://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
 <plist version=\"1.0\"><dict>\n\
-  <key>CFBundleDisplayName</key><string>FeatherMark</string>\n\
+  <key>CFBundleDisplayName</key><string>Rutile</string>\n\
   <key>CFBundleExecutable</key><string>FeatherMark</string>\n\
   <key>CFBundleIdentifier</key><string>com.kyanitelabs.feathermark</string>\n\
-  <key>CFBundleName</key><string>FeatherMark</string>\n\
+  <key>CFBundleName</key><string>Rutile</string>\n\
   <key>CFBundlePackageType</key><string>APPL</string>\n\
   <key>CFBundleShortVersionString</key><string>{}</string>\n\
   <key>CFBundleVersion</key><string>{}</string>\n\
@@ -325,8 +325,8 @@ Section: editors\n\
 Priority: optional\n\
 Architecture: amd64\n\
 Depends: libgtk-3-0, libgtksourceview-4-0, libwebkit2gtk-4.1-0, libjavascriptcoregtk-4.1-0\n\
-Maintainer: FeatherMark Build <build@kyanitelabs.ai>\n\
-Description: FeatherMark local beta Markdown editor\n",
+Maintainer: Kyanite Build <build@kyanitelabs.ai>\n\
+Description: Rutile — A local-first writing studio by Kyanite.\n",
         request.version
     );
     write_new_file(&control_dir.join("control"), control.as_bytes())?;
@@ -376,7 +376,7 @@ pub fn prepare_rpm_staging(
         "Name:           feathermark\n\
 Version:        {}\n\
 Release:        1%{{?dist}}\n\
-Summary:        FeatherMark local beta Markdown editor\n\
+Summary:        Rutile — A local-first writing studio by Kyanite.\n\
 License:        Proprietary\n\
 URL:            https://kyanitelabs.ai\n\
 BuildArch:      x86_64\n\
@@ -384,7 +384,7 @@ BuildArch:      x86_64\n\
 Requires:       gtk3, gtksourceview4, webkit2gtk4.1\n\
 \n\
 %description\n\
-FeatherMark local beta Markdown editor.\n\
+Rutile — A local-first writing studio by Kyanite.\n\
 \n\
 %install\n\
 install -D -m 0755 {} %{{buildroot}}/usr/bin/feathermark\n\
@@ -476,7 +476,7 @@ pub fn macos_dmg_plan(app: &Path, dmg: &Path) -> Result<CommandPlan, LocalPackag
         args: vec![
             "create".into(),
             "-volname".into(),
-            "FeatherMark".into(),
+            "Rutile".into(),
             "-srcfolder".into(),
             app.as_os_str().to_owned(),
             "-format".into(),

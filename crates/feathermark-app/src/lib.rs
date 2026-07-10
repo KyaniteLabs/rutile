@@ -1,4 +1,4 @@
-//! Headless application composition for FeatherMark's native platform shells.
+//! Headless application composition for Rutile's native platform shells.
 
 #[cfg(all(feature = "linux-gtk", feature = "macos-shell"))]
 compile_error!("features `linux-gtk` and `macos-shell` are mutually exclusive");
@@ -10,6 +10,7 @@ compile_error!("feature `linux-gtk` requires a Linux target");
 compile_error!("feature `macos-shell` requires a macOS target");
 
 pub mod app;
+pub mod brand;
 pub mod platform;
 pub mod preview_host;
 pub mod render_scheduler;

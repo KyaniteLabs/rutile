@@ -27,6 +27,7 @@ use wry::{NewWindowResponse, Rect, WebContext, WebView, WebViewBuilder, WebViewB
 
 use super::PlatformAdapter;
 use crate::app::{AppEffect, AppMessage, AppState, CloseDecision, CloseOutcome};
+use crate::brand::{PRODUCT_NAME, SOURCE_EDITOR_LABEL, STARTER_DOCUMENT, status_title};
 use crate::preview_host::{
     HostError, NavigationKind, PreviewControlSink, PreviewHost, SchemeRequest, ScrollDelivery,
 };
@@ -803,12 +804,12 @@ pub struct LinuxSessionStats {
 
 impl LinuxProductSession {
     pub fn new() -> Result<Self, String> {
-        let document = Document::new("").map_err(|error| error.to_string())?;
+        let document = Document::new(STARTER_DOCUMENT).map_err(|error| error.to_string())?;
         let mut app = AppState::new();
         let mut scheduler = RenderScheduler::new();
         for effect in app.reduce(AppMessage::NewDocument) {
             if let AppEffect::ScheduleRender { revision } = effect {
-                scheduler.submit(RenderRequest::new(revision, Arc::from("")), 0);
+                scheduler.submit(RenderRequest::new(revision, Arc::from(STARTER_DOCUMENT)), 0);
             }
         }
         Ok(Self {
@@ -1520,7 +1521,7 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
     let editor_events = Rc::new(RefCell::new(VecDeque::<EditorEvent>::new()));
 
     let window = gtk::ApplicationWindow::new(application);
-    window.set_title("FeatherMark");
+    window.set_title(PRODUCT_NAME);
     window.set_default_size(INITIAL_WIDTH as i32, INITIAL_HEIGHT as i32);
 
     let paned = gtk::Paned::new(gtk::Orientation::Horizontal);
@@ -1531,6 +1532,9 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
     source_view.set_monospace(true);
     source_view.set_hexpand(true);
     source_view.set_vexpand(true);
+    if let Some(accessible) = source_view.accessible() {
+        accessible.set_name(SOURCE_EDITOR_LABEL);
+    }
     let mut editor_adapter = GtkSourceEditorAdapter::new(&source_buffer);
     editor_adapter
         .install_open_snapshot(&session.borrow().document.snapshot())
@@ -1619,7 +1623,7 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
             {
                 Ok(effects) => effects,
                 Err(error) => {
-                    ipc_window.set_title(&format!("FeatherMark — preview rejected: {error}"));
+                    ipc_window.set_title(&status_title(&format!("preview rejected: {error}")));
                     return;
                 }
             };
@@ -1650,20 +1654,20 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
                                     source_start,
                                     interaction_id,
                                 ) {
-                                    ipc_window.set_title(&format!(
-                                        "FeatherMark — preview scroll rejected: {error}"
-                                    ));
+                                    ipc_window.set_title(&status_title(&format!(
+                                        "preview scroll rejected: {error}"
+                                    )));
                                 }
                             }
                             Ok(LinuxScrollDispatch::Suppressed) => {}
                             Ok(LinuxScrollDispatch::Preview { .. }) => {}
-                            Err(error) => ipc_window.set_title(&format!(
-                                "FeatherMark — stale preview scroll rejected: {error}"
-                            )),
+                            Err(error) => ipc_window.set_title(&status_title(&format!(
+                                "stale preview scroll rejected: {error}"
+                            ))),
                         }
                     }
                     AppEffect::PresentLink(_) => {
-                        ipc_window.set_title("FeatherMark — external link blocked");
+                        ipc_window.set_title(&status_title("external link blocked"));
                     }
                     _ => {}
                 }
@@ -1699,11 +1703,11 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
                         .borrow_mut()
                         .set_read_only_generated(revision, generated)
                     {
-                        window.set_title(&format!(
-                            "FeatherMark — generated source inspection failed: {error}"
-                        ));
+                        window.set_title(&status_title(&format!(
+                            "generated source inspection failed: {error}"
+                        )));
                     } else {
-                        window.set_title("FeatherMark — Generated Source (read only)");
+                        window.set_title(&status_title("Generated Source (read only)"));
                     }
                 }
                 return gtk::glib::Propagation::Stop;
@@ -1720,7 +1724,7 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
                         .map_err(|error| error.to_string())
                 });
                 if let Err(error) = result {
-                    window.set_title(&format!("FeatherMark — reload failed: {error}"));
+                    window.set_title(&status_title(&format!("reload failed: {error}")));
                 }
                 return gtk::glib::Propagation::Stop;
             }
@@ -1729,7 +1733,7 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
                     .borrow_mut()
                     .resolve_external_conflict(ExternalResolution::KeepBuffer, elapsed_ms(started))
                 {
-                    window.set_title(&format!("FeatherMark — keep buffer failed: {error}"));
+                    window.set_title(&status_title(&format!("keep buffer failed: {error}")));
                 }
                 return gtk::glib::Propagation::Stop;
             }
@@ -1749,7 +1753,7 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
                         }
                     };
                     if let Err(error) = result {
-                        window.set_title(&format!("FeatherMark — save failed: {error}"));
+                        window.set_title(&status_title(&format!("save failed: {error}")));
                     }
                     return gtk::glib::Propagation::Stop;
                 }
@@ -1758,7 +1762,7 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
             if let Some(change) = change
                 && let Err(error) = editor_adapter.borrow_mut().apply_external_change(&change)
             {
-                window.set_title(&format!("FeatherMark — history failed: {error}"));
+                window.set_title(&status_title(&format!("history failed: {error}")));
             }
             gtk::glib::Propagation::Stop
         });
@@ -1772,7 +1776,7 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
                 .borrow_mut()
                 .resize(allocation.width(), allocation.height())
             {
-                window.set_title(&format!("FeatherMark — {error}"));
+                window.set_title(&status_title(&error.to_string()));
             }
         });
     }
@@ -1782,7 +1786,7 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
         let window = window.clone();
         preview_container.connect_focus_in_event(move |_container, _event| {
             if let Err(error) = native_web.borrow().focus() {
-                window.set_title(&format!("FeatherMark — {error}"));
+                window.set_title(&status_title(&error.to_string()));
             }
             gtk::glib::Propagation::Proceed
         });
@@ -1805,7 +1809,7 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
         let window = window.clone();
         preview_container.connect_map(move |_container| {
             if let Err(error) = native_web.borrow_mut().resume() {
-                window.set_title(&format!("FeatherMark — resume failed: {error}"));
+                window.set_title(&status_title(&format!("resume failed: {error}")));
             }
         });
     }
@@ -1815,7 +1819,7 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
         let window = window.clone();
         preview_container.connect_unmap(move |_container| {
             if let Err(error) = native_web.borrow_mut().suspend() {
-                window.set_title(&format!("FeatherMark — suspend failed: {error}"));
+                window.set_title(&status_title(&format!("suspend failed: {error}")));
             }
         });
     }
@@ -1872,9 +1876,9 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
                                     .borrow_mut()
                                     .acknowledge_local_commit(commit_id, &change)
                                 {
-                                    window.set_title(&format!(
-                                        "FeatherMark — editor acknowledgement failed: {error}"
-                                    ));
+                                    window.set_title(&status_title(&format!(
+                                        "editor acknowledgement failed: {error}"
+                                    )));
                                 }
                             }
                             Ok(None) => {}
@@ -1885,7 +1889,7 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
                                     LocalCommitRejection::InvalidEdit,
                                     &snapshot,
                                 );
-                                window.set_title(&format!("FeatherMark — edit rejected: {error}"));
+                                window.set_title(&status_title(&format!("edit rejected: {error}")));
                             }
                         }
                     }
@@ -1935,23 +1939,23 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
                         if let Err(error) =
                             editor_adapter.borrow_mut().install_open_snapshot(&snapshot)
                         {
-                            window.set_title(&format!(
-                                "FeatherMark — external reload mirror failed: {error}"
-                            ));
+                            window.set_title(&status_title(&format!(
+                                "external reload mirror failed: {error}"
+                            )));
                         }
                     }
                     Ok(LinuxExternalOutcome::Conflict | LinuxExternalOutcome::Unchanged) => {}
                     Err(error) => {
-                        window.set_title(&format!(
-                            "FeatherMark — external change check failed: {error}"
-                        ));
+                        window.set_title(&status_title(&format!(
+                            "external change check failed: {error}"
+                        )));
                     }
                 }
             }
             if let Some(permit) = session.borrow_mut().start_render(elapsed_ms(started))
                 && let Err(error) = worker.submit(permit)
             {
-                window.set_title(&format!("FeatherMark — render queue failed: {error}"));
+                window.set_title(&status_title(&format!("render queue failed: {error}")));
                 return gtk::glib::ControlFlow::Break;
             }
             match worker.try_recv() {
@@ -1960,28 +1964,29 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
                 {
                     Ok(NativeRenderOutcome::Navigate { url, .. }) => {
                         if let Err(error) = native_web.borrow().load_url(&url) {
-                            window.set_title(&format!("FeatherMark — {error}"));
+                            window.set_title(&status_title(&error.to_string()));
                             return gtk::glib::ControlFlow::Break;
                         }
                     }
                     Ok(_) => {}
                     Err(error) => {
-                        window.set_title(&format!("FeatherMark — render failed: {error}"));
+                        window.set_title(&status_title(&format!("render failed: {error}")));
                     }
                 },
                 Ok(None) => {}
                 Err(error) => {
-                    window.set_title(&format!("FeatherMark — renderer stopped: {error}"));
+                    window.set_title(&status_title(&format!("renderer stopped: {error}")));
                     return gtk::glib::ControlFlow::Break;
                 }
             }
-            window.set_title(if session.borrow().has_external_conflict() {
-                "FeatherMark — File changed on disk (Ctrl+Shift+R reload, Ctrl+Shift+K keep)"
+            let title = if session.borrow().has_external_conflict() {
+                status_title("File changed on disk (Ctrl+Shift+R reload, Ctrl+Shift+K keep)")
             } else if session.borrow().dirty() {
-                "FeatherMark — Modified"
+                status_title("Modified")
             } else {
-                "FeatherMark"
-            });
+                PRODUCT_NAME.to_owned()
+            };
+            window.set_title(&title);
             gtk::glib::ControlFlow::Continue
         });
     }
@@ -2062,7 +2067,7 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
                 lifecycle_web.borrow().focus()
             })();
             if let Err(error) = result {
-                lifecycle_window.set_title(&format!("FeatherMark — lifecycle failed: {error}"));
+                lifecycle_window.set_title(&status_title(&format!("lifecycle failed: {error}")));
             }
             lifecycle_view.grab_focus();
         });
@@ -2072,7 +2077,7 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
         let save_path = path.clone();
         gtk::glib::timeout_add_local_once(Duration::from_millis(500), move || {
             if let Err(error) = save_session.borrow_mut().save_as(Path::new(&save_path)) {
-                save_window.set_title(&format!("FeatherMark — functional save failed: {error}"));
+                save_window.set_title(&status_title(&format!("functional save failed: {error}")));
             }
         });
 
@@ -2093,7 +2098,7 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
             });
             if let Err(error) = result {
                 reopen_window
-                    .set_title(&format!("FeatherMark — functional reopen failed: {error}"));
+                    .set_title(&status_title(&format!("functional reopen failed: {error}")));
             }
         });
 
@@ -2128,7 +2133,7 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
             })();
             if let Err(error) = result {
                 scroll_window
-                    .set_title(&format!("FeatherMark — functional scroll failed: {error}"));
+                    .set_title(&status_title(&format!("functional scroll failed: {error}")));
             }
         });
 
@@ -2141,9 +2146,9 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
                     .borrow_mut()
                     .set_read_only_generated(revision, generated)
             {
-                inspect_window.set_title(&format!(
-                    "FeatherMark — functional generated source failed: {error}"
-                ));
+                inspect_window.set_title(&status_title(&format!(
+                    "functional generated source failed: {error}"
+                )));
             }
         });
 

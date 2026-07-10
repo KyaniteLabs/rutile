@@ -1,4 +1,4 @@
-//! Locked CLI surface for deterministic local FeatherMark packaging.
+//! Locked CLI surface for deterministic local Rutile packaging.
 //!
 //! This module validates host/tool availability, invokes typed assembly APIs,
 //! executes each direct argument-vector plan, verifies exit status, finalizes

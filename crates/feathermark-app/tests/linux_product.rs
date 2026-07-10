@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use feathermark_app::app::{CloseDecision, CloseOutcome};
+use feathermark_app::brand::STARTER_DOCUMENT;
 use feathermark_app::platform::linux_gtk::{
     GtkSourceEditorAdapter, LinuxExternalOutcome, LinuxProductSession, LinuxScrollController,
     LinuxScrollDispatch, NativeRenderOutcome, scroll_delivery_script,
@@ -21,7 +22,7 @@ fn product_session_edits_through_the_bounded_renderer_and_stages_preview() {
 
     assert_eq!(session.revision(), 1);
     assert!(session.dirty());
-    assert_eq!(session.undo(20).as_deref(), Some(""));
+    assert_eq!(session.undo(20).as_deref(), Some(STARTER_DOCUMENT));
     assert_eq!(session.redo(30).as_deref(), Some("# FeatherMark\n\nHello."));
     assert!(session.start_render(59).is_none());
 

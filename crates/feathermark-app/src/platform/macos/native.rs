@@ -34,6 +34,7 @@ use super::{
     PreviewIpcFatal, PreviewIpcIngress, ProductSession, preview_ipc_channel, split_panes,
 };
 use crate::app::{AppEffect, CloseDecision, CloseOutcome};
+use crate::brand::{PRODUCT_NAME, SOURCE_EDITOR_LABEL, STARTER_DOCUMENT, status_title};
 use crate::preview_host::{
     HostError, NavigationKind, PreviewControlSink, PreviewHost, SchemeRequest, SchemeResponse,
     ScrollDelivery,
@@ -48,7 +49,7 @@ pub(super) fn run_native(path: Option<PathBuf>, smoke: bool) -> Result<(), MacEr
     AppKitMainThread::claim()?;
     let session = match path {
         Some(path) => ProductSession::open(&path)?,
-        None => ProductSession::new_in_memory("# FeatherMark\n\nStart writing…\n")?,
+        None => ProductSession::new_in_memory(STARTER_DOCUMENT)?,
     };
     let event_loop = EventLoop::new().map_err(|error| MacError::Native(error.to_string()))?;
     let display_handle = event_loop.owned_display_handle();
@@ -224,7 +225,7 @@ impl ProductRunner {
 
     fn surface_error(&self, message: impl AsRef<str>) {
         if let Some(window) = &self.window {
-            window.set_title(&format!("FeatherMark — {}", message.as_ref()));
+            window.set_title(&status_title(message.as_ref()));
             window.request_redraw();
         }
     }
@@ -523,7 +524,7 @@ impl ApplicationHandler for ProductRunner {
             return;
         }
         let attributes = Window::default_attributes()
-            .with_title("FeatherMark")
+            .with_title(PRODUCT_NAME)
             .with_inner_size(winit::dpi::LogicalSize::new(WINDOW_WIDTH, WINDOW_HEIGHT));
         let window = match event_loop.create_window(attributes) {
             Ok(window) => Arc::new(window),
@@ -615,9 +616,9 @@ impl ApplicationHandler for ProductRunner {
             if self.session.app_state().dirty() {
                 self.pending_close = true;
                 if let Some(window) = &self.window {
-                    window.set_title(
-                        "FeatherMark — Unsaved changes: ⌘S Save · ⌘D Don’t Save · Esc Cancel",
-                    );
+                    window.set_title(&status_title(
+                        "Unsaved changes: ⌘S Save · ⌘D Don’t Save · Esc Cancel",
+                    ));
                     window.request_redraw();
                 }
             } else {
@@ -683,7 +684,7 @@ impl ApplicationHandler for ProductRunner {
                     let _ = self.session.decide_close(CloseDecision::Cancel);
                     self.pending_close = false;
                     if let Some(window) = &self.window {
-                        window.set_title("FeatherMark");
+                        window.set_title(PRODUCT_NAME);
                     }
                     return;
                 }
@@ -707,7 +708,7 @@ impl ApplicationHandler for ProductRunner {
                                 let _ = self.session.decide_close(CloseDecision::Cancel);
                                 self.pending_close = false;
                                 if let Some(window) = &self.window {
-                                    window.set_title("FeatherMark");
+                                    window.set_title(PRODUCT_NAME);
                                 }
                                 return;
                             }
@@ -929,7 +930,7 @@ impl Program for SourceProgram {
     type Executor = iced_winit::futures::backend::default::Executor;
 
     fn name() -> &'static str {
-        "FeatherMark source editor"
+        SOURCE_EDITOR_LABEL
     }
 
     fn settings(&self) -> core::Settings {
