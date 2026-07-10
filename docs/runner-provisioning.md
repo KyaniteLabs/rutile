@@ -42,6 +42,44 @@ root-only `0500` file, rechecking length/hash/signature, and calling SDK `posix_
 copy while retaining both descriptors. Do not enable a row until native replacement-adversary and
 minimum-OS tests pass.
 
+The launcher is a one-request stdin/stdout service. The supplied systemd socket unit uses
+`Accept=yes`; the launchd plist uses `inetdCompatibility`. Both expose a root-only local Unix
+socket. A separately reviewed transport terminator may bridge the pinned remote endpoint to that
+socket, but it must not alter the length-prefixed request or response. The launcher accepts no CLI
+arguments and ignores no caller-selected paths, providers, or trust material.
+
+Run the platform installer as root with exactly three independently prepared files:
+
+```text
+xtask/launcher/install-{linux,macos}.sh LAUNCHER_CONFIG RUNNER_KEY SNAPSHOT_ATTESTATION
+```
+
+`RUNNER_KEY` is exactly 32 nonzero secret bytes encoded as 64 lowercase hex characters. The
+snapshot file has schema `feathermark.runner-snapshot-attestation.v1` and closed fields
+`runner_id`, `snapshot_id`, `snapshot_provider`, `snapshot_image_sha256`, `virtualized`, and
+`virtualization_image_sha256`. The final field is present exactly when `virtualized` is true.
+
+`LAUNCHER_CONFIG` has schema `feathermark.runner-launcher-config.v1` and closed fields `runner_id`,
+`key_id`, `transport_fingerprint_sha256`, `probe_sha256`, `macos_designated_requirement`, and
+`macos_cdhash`. macOS rows require both Security-framework pins and set all four Linux display
+fields below to null or omit them. Linux rows set the macOS pins to null and additionally require:
+
+```json
+{
+  "linux_display_session": "x11-or-wayland",
+  "linux_display_socket": ":0-or-wayland-N",
+  "linux_monitor_scale_milli": 1000,
+  "linux_monitor_refresh_millihz": 60000
+}
+```
+
+The session value must match the runner id, and the exact 1x/60 Hz values match the fixed Linux
+matrix in the build plan. The launcher constructs a minimal probe environment from those local
+pins; it never inherits or passes the signing key path or bytes. The probe receives only one
+bounded challenge frame and returns only one bounded canonical-CBOR native report. The launcher
+checks the report against the request and provisioned snapshot before it reads the signing key and
+creates the Ed25519 receipt.
+
 ## Enrollment and publication
 
 Restore each row to its independently pinned powered-off enrollment snapshot and start one native
@@ -61,3 +99,8 @@ Task 1A remains incomplete until all five authentic services, keys, transport id
 ten signed exchanges, permanent committed pair, exact native acceptance receipts, and final
 comparator scaffold lock exist. The currently reachable hardware is not evidence for the exact
 five-row matrix.
+
+Local unit, source, cross-target compile, and same-host macOS signed-copy tests are software
+acceptance only. They are not substitutes for root installation, minimum supported OS execution,
+Linux `fexecve` adversary execution on each native session, macOS replacement-adversary execution
+on both architectures, or the ten authentic signed exchanges.

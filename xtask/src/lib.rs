@@ -10,4 +10,6 @@ pub mod gui;
 pub mod metrics;
 pub mod package;
 pub mod runner;
+#[doc(hidden)]
+pub mod runner_native;
 mod tool_process;

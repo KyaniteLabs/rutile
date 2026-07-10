@@ -124,6 +124,7 @@ fn validate(trust: &TrustManifest, dispatch: &DispatchManifest) -> Result<(), St
             || row.snapshot_provider.trim().is_empty()
             || row.probe_path.trim().is_empty()
             || !row.probe_path.starts_with('/')
+            || expected_probe_path(expected) != Some(row.probe_path.as_str())
         {
             return Err("invalid dispatch identity or endpoint".into());
         }
@@ -151,6 +152,19 @@ fn validate(trust: &TrustManifest, dispatch: &DispatchManifest) -> Result<(), St
         }
     }
     Ok(())
+}
+
+fn expected_probe_path(runner_id: &str) -> Option<&'static str> {
+    if matches!(runner_id, "fm-macos-arm64-v1" | "fm-macos-x86_64-v1") {
+        Some("/Library/Application Support/FeatherMark Runner/bin/feathermark-runner-probe")
+    } else if matches!(
+        runner_id,
+        "fm-ubuntu-x11-v1" | "fm-ubuntu-wayland-v1" | "fm-fedora-wayland-v1"
+    ) {
+        Some("/usr/libexec/feathermark-runner-probe")
+    } else {
+        None
+    }
 }
 
 fn valid_endpoint(value: &str) -> bool {
@@ -233,5 +247,21 @@ mod tests {
         ));
         assert!(parse_manifest_state(Some(b"{}"), None).is_err());
         assert!(parse_manifest_state(None, Some(b"")).is_err());
+    }
+
+    #[test]
+    fn every_runner_id_has_one_fixed_launcher_control_probe_path() {
+        for runner in RUNNERS {
+            let path = expected_probe_path(runner).unwrap();
+            if runner.starts_with("fm-macos-") {
+                assert_eq!(
+                    path,
+                    "/Library/Application Support/FeatherMark Runner/bin/feathermark-runner-probe"
+                );
+            } else {
+                assert_eq!(path, "/usr/libexec/feathermark-runner-probe");
+            }
+        }
+        assert!(expected_probe_path("unknown-runner").is_none());
     }
 }

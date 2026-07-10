@@ -5,8 +5,16 @@
   <key>Label</key><string>com.feathermark.runner-launcher</string>
   <key>ProgramArguments</key>
   <array><string>/Library/PrivilegedHelperTools/com.feathermark.runner-launcher</string></array>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
+  <key>inetdCompatibility</key>
+  <dict><key>Wait</key><false/></dict>
+  <key>Sockets</key>
+  <dict>
+    <key>RootOnlyLocalSocket</key>
+    <dict>
+      <key>SockPathName</key><string>/private/var/run/feathermark-runner-launcher.sock</string>
+      <key>SockPathMode</key><integer>384</integer>
+    </dict>
+  </dict>
   <key>UserName</key><string>root</string>
   <key>GroupName</key><string>wheel</string>
   <key>ProcessType</key><string>Interactive</string>

@@ -206,7 +206,7 @@ pub(crate) fn enrollment_commitment(lock: &RunnerLockV1) -> [u8; 32] {
     Sha256::digest(message).into()
 }
 
-fn validate_identity_contract(identity: &RunnerIdentityV1) -> Result<(), RunnerError> {
+pub(crate) fn validate_identity_contract(identity: &RunnerIdentityV1) -> Result<(), RunnerError> {
     let nonempty = [
         identity.hardware_model.as_str(),
         identity.cpu_model.as_str(),

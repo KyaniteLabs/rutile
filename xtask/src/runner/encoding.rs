@@ -1,5 +1,88 @@
 use super::RunnerError;
-use super::protocol::{ProbePayloadV1, ProbePurpose, ProbeRequestV1, RunnerIdentityV1};
+use super::protocol::{
+    NativeProbeChallengeV1, NativeProbeReportV1, ProbePayloadV1, ProbePurpose, ProbeRequestV1,
+    RunnerIdentityV1,
+};
+
+pub(crate) const MAX_NATIVE_REPORT_BYTES: usize = 64 * 1024;
+
+pub(crate) fn encode_native_challenge(challenge: &NativeProbeChallengeV1) -> Vec<u8> {
+    let mut out = Vec::with_capacity(36);
+    array(&mut out, 2);
+    uint(&mut out, 1);
+    bytes(&mut out, &challenge.challenge);
+    out
+}
+
+pub(crate) fn decode_native_challenge(bytes: &[u8]) -> Result<NativeProbeChallengeV1, RunnerError> {
+    let mut reader = Reader { bytes, offset: 0 };
+    reader.exact_array(2)?;
+    if reader.uint()? != 1 {
+        return Err(protocol("unsupported native challenge schema"));
+    }
+    let challenge = NativeProbeChallengeV1 {
+        challenge: reader.hash()?,
+    };
+    if challenge.challenge == [0; 32]
+        || reader.offset != bytes.len()
+        || encode_native_challenge(&challenge) != bytes
+    {
+        return Err(protocol("native challenge is not canonical"));
+    }
+    Ok(challenge)
+}
+
+pub(crate) fn encode_native_report(report: &NativeProbeReportV1) -> Result<Vec<u8>, RunnerError> {
+    let mut out = Vec::new();
+    array(&mut out, 9);
+    uint(&mut out, 1);
+    bytes(&mut out, &report.challenge);
+    encode_identity_into(&mut out, &report.identity);
+    bytes(&mut out, &report.boot_id_sha256);
+    bytes(&mut out, &report.graphical_session_id_sha256);
+    text(&mut out, &report.snapshot_id);
+    text(&mut out, &report.snapshot_provider);
+    bytes(&mut out, &report.snapshot_image_sha256);
+    uint(&mut out, report.captured_at_unix_ms);
+    if out.len() > MAX_NATIVE_REPORT_BYTES {
+        return Err(protocol("native report exceeds fixed bound"));
+    }
+    Ok(out)
+}
+
+pub(crate) fn decode_native_report(bytes: &[u8]) -> Result<NativeProbeReportV1, RunnerError> {
+    if bytes.len() > MAX_NATIVE_REPORT_BYTES {
+        return Err(protocol("native report exceeds fixed bound"));
+    }
+    let mut reader = Reader { bytes, offset: 0 };
+    reader.exact_array(9)?;
+    if reader.uint()? != 1 {
+        return Err(protocol("unsupported native report schema"));
+    }
+    let report = NativeProbeReportV1 {
+        challenge: reader.hash()?,
+        identity: decode_identity_from(&mut reader)?,
+        boot_id_sha256: reader.hash()?,
+        graphical_session_id_sha256: reader.hash()?,
+        snapshot_id: reader.text()?,
+        snapshot_provider: reader.text()?,
+        snapshot_image_sha256: reader.hash()?,
+        captured_at_unix_ms: reader.uint()?,
+    };
+    if report.challenge == [0; 32]
+        || report.boot_id_sha256 == [0; 32]
+        || report.graphical_session_id_sha256 == [0; 32]
+        || report.snapshot_id.is_empty()
+        || report.snapshot_provider.is_empty()
+        || report.snapshot_image_sha256 == [0; 32]
+        || report.captured_at_unix_ms == 0
+        || reader.offset != bytes.len()
+        || encode_native_report(&report)? != bytes
+    {
+        return Err(protocol("native report is not canonical and complete"));
+    }
+    Ok(report)
+}
 
 pub(crate) fn encode_probe_request(request: &ProbeRequestV1) -> Vec<u8> {
     let mut out = Vec::new();

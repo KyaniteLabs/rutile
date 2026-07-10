@@ -10,12 +10,12 @@ mod config;
 mod config_manifest;
 #[allow(dead_code)] // Task 1C consumes fresh pre-spawn capabilities through app_launch.
 pub(crate) mod current;
-mod encoding;
+pub(crate) mod encoding;
 mod engine;
-mod protocol;
+pub(crate) mod protocol;
 mod transaction;
 mod transport;
-mod verification;
+pub(crate) mod verification;
 
 pub const EXPECTED_RUNNERS: [&str; 5] = config::RUNNERS;
 

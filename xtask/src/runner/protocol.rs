@@ -108,3 +108,20 @@ pub(crate) struct RunnerLockV1 {
     pub enrollment_commitment: [u8; 32],
     pub post_lock_exchanges: Vec<ProbeExchangeV1>,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NativeProbeChallengeV1 {
+    pub challenge: [u8; 32],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NativeProbeReportV1 {
+    pub challenge: [u8; 32],
+    pub identity: RunnerIdentityV1,
+    pub boot_id_sha256: [u8; 32],
+    pub graphical_session_id_sha256: [u8; 32],
+    pub snapshot_id: String,
+    pub snapshot_provider: String,
+    pub snapshot_image_sha256: [u8; 32],
+    pub captured_at_unix_ms: u64,
+}

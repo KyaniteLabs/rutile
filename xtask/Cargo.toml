@@ -5,6 +5,14 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[[bin]]
+name = "feathermark-runner-launcher"
+path = "src/bin/feathermark-runner-launcher.rs"
+
+[[bin]]
+name = "feathermark-runner-probe"
+path = "src/bin/feathermark-runner-probe.rs"
+
 [dependencies]
 clap.workspace = true
 ed25519-dalek.workspace = true
