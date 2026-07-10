@@ -1,5 +1,7 @@
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+#[cfg(target_os = "macos")]
+use std::io::Write;
 
 use crate::runner::protocol::{NativeProbeReportV1, RunnerIdentityV1};
 
@@ -150,7 +152,9 @@ struct PlatformFacts {
 }
 
 #[cfg(any(target_os = "linux", test))]
-pub(super) fn parse_linux_os_release(value: &str) -> Result<(String, String, String), String> {
+pub(super) fn parse_linux_os_release(
+    value: &str,
+) -> Result<(String, String, String, String), String> {
     fn field(value: &str, key: &str) -> Option<String> {
         value.lines().find_map(|line| {
             let raw = line.strip_prefix(key)?.strip_prefix('=')?.trim();
@@ -163,10 +167,9 @@ pub(super) fn parse_linux_os_release(value: &str) -> Result<(String, String, Str
     }
     let product = field(value, "NAME").ok_or("/etc/os-release has no NAME")?;
     let version = field(value, "VERSION_ID").ok_or("/etc/os-release has no VERSION_ID")?;
-    let build = field(value, "BUILD_ID")
-        .or_else(|| field(value, "IMAGE_ID"))
-        .ok_or("/etc/os-release has no BUILD_ID or IMAGE_ID")?;
-    Ok((product, version, build))
+    let build = field(value, "VERSION").ok_or("/etc/os-release has no VERSION")?;
+    let image = field(value, "PRETTY_NAME").ok_or("/etc/os-release has no PRETTY_NAME")?;
+    Ok((product, version, build, image))
 }
 
 #[cfg(test)]
@@ -196,6 +199,39 @@ struct LinuxSession {
     socket_identity: String,
 }
 
+#[cfg(any(target_os = "linux", test))]
+pub(super) fn select_linux_display_environment(
+    kind: &str,
+    environment: &[u8],
+) -> Result<String, String> {
+    let values = |name: &[u8]| {
+        environment
+            .split(|byte| *byte == 0)
+            .filter_map(|entry| entry.strip_prefix(name))
+            .collect::<Vec<_>>()
+    };
+    let displays = values(b"DISPLAY=");
+    let wayland = values(b"WAYLAND_DISPLAY=");
+    let selected = match kind {
+        "x11" if displays.len() == 1 && wayland.is_empty() => displays[0],
+        "wayland" if wayland.len() == 1 && displays.is_empty() => wayland[0],
+        "x11" | "wayland" => {
+            return Err(
+                "graphical session has missing, duplicate, or mixed display variables".into(),
+            );
+        }
+        _ => return Err("graphical session type is not x11 or wayland".into()),
+    };
+    let selected =
+        std::str::from_utf8(selected).map_err(|_| "graphical display variable is not UTF-8")?;
+    if (kind == "x11" && !selected.starts_with(':'))
+        || (kind == "wayland" && !selected.starts_with("wayland-"))
+    {
+        return Err("graphical display variable has the wrong native socket shape".into());
+    }
+    Ok(selected.to_owned())
+}
+
 #[cfg(target_os = "linux")]
 fn discover_linux_session() -> Result<LinuxSession, String> {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
@@ -222,10 +258,9 @@ fn discover_linux_session() -> Result<LinuxSession, String> {
             .ok_or("active graphical session has no leader")?
             .parse()
             .map_err(|_| "active graphical session leader is invalid")?;
-        let socket = field("DISPLAY")
-            .filter(|value| !value.is_empty())
-            .ok_or("active graphical session has no live display name")?
-            .to_owned();
+        let environment = std::fs::read(format!("/proc/{leader}/environ"))
+            .map_err(|error| format!("read graphical session environment: {error}"))?;
+        let socket = select_linux_display_environment(kind, &environment)?;
         let socket_path = if kind == "x11" {
             let display = socket
                 .strip_prefix(':')
@@ -286,16 +321,186 @@ fn read_linux_monitor(session: &LinuxSession) -> Result<(u32, u32, u32, u32), St
     }
     let state =
         std::str::from_utf8(&output.stdout).map_err(|_| "Mutter display state is not UTF-8")?;
-    // The fixed runner matrix has one 1920x1080 logical monitor at 1x/60 Hz.
-    // Require every independently reported closed value in Mutter's current-state tuple.
-    if !state.contains("1920")
-        || !state.contains("1080")
-        || !(state.contains("60.0") || state.contains("60.000"))
-        || !state.contains("1.0")
-    {
-        return Err("live Mutter state is not the approved 1920x1080 60 Hz 1x mode".into());
+    parse_mutter_current_state(state)
+}
+
+#[cfg(any(target_os = "linux", test))]
+pub(super) fn parse_mutter_current_state(state: &str) -> Result<(u32, u32, u32, u32), String> {
+    let root = container(state, '(', ')')?;
+    let fields = split_top_level(root)?;
+    if fields.len() < 3 {
+        return Err("Mutter current-state tuple is incomplete".into());
     }
-    Ok((1920, 1080, 1000, 60_000))
+    let logical = split_container(fields[2], '[', ']')?;
+    if logical.len() != 1 {
+        return Err("Mutter must report exactly one active logical monitor".into());
+    }
+    let logical_fields = split_top_level(container(logical[0], '(', ')')?)?;
+    if logical_fields.len() < 7 {
+        return Err("Mutter logical-monitor tuple is incomplete".into());
+    }
+    let scale = parse_number(logical_fields[2])?;
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err("Mutter logical-monitor scale is invalid".into());
+    }
+    let logical_specs = split_container(logical_fields[5], '[', ']')?;
+    if logical_specs.len() != 1 {
+        return Err("Mutter logical monitor must map to one physical monitor".into());
+    }
+    let logical_spec = parse_monitor_spec(logical_specs[0])?;
+
+    let physical = split_container(fields[1], '[', ']')?;
+    let mut current_mode = None;
+    for monitor in physical {
+        let monitor_fields = split_top_level(container(monitor, '(', ')')?)?;
+        if monitor_fields.len() < 3 || parse_monitor_spec(monitor_fields[0])? != logical_spec {
+            continue;
+        }
+        for mode in split_container(monitor_fields[1], '[', ']')? {
+            let mode_fields = split_top_level(container(mode, '(', ')')?)?;
+            if mode_fields.len() < 7 || !property_is_true(mode_fields[6], "is-current")? {
+                continue;
+            }
+            let width = parse_integer(mode_fields[1])?;
+            let height = parse_integer(mode_fields[2])?;
+            let refresh = parse_number(mode_fields[3])?;
+            if width == 0 || height == 0 || !refresh.is_finite() || refresh <= 0.0 {
+                return Err("Mutter current mode contains invalid dimensions or refresh".into());
+            }
+            let measured = (
+                width,
+                height,
+                (scale * 1000.0).round() as u32,
+                (refresh * 1000.0).round() as u32,
+            );
+            if current_mode.replace(measured).is_some() {
+                return Err("Mutter reports multiple current modes for the active monitor".into());
+            }
+        }
+    }
+    current_mode.ok_or_else(|| "Mutter active logical monitor has no current mode".into())
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn container(value: &str, open: char, close: char) -> Result<&str, String> {
+    let value = value.trim();
+    if !value.starts_with(open) || !value.ends_with(close) {
+        return Err(format!("Mutter value is not enclosed by {open}{close}"));
+    }
+    Ok(&value[open.len_utf8()..value.len() - close.len_utf8()])
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn split_container(value: &str, open: char, close: char) -> Result<Vec<&str>, String> {
+    let body = container(value, open, close)?;
+    if body.trim().is_empty() {
+        Ok(Vec::new())
+    } else {
+        split_top_level(body)
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn split_top_level(value: &str) -> Result<Vec<&str>, String> {
+    let mut round = 0_i32;
+    let mut square = 0_i32;
+    let mut curly = 0_i32;
+    let mut angle = 0_i32;
+    let mut quote = None;
+    let mut escaped = false;
+    let mut start = 0;
+    let mut parts = Vec::new();
+    for (index, character) in value.char_indices() {
+        if let Some(active) = quote {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == active {
+                quote = None;
+            }
+            continue;
+        }
+        match character {
+            '\'' | '"' => quote = Some(character),
+            '(' => round += 1,
+            ')' => round -= 1,
+            '[' => square += 1,
+            ']' => square -= 1,
+            '{' => curly += 1,
+            '}' => curly -= 1,
+            '<' => angle += 1,
+            '>' => angle -= 1,
+            ',' if round == 0 && square == 0 && curly == 0 && angle == 0 => {
+                parts.push(value[start..index].trim());
+                start = index + 1;
+            }
+            _ => {}
+        }
+        if round < 0 || square < 0 || curly < 0 || angle < 0 {
+            return Err("Mutter value has unbalanced delimiters".into());
+        }
+    }
+    if quote.is_some() || round != 0 || square != 0 || curly != 0 || angle != 0 {
+        return Err("Mutter value has unbalanced delimiters or quotes".into());
+    }
+    parts.push(value[start..].trim());
+    if parts.iter().any(|part| part.is_empty()) {
+        return Err("Mutter value contains an empty tuple field".into());
+    }
+    Ok(parts)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn parse_monitor_spec(value: &str) -> Result<Vec<String>, String> {
+    let fields = split_top_level(container(value, '(', ')')?)?;
+    if fields.len() != 4 {
+        return Err("Mutter monitor spec is not the exact four-string tuple".into());
+    }
+    fields
+        .into_iter()
+        .map(|field| {
+            field
+                .strip_prefix('\'')
+                .and_then(|field| field.strip_suffix('\''))
+                .map(str::to_owned)
+                .ok_or_else(|| "Mutter monitor spec contains a non-string field".into())
+        })
+        .collect()
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn property_is_true(value: &str, name: &str) -> Result<bool, String> {
+    let entries = split_container(value, '{', '}')?;
+    for entry in entries {
+        let (key, value) = entry
+            .split_once(':')
+            .ok_or("Mutter property has no key/value separator")?;
+        if key.trim().trim_matches('\'') == name {
+            return Ok(container(value, '<', '>')?.trim() == "true");
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn parse_integer(value: &str) -> Result<u32, String> {
+    value
+        .split_ascii_whitespace()
+        .next_back()
+        .ok_or_else(|| "Mutter integer field is empty".to_owned())?
+        .parse()
+        .map_err(|_| "Mutter integer field is invalid".into())
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn parse_number(value: &str) -> Result<f64, String> {
+    value
+        .split_ascii_whitespace()
+        .next_back()
+        .ok_or_else(|| "Mutter numeric field is empty".to_owned())?
+        .parse()
+        .map_err(|_| "Mutter numeric field is invalid".into())
 }
 
 #[cfg(target_os = "linux")]
@@ -354,7 +559,8 @@ fn platform_facts() -> Result<PlatformFacts, String> {
         .ok_or("/proc/meminfo has no MemTotal")?
         .parse()
         .map_err(|_| "MemTotal is not u64")?;
-    let (os_product, os_version, os_build) = parse_linux_os_release(&read("/etc/os-release")?)?;
+    let (os_product, os_version, os_build, os_image) =
+        parse_linux_os_release(&read("/etc/os-release")?)?;
     let kernel_release = read("/proc/sys/kernel/osrelease")?;
     let boot_id = read("/proc/sys/kernel/random/boot_id")?;
     let session = discover_linux_session()?;
@@ -373,7 +579,7 @@ fn platform_facts() -> Result<PlatformFacts, String> {
         os_product: os_product.clone(),
         os_version: os_version.clone(),
         os_build: os_build.clone(),
-        os_image: format!("{os_product}-{os_version}-{os_build}"),
+        os_image,
         kernel: format!("Linux {kernel_release}"),
         display_session: session.kind,
         display_socket: Some(session.socket),
@@ -451,7 +657,7 @@ fn platform_facts() -> Result<PlatformFacts, String> {
         os_product: "macOS".into(),
         os_version: os_version.clone(),
         os_build: os_build.clone(),
-        os_image: format!("macOS-{os_version}-{os_build}"),
+        os_image: macos_root_volume_uuid()?,
         kernel: format!("{kernel_product} {kernel_release}"),
         display_session: "aqua".into(),
         display_socket: None,
@@ -490,6 +696,48 @@ fn wkwebview_runtime_version() -> Result<String, String> {
     (!version.is_empty())
         .then(|| version.to_owned())
         .ok_or_else(|| "WebKit framework version is empty".into())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_root_volume_uuid() -> Result<String, String> {
+    #[allow(clippy::disallowed_methods)] // Fixed native query for the mounted OS image identity.
+    let disk = std::process::Command::new("/usr/sbin/diskutil")
+        .args(["info", "-plist", "/"])
+        .output()
+        .map_err(|error| format!("query root volume identity: {error}"))?;
+    if !disk.status.success() || disk.stdout.len() > 256 * 1024 {
+        return Err("diskutil could not return a bounded root-volume plist".into());
+    }
+    #[allow(clippy::disallowed_methods)]
+    // Fixed native plist extraction from bounded diskutil data.
+    let mut child = std::process::Command::new("/usr/bin/plutil")
+        .args(["-extract", "VolumeUUID", "raw", "-o", "-", "-"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|error| format!("start root-volume plist parser: {error}"))?;
+    child
+        .stdin
+        .take()
+        .ok_or("plutil stdin was not piped")?
+        .write_all(&disk.stdout)
+        .map_err(|error| format!("write root-volume plist: {error}"))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("read root-volume UUID: {error}"))?;
+    let uuid = std::str::from_utf8(&output.stdout)
+        .map_err(|_| "root-volume UUID is not UTF-8")?
+        .trim();
+    if !output.status.success()
+        || uuid.len() != 36
+        || uuid
+            .bytes()
+            .any(|byte| !(byte.is_ascii_hexdigit() || byte == b'-') || byte.is_ascii_lowercase())
+    {
+        return Err("root-volume UUID is not canonical uppercase UUID text".into());
+    }
+    Ok(uuid.to_owned())
 }
 
 #[cfg(target_os = "macos")]

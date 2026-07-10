@@ -13,14 +13,19 @@ An authorized operator independently reviews and places both files beside `xtask
 Both absent produces a normal `ProductionRunnerConfig::Unprovisioned` build. One missing file or
 any invalid row fails the build. The manifests contain exactly the ordered closed runner ids. Each
 trust row has a distinct nonzero Ed25519 public key. Each dispatch row pins the launcher endpoint,
-transport fingerprint, launcher protocol, absolute installed probe path and SHA-256, independently
-created enrollment snapshot id/provider/base-image SHA-256, and both macOS code-signing pins where
-applicable. Neither `--capture-dir`, environment variables, Cargo features, nor lock contents can
-override those constants.
+full Ed25519 SSH host public key, launcher protocol, absolute installed probe path and SHA-256,
+independently created enrollment snapshot id/provider/base-image SHA-256, every exact measured
+identity field, and both macOS code-signing pins where applicable. The identity block pins exact
+machine/hardware/CPU/core/RAM, OS/build/image/kernel, display/socket/mode/scale/refresh, applicable
+runtime versions and absent runtimes, virtualization/image, and snapshot-provider values for that
+row. Neither `--capture-dir`, environment variables, Cargo features, nor lock contents can override
+those constants.
 
-The production transport uses the pinned endpoint, requires the launcher's 32-byte transport
-fingerprint before accepting its bounded response, and then authenticates every receipt with the
-independently embedded Ed25519 root. Network identity alone is never lock authority.
+The production transport uses the pinned endpoint and strict one-entry OpenSSH `known_hosts`
+authentication, then authenticates every receipt with the independently embedded Ed25519 root. A
+single monotonic 30-second deadline covers process creation, connection, request write, remote
+execution, and bounded stdout/stderr collection; timeout or overflow kills and reaps SSH. Network
+identity alone is never lock authority.
 
 ## Per-runner root service
 
@@ -67,12 +72,14 @@ dispatch manifest separately contains `ssh_host_ed25519_public_key_hex`; the lau
 override that coordinator-side authentication pin. macOS rows require both Security-framework
 pins; Linux rows set both to null. No display/session/monitor value is accepted from this config.
 
-The Linux probe discovers the one active X11/Wayland systemd session, verifies the live display
-socket and session leader, queries current Mutter monitor state, and reads only GTK3 and WebKitGTK
-4.1 runtime metadata. The macOS probe separately reads the OS product/build and the installed WebKit
-framework bundle version. The probe receives only one bounded challenge frame and returns one
-bounded canonical-CBOR native report. The launcher checks that measured report against the exact
-runner row and provisioned snapshot before it reads the signing key and creates the Ed25519 receipt.
+The Linux probe discovers the one active X11/Wayland systemd session, reads the matching live
+`DISPLAY` or `WAYLAND_DISPLAY` from its leader while rejecting mixed fallback variables, verifies
+that socket, structurally parses the single active Mutter logical monitor/current physical mode,
+and reads only GTK3 and WebKitGTK 4.1 runtime metadata. The macOS probe separately reads OS,
+root-volume image, and installed WebKit framework values. The probe receives only one bounded
+challenge frame and returns one bounded canonical-CBOR native report. The launcher binds that
+report to the request and provisioned snapshot before signing; the coordinator then exact-compares
+every signed identity field to the independently compiled dispatch row before enrollment.
 
 ## Enrollment and publication
 

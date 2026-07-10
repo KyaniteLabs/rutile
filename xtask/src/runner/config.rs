@@ -42,10 +42,37 @@ pub(crate) struct RunnerDispatchConfig {
     pub enrollment_snapshot_id: &'static str,
     pub snapshot_provider: &'static str,
     pub enrollment_image_sha256: [u8; 32],
+    pub identity: PinnedRunnerIdentityConfig,
     #[allow(dead_code)] // Consumed by the macOS root launcher acceptance path.
     pub macos_designated_requirement: Option<&'static str>,
     #[allow(dead_code)] // Consumed by the macOS root launcher acceptance path.
     pub macos_cdhash: Option<&'static str>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct PinnedRunnerIdentityConfig {
+    pub machine_id_sha256: [u8; 32],
+    pub hardware_model: &'static str,
+    pub cpu_model: &'static str,
+    pub cpu_cores: u16,
+    pub ram_bytes: u64,
+    pub arch: &'static str,
+    pub os_product: &'static str,
+    pub os_version: &'static str,
+    pub os_build: &'static str,
+    pub os_image: &'static str,
+    pub kernel: &'static str,
+    pub display_session: &'static str,
+    pub display_socket: Option<&'static str>,
+    pub monitor_width_px: u32,
+    pub monitor_height_px: u32,
+    pub monitor_scale_milli: u32,
+    pub monitor_refresh_millihz: u32,
+    pub gtk_version: Option<&'static str>,
+    pub webkitgtk_version: Option<&'static str>,
+    pub wkwebview_version: Option<&'static str>,
+    pub virtualized: bool,
+    pub virtualization_image_sha256: Option<[u8; 32]>,
 }
 
 include!(concat!(env!("OUT_DIR"), "/production_runner_config.rs"));

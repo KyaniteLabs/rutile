@@ -21,13 +21,12 @@ const UTF8: u32 = 0x0800_0100;
 const SEC_CS_SIGNING_INFORMATION: u32 = 1 << 1;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::runner_native) struct SecurityPins {
+pub(crate) struct SecurityPins {
     pub designated_requirement: String,
     pub cdhash: [u8; 20],
 }
 
-#[cfg(test)]
-pub(in crate::runner_native) fn read_security_pins(path: &Path) -> io::Result<SecurityPins> {
+pub(crate) fn read_security_pins(path: &Path) -> io::Result<SecurityPins> {
     unsafe {
         let code = static_code(path)?;
         let result = SecStaticCodeCheckValidityWithErrors(code, 0, ptr::null(), ptr::null_mut());
@@ -45,10 +44,7 @@ pub(in crate::runner_native) fn read_security_pins(path: &Path) -> io::Result<Se
     }
 }
 
-pub(in crate::runner_native) fn verify_security_pins(
-    path: &Path,
-    pins: &SecurityPins,
-) -> io::Result<()> {
+pub(crate) fn verify_security_pins(path: &Path, pins: &SecurityPins) -> io::Result<()> {
     unsafe {
         let code = static_code(path)?;
         let requirement_text = cf_string(&pins.designated_requirement)?;
@@ -379,7 +375,6 @@ unsafe fn static_code(path: &Path) -> io::Result<SecStaticCodeRef> {
     }
 }
 
-#[cfg(test)]
 unsafe fn copy_designated_requirement(code: SecStaticCodeRef) -> io::Result<String> {
     let mut requirement: SecRequirementRef = ptr::null();
     let status = unsafe { SecCodeCopyDesignatedRequirement(code, 0, &mut requirement) };
@@ -439,7 +434,6 @@ unsafe fn cf_string(value: &str) -> io::Result<CFStringRef> {
     }
 }
 
-#[cfg(test)]
 unsafe fn string_from_cf(value: CFStringRef) -> io::Result<String> {
     let length = unsafe { CFStringGetLength(value) };
     let capacity = unsafe { CFStringGetMaximumSizeForEncoding(length, UTF8) }
@@ -481,11 +475,8 @@ unsafe extern "C" {
         encoding: u32,
         is_external_representation: bool,
     ) -> CFStringRef;
-    #[cfg(test)]
     fn CFStringGetLength(value: CFStringRef) -> c_long;
-    #[cfg(test)]
     fn CFStringGetMaximumSizeForEncoding(length: c_long, encoding: u32) -> c_long;
-    #[cfg(test)]
     fn CFStringGetCString(
         value: CFStringRef,
         buffer: *mut c_char,
@@ -529,13 +520,11 @@ unsafe extern "C" {
         requirement: SecRequirementRef,
         errors: *mut *const c_void,
     ) -> i32;
-    #[cfg(test)]
     fn SecCodeCopyDesignatedRequirement(
         code: SecStaticCodeRef,
         flags: u32,
         requirement: *mut SecRequirementRef,
     ) -> i32;
-    #[cfg(test)]
     fn SecRequirementCopyString(
         requirement: SecRequirementRef,
         flags: u32,

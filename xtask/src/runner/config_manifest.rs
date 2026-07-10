@@ -59,8 +59,36 @@ pub(crate) struct DispatchRow {
     pub enrollment_snapshot_id: String,
     pub snapshot_provider: String,
     pub enrollment_image_sha256: String,
+    pub identity: PinnedIdentityRow,
     pub macos_designated_requirement: Option<String>,
     pub macos_cdhash: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PinnedIdentityRow {
+    pub machine_id_sha256: String,
+    pub hardware_model: String,
+    pub cpu_model: String,
+    pub cpu_cores: u16,
+    pub ram_bytes: u64,
+    pub arch: String,
+    pub os_product: String,
+    pub os_version: String,
+    pub os_build: String,
+    pub os_image: String,
+    pub kernel: String,
+    pub display_session: String,
+    pub display_socket: Option<String>,
+    pub monitor_width_px: u32,
+    pub monitor_height_px: u32,
+    pub monitor_scale_milli: u32,
+    pub monitor_refresh_millihz: u32,
+    pub gtk_version: Option<String>,
+    pub webkitgtk_version: Option<String>,
+    pub wkwebview_version: Option<String>,
+    pub virtualized: bool,
+    pub virtualization_image_sha256: Option<String>,
 }
 
 pub(crate) fn parse_manifest_state(
@@ -137,6 +165,7 @@ fn validate(trust: &TrustManifest, dispatch: &DispatchManifest) -> Result<(), St
                 return Err(format!("zero {label}"));
             }
         }
+        validate_pinned_identity(row)?;
         let mac = expected.starts_with("fm-macos-");
         if mac
             != (row
@@ -150,6 +179,59 @@ fn validate(trust: &TrustManifest, dispatch: &DispatchManifest) -> Result<(), St
         {
             return Err("macOS signature pins are inconsistent".into());
         }
+    }
+    Ok(())
+}
+
+fn validate_pinned_identity(row: &DispatchRow) -> Result<(), String> {
+    let identity = &row.identity;
+    let required = [
+        identity.hardware_model.as_str(),
+        identity.cpu_model.as_str(),
+        identity.arch.as_str(),
+        identity.os_product.as_str(),
+        identity.os_version.as_str(),
+        identity.os_build.as_str(),
+        identity.os_image.as_str(),
+        identity.kernel.as_str(),
+        identity.display_session.as_str(),
+    ];
+    if required.into_iter().any(str::is_empty)
+        || identity.cpu_cores == 0
+        || identity.ram_bytes == 0
+        || identity.monitor_width_px == 0
+        || identity.monitor_height_px == 0
+        || identity.monitor_scale_milli == 0
+        || identity.monitor_refresh_millihz == 0
+        || decode_hash(&identity.machine_id_sha256, "machine id")? == [0; 32]
+        || identity.virtualized != identity.virtualization_image_sha256.is_some()
+    {
+        return Err("invalid pinned runner identity".into());
+    }
+    if let Some(image) = &identity.virtualization_image_sha256 {
+        if decode_hash(image, "virtualization image")? == [0; 32] {
+            return Err("zero virtualization image".into());
+        }
+    }
+    let mac = row.runner_id.starts_with("fm-macos-");
+    if mac
+        != (identity.display_socket.is_none()
+            && identity.gtk_version.is_none()
+            && identity.webkitgtk_version.is_none()
+            && identity
+                .wkwebview_version
+                .as_deref()
+                .is_some_and(|v| !v.is_empty()))
+        || (!mac
+            && (identity.display_socket.as_deref().is_none_or(str::is_empty)
+                || identity.gtk_version.as_deref().is_none_or(str::is_empty)
+                || identity
+                    .webkitgtk_version
+                    .as_deref()
+                    .is_none_or(str::is_empty)
+                || identity.wkwebview_version.is_some()))
+    {
+        return Err("pinned platform identity options are inconsistent".into());
     }
     Ok(())
 }
@@ -216,7 +298,7 @@ pub(crate) fn render_production_config(manifests: &ProvisioningManifests) -> Str
             root.runner_id, root.key_id, key
         ));
         rows.push_str(&format!(
-            "RunnerDispatchConfig {{ runner_id: {:?}, endpoint: {:?}, ssh_host_ed25519_public_key: {:?}, launcher_protocol_version: 1, probe_path: {:?}, probe_sha256: {:?}, enrollment_snapshot_id: {:?}, snapshot_provider: {:?}, enrollment_image_sha256: {:?}, macos_designated_requirement: {:?}, macos_cdhash: {:?} }},",
+            "RunnerDispatchConfig {{ runner_id: {:?}, endpoint: {:?}, ssh_host_ed25519_public_key: {:?}, launcher_protocol_version: 1, probe_path: {:?}, probe_sha256: {:?}, enrollment_snapshot_id: {:?}, snapshot_provider: {:?}, enrollment_image_sha256: {:?}, identity: PinnedRunnerIdentityConfig {{ machine_id_sha256: {:?}, hardware_model: {:?}, cpu_model: {:?}, cpu_cores: {:?}, ram_bytes: {:?}, arch: {:?}, os_product: {:?}, os_version: {:?}, os_build: {:?}, os_image: {:?}, kernel: {:?}, display_session: {:?}, display_socket: {:?}, monitor_width_px: {:?}, monitor_height_px: {:?}, monitor_scale_milli: {:?}, monitor_refresh_millihz: {:?}, gtk_version: {:?}, webkitgtk_version: {:?}, wkwebview_version: {:?}, virtualized: {:?}, virtualization_image_sha256: {:?} }}, macos_designated_requirement: {:?}, macos_cdhash: {:?} }},",
             row.runner_id,
             row.endpoint,
             decode_hash(&row.ssh_host_ed25519_public_key_hex, "SSH host public key")
@@ -226,6 +308,28 @@ pub(crate) fn render_production_config(manifests: &ProvisioningManifests) -> Str
             row.enrollment_snapshot_id,
             row.snapshot_provider,
             decode_hash(&row.enrollment_image_sha256, "image").expect("validated"),
+            decode_hash(&row.identity.machine_id_sha256, "machine id").expect("validated"),
+            row.identity.hardware_model,
+            row.identity.cpu_model,
+            row.identity.cpu_cores,
+            row.identity.ram_bytes,
+            row.identity.arch,
+            row.identity.os_product,
+            row.identity.os_version,
+            row.identity.os_build,
+            row.identity.os_image,
+            row.identity.kernel,
+            row.identity.display_session,
+            row.identity.display_socket,
+            row.identity.monitor_width_px,
+            row.identity.monitor_height_px,
+            row.identity.monitor_scale_milli,
+            row.identity.monitor_refresh_millihz,
+            row.identity.gtk_version,
+            row.identity.webkitgtk_version,
+            row.identity.wkwebview_version,
+            row.identity.virtualized,
+            row.identity.virtualization_image_sha256.as_ref().map(|value| decode_hash(value, "virtualization image").expect("validated")),
             row.macos_designated_requirement,
             row.macos_cdhash,
         ));

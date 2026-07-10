@@ -17,7 +17,7 @@ use std::time::Instant;
 use thiserror::Error;
 mod collector;
 mod path_policy;
-mod platform;
+pub(crate) mod platform;
 mod replay;
 mod service_config;
 
@@ -382,7 +382,8 @@ fn validate_native_report(
     report: &NativeProbeReportV1,
     request: &ProbeRequestV1,
 ) -> Result<(), crate::runner::RunnerError> {
-    crate::runner::verification::validate_identity_contract(&report.identity)?;
+    // The launcher binds measured facts to the request here. The coordinator separately compares
+    // every identity field to the independently compiled dispatch-manifest row before enrollment.
     let earliest = request.issued_at_unix_ms.saturating_sub(5_000);
     let latest = request.not_after_unix_ms.saturating_add(5_000);
     if report.challenge != request.challenge
@@ -582,16 +583,54 @@ mod tests {
     #[test]
     fn linux_native_fact_parsers_reject_ambiguous_monitor_and_os_inputs() {
         let os = collector::parse_linux_os_release(
-            "NAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nBUILD_ID=noble\n",
+            "NAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION=\"24.04.2 LTS (Noble Numbat)\"\nPRETTY_NAME=\"Ubuntu 24.04.2 LTS\"\n",
         )
         .unwrap();
-        assert_eq!(os, ("Ubuntu".into(), "24.04".into(), "noble".into()));
+        assert_eq!(
+            os,
+            (
+                "Ubuntu".into(),
+                "24.04".into(),
+                "24.04.2 LTS (Noble Numbat)".into(),
+                "Ubuntu 24.04.2 LTS".into()
+            )
+        );
         assert!(collector::parse_linux_os_release("NAME=Ubuntu\n").is_err());
         assert_eq!(
             collector::parse_drm_mode("2560x1440\n").unwrap(),
             (2560, 1440)
         );
         assert!(collector::parse_drm_mode("1920x1080\n2560x1440\n").is_err());
+
+        let mutter = "(uint32 7, [(('HDMI-1', 'Vendor', 'Product', 'Serial'), [('decoy', 9999, 8888, 144.0, 2.0, [1.0, 2.0], {'is-current': <false>}), ('current', 1920, 1080, 60.0, 1.0, [1.0], {'is-current': <true>})], {})], [(0, 0, 1.0, uint32 0, true, [('HDMI-1', 'Vendor', 'Product', 'Serial')], {})], {})";
+        assert_eq!(
+            collector::parse_mutter_current_state(mutter).unwrap(),
+            (1920, 1080, 1000, 60_000)
+        );
+        let ambiguous = mutter.replace(
+            "[(0, 0, 1.0, uint32 0, true, [('HDMI-1', 'Vendor', 'Product', 'Serial')], {})]",
+            "[(0, 0, 1.0, uint32 0, true, [('HDMI-1', 'Vendor', 'Product', 'Serial')], {}), (0, 0, 1.0, uint32 0, false, [('HDMI-1', 'Vendor', 'Product', 'Serial')], {})]",
+        );
+        assert!(collector::parse_mutter_current_state(&ambiguous).is_err());
+        assert_eq!(
+            collector::select_linux_display_environment(
+                "wayland",
+                b"PATH=/usr/bin\0WAYLAND_DISPLAY=wayland-1\0"
+            )
+            .unwrap(),
+            "wayland-1"
+        );
+        assert!(
+            collector::select_linux_display_environment(
+                "wayland",
+                b"WAYLAND_DISPLAY=wayland-1\0DISPLAY=:0\0"
+            )
+            .is_err()
+        );
+        assert_eq!(
+            collector::select_linux_display_environment("x11", b"DISPLAY=:3\0").unwrap(),
+            ":3"
+        );
     }
 
     #[test]

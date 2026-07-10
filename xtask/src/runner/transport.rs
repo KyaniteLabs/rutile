@@ -3,7 +3,10 @@
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use super::RunnerError;
 use super::config::RunnerDispatchConfig;
@@ -12,6 +15,8 @@ use super::protocol::{ProbeRequestV1, SignedRunnerProbeV1};
 
 const MAGIC: &[u8] = b"FMRP\0v1\0";
 const MAX_RECEIPT_BYTES: usize = 256 * 1024;
+const MAX_STDERR_BYTES: usize = 64 * 1024;
+const TRANSPORT_TIMEOUT: Duration = Duration::from_secs(30);
 
 mod sealed {
     pub trait Sealed {}
@@ -49,6 +54,9 @@ impl LauncherTransport for ProductionLauncherTransport {
         row: &RunnerDispatchConfig,
         request: &ProbeRequestV1,
     ) -> Result<SignedRunnerProbeV1, RunnerError> {
+        let deadline = Instant::now()
+            .checked_add(TRANSPORT_TIMEOUT)
+            .ok_or_else(|| transport("transport deadline overflow".into()))?;
         let (host, port) = endpoint_parts(row.endpoint)?;
         let known_hosts = ssh_known_hosts(row.endpoint, row.ssh_host_ed25519_public_key)?;
         let mut pipe_fds = [0_i32; 2];
@@ -64,7 +72,7 @@ impl LauncherTransport for ProductionLauncherTransport {
 
         #[allow(clippy::disallowed_methods)]
         // This is the audited authenticated runner transport owner.
-        let mut child = Command::new("/usr/bin/ssh")
+        let child = Command::new("/usr/bin/ssh")
             .args([
                 "-F",
                 "/dev/null",
@@ -94,15 +102,17 @@ impl LauncherTransport for ProductionLauncherTransport {
             .len()
             .try_into()
             .map_err(|_| transport("request exceeds u32 framing".into()))?;
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| transport("ssh stdin was not piped".into()))?;
-        stdin.write_all(MAGIC)?;
-        stdin.write_all(&request_len.to_be_bytes())?;
-        stdin.write_all(&request)?;
-        drop(stdin);
-        let output = child.wait_with_output()?;
+        let mut framed_request = Vec::with_capacity(MAGIC.len() + 4 + request.len());
+        framed_request.extend_from_slice(MAGIC);
+        framed_request.extend_from_slice(&request_len.to_be_bytes());
+        framed_request.extend_from_slice(&request);
+        let output = collect_child_bounded(
+            child,
+            framed_request,
+            deadline,
+            MAX_RECEIPT_BYTES + 4,
+            MAX_STDERR_BYTES,
+        )?;
         drop(known_reader);
         if !output.status.success() {
             return Err(transport(format!(
@@ -129,6 +139,131 @@ impl LauncherTransport for ProductionLauncherTransport {
             )));
         }
         serde_json::from_slice(bytes).map_err(RunnerError::from)
+    }
+}
+
+struct BoundedOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+enum IoEvent {
+    Stdin(std::io::Result<()>),
+    Stdout(std::io::Result<Vec<u8>>),
+    Stderr(std::io::Result<Vec<u8>>),
+}
+
+fn collect_child_bounded(
+    mut child: Child,
+    input: Vec<u8>,
+    deadline: Instant,
+    max_stdout: usize,
+    max_stderr: usize,
+) -> Result<BoundedOutput, RunnerError> {
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| transport("child stdin was not piped".into()))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| transport("child stdout was not piped".into()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| transport("child stderr was not piped".into()))?;
+    let (sender, receiver) = mpsc::channel();
+    let stdin_sender = sender.clone();
+    let stdin_thread = thread::spawn(move || {
+        let result = stdin.write_all(&input).and_then(|()| stdin.flush());
+        drop(stdin);
+        let _ = stdin_sender.send(IoEvent::Stdin(result));
+    });
+    let stdout_sender = sender.clone();
+    let stdout_thread = thread::spawn(move || {
+        let _ = stdout_sender.send(IoEvent::Stdout(read_bounded(stdout, max_stdout)));
+    });
+    let stderr_thread = thread::spawn(move || {
+        let _ = sender.send(IoEvent::Stderr(read_bounded(stderr, max_stderr)));
+    });
+
+    let mut stdin_done = false;
+    let mut stdout_bytes = None;
+    let mut stderr_bytes = None;
+    let mut status = None;
+    let result = loop {
+        if Instant::now() >= deadline {
+            break Err(transport(
+                "authenticated ssh exceeded the total 30-second deadline".into(),
+            ));
+        }
+        match receiver.recv_timeout(Duration::from_millis(5)) {
+            Ok(IoEvent::Stdin(result)) => match result {
+                Ok(()) => stdin_done = true,
+                Err(error) => break Err(error.into()),
+            },
+            Ok(IoEvent::Stdout(result)) => match result {
+                Ok(bytes) => stdout_bytes = Some(bytes),
+                Err(error) => break Err(error.into()),
+            },
+            Ok(IoEvent::Stderr(result)) => match result {
+                Ok(bytes) => stderr_bytes = Some(bytes),
+                Err(error) => break Err(error.into()),
+            },
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                break Err(transport(
+                    "authenticated ssh I/O workers disconnected".into(),
+                ));
+            }
+        }
+        if status.is_none() {
+            status = child.try_wait()?;
+        }
+        if stdin_done {
+            if let (Some(status), Some(stdout), Some(stderr)) =
+                (&status, &stdout_bytes, &stderr_bytes)
+            {
+                if Instant::now() >= deadline {
+                    break Err(transport(
+                        "authenticated ssh exceeded the total 30-second deadline".into(),
+                    ));
+                }
+                break Ok(BoundedOutput {
+                    status: *status,
+                    stdout: stdout.clone(),
+                    stderr: stderr.clone(),
+                });
+            }
+        }
+    };
+
+    if result.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    let _ = stdin_thread.join();
+    let _ = stdout_thread.join();
+    let _ = stderr_thread.join();
+    result
+}
+
+fn read_bounded(mut reader: impl Read, limit: usize) -> std::io::Result<Vec<u8>> {
+    let mut output = Vec::new();
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            return Ok(output);
+        }
+        if output.len().saturating_add(read) > limit {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "authenticated ssh output exceeds its fixed bound",
+            ));
+        }
+        output.extend_from_slice(&buffer[..read]);
     }
 }
 
@@ -185,6 +320,7 @@ fn transport(message: String) -> RunnerError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn authenticated_transport_pin_is_an_independent_openssh_host_key() {
@@ -202,5 +338,58 @@ mod tests {
         assert!(!production.contains("read_exact(&mut fingerprint)"));
         assert!(production.contains("StrictHostKeyChecking=yes"));
         assert!(production.contains("UserKnownHostsFile={known_path}"));
+    }
+
+    #[test]
+    fn bounded_transport_kills_and_reaps_a_hung_peer() {
+        #[allow(clippy::disallowed_methods)]
+        let child = Command::new("/usr/bin/tail")
+            .args(["-f", "/dev/null"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pid = child.id() as libc::pid_t;
+        let started = Instant::now();
+        let result = collect_child_bounded(
+            child,
+            Vec::new(),
+            started + Duration::from_millis(100),
+            1024,
+            1024,
+        );
+        assert!(result.is_err());
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(
+            unsafe { libc::kill(pid, 0) },
+            -1,
+            "timed-out child was not reaped"
+        );
+    }
+
+    #[test]
+    fn bounded_transport_kills_and_reaps_an_output_flood() {
+        #[allow(clippy::disallowed_methods)]
+        let child = Command::new("/usr/bin/yes")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pid = child.id() as libc::pid_t;
+        let result = collect_child_bounded(
+            child,
+            Vec::new(),
+            Instant::now() + Duration::from_secs(2),
+            1024,
+            1024,
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            unsafe { libc::kill(pid, 0) },
+            -1,
+            "flooding child was not reaped"
+        );
     }
 }

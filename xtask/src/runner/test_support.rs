@@ -2,7 +2,10 @@ use std::array;
 
 use ed25519_dalek::{Signer, SigningKey};
 
-use super::config::{ProvisionedRunnerConfig, RUNNERS, RunnerDispatchConfig, TrustRootConfig};
+use super::config::{
+    PinnedRunnerIdentityConfig, ProvisionedRunnerConfig, RUNNERS, RunnerDispatchConfig,
+    TrustRootConfig,
+};
 use super::encoding::encode_probe_payload;
 use super::protocol::{
     ProbeExchangeV1, ProbePayloadV1, ProbePurpose, ProbeRequestV1, RunnerIdentityV1, RunnerLockV1,
@@ -116,6 +119,7 @@ fn provisioned_test_material() -> (ProvisionedRunnerConfig, [SigningKey; 5]) {
         enrollment_snapshot_id: TEST_SNAPSHOTS[index],
         snapshot_provider: "test-sealed-snapshot-provider",
         enrollment_image_sha256: [index as u8 + 40; 32],
+        identity: pinned_identity(index),
         macos_designated_requirement: (index < 2).then_some("anchor apple generic"),
         macos_cdhash: (index < 2).then_some("00112233445566778899aabbccddeeff00112233"),
     });
@@ -126,6 +130,58 @@ fn provisioned_test_material() -> (ProvisionedRunnerConfig, [SigningKey; 5]) {
         dispatch,
     };
     (config, signing_keys)
+}
+
+fn pinned_identity(index: usize) -> PinnedRunnerIdentityConfig {
+    let mac = index < 2;
+    PinnedRunnerIdentityConfig {
+        machine_id_sha256: [index as u8 + 120; 32],
+        hardware_model: if mac { "Mac" } else { "Reference PC" },
+        cpu_model: if index == 0 {
+            "Apple M1"
+        } else if index == 1 {
+            "Intel Core i7-9750H"
+        } else {
+            "Intel Core i5-8500"
+        },
+        cpu_cores: if index == 0 { 8 } else { 6 },
+        ram_bytes: 16 * 1024 * 1024 * 1024,
+        arch: if index == 0 { "aarch64" } else { "x86_64" },
+        os_product: if mac {
+            "macOS"
+        } else if index == 4 {
+            "Fedora Linux"
+        } else {
+            "Ubuntu"
+        },
+        os_version: if mac {
+            "15.5"
+        } else if index == 4 {
+            "43"
+        } else {
+            "24.04"
+        },
+        os_build: "exact-build",
+        os_image: "exact-image",
+        kernel: "exact-kernel",
+        display_session: if mac {
+            "aqua"
+        } else if index == 2 {
+            "x11"
+        } else {
+            "wayland"
+        },
+        display_socket: (!mac).then_some(if index == 2 { ":0" } else { "wayland-0" }),
+        monitor_width_px: if index == 0 { 2560 } else { 1920 },
+        monitor_height_px: if index == 0 { 1600 } else { 1080 },
+        monitor_scale_milli: 1000,
+        monitor_refresh_millihz: 60_000,
+        gtk_version: (!mac).then_some("3.24.41"),
+        webkitgtk_version: (!mac).then_some("2.44.3"),
+        wkwebview_version: mac.then_some("620.2.4"),
+        virtualized: true,
+        virtualization_image_sha256: Some([index as u8 + 125; 32]),
+    }
 }
 
 fn request(

@@ -136,7 +136,12 @@ fn verify_exchange(
     {
         return Err(protocol("signed payload mismatch"));
     }
-    validate_identity_contract(&payload.identity)?;
+    validate_identity_contract(
+        &payload.identity,
+        row.runner_id,
+        row.snapshot_provider,
+        &row.identity,
+    )?;
     Ok(payload)
 }
 
@@ -206,108 +211,43 @@ pub(crate) fn enrollment_commitment(lock: &RunnerLockV1) -> [u8; 32] {
     Sha256::digest(message).into()
 }
 
-pub(crate) fn validate_identity_contract(identity: &RunnerIdentityV1) -> Result<(), RunnerError> {
-    let nonempty = [
-        identity.hardware_model.as_str(),
-        identity.cpu_model.as_str(),
-        identity.arch.as_str(),
-        identity.os_product.as_str(),
-        identity.os_version.as_str(),
-        identity.os_build.as_str(),
-        identity.os_image.as_str(),
-        identity.kernel.as_str(),
-        identity.display_session.as_str(),
-        identity.snapshot_provider.as_str(),
-    ]
-    .into_iter()
-    .all(|value| !value.is_empty() && !value.contains('+'));
-    if !nonempty
-        || identity.machine_id_sha256 == [0; 32]
-        || identity.cpu_cores == 0
-        || identity.ram_bytes == 0
-        || identity.monitor_width_px == 0
-        || identity.monitor_height_px == 0
-        || identity.monitor_scale_milli == 0
-        || identity.monitor_refresh_millihz == 0
-        || identity.virtualized != identity.virtualization_image_sha256.is_some()
-    {
-        return Err(protocol("identity contains an empty/presence-only field"));
-    }
-    let is_mac = identity.runner_id.starts_with("fm-macos-");
-    let fixed_hardware = match identity.runner_id.as_str() {
-        "fm-macos-arm64-v1" => {
-            identity.arch == "aarch64"
-                && identity.cpu_model.contains("Apple M1")
-                && identity.cpu_cores == 8
-                && identity.monitor_width_px == 2560
-                && identity.monitor_height_px == 1600
-        }
-        "fm-macos-x86_64-v1" => {
-            identity.arch == "x86_64"
-                && identity.cpu_model.contains("i7-9750H")
-                && identity.cpu_cores == 6
-                && identity.monitor_width_px == 1920
-                && identity.monitor_height_px == 1080
-        }
-        "fm-ubuntu-x11-v1" | "fm-ubuntu-wayland-v1" | "fm-fedora-wayland-v1" => {
-            identity.arch == "x86_64"
-                && identity.cpu_model.contains("i5-8500")
-                && identity.cpu_cores == 6
-                && identity.monitor_width_px == 1920
-                && identity.monitor_height_px == 1080
-        }
-        _ => false,
-    };
-    let sixteen_gib = 16_u64 * 1024 * 1024 * 1024;
-    let fixed_memory =
-        identity.ram_bytes >= 15_u64 * 1024 * 1024 * 1024 && identity.ram_bytes <= sixteen_gib;
-    let fixed_display =
-        identity.monitor_scale_milli == 1000 && identity.monitor_refresh_millihz == 60_000;
-    let platform = if is_mac {
-        identity.os_product == "macOS"
-            && identity.display_session == "aqua"
-            && identity.display_socket.is_none()
-            && identity.gtk_version.is_none()
-            && identity.webkitgtk_version.is_none()
-            && identity
-                .wkwebview_version
-                .as_deref()
-                .is_some_and(|version| !version.is_empty() && version != identity.os_build)
+pub(crate) fn validate_identity_contract(
+    identity: &RunnerIdentityV1,
+    runner_id: &str,
+    snapshot_provider: &str,
+    expected: &super::config::PinnedRunnerIdentityConfig,
+) -> Result<(), RunnerError> {
+    let exact = identity.runner_id == runner_id
+        && identity.machine_id_sha256 == expected.machine_id_sha256
+        && identity.hardware_model == expected.hardware_model
+        && identity.cpu_model == expected.cpu_model
+        && identity.cpu_cores == expected.cpu_cores
+        && identity.ram_bytes == expected.ram_bytes
+        && identity.arch == expected.arch
+        && identity.os_product == expected.os_product
+        && identity.os_version == expected.os_version
+        && identity.os_build == expected.os_build
+        && identity.os_image == expected.os_image
+        && identity.kernel == expected.kernel
+        && identity.display_session == expected.display_session
+        && identity.display_socket.as_deref() == expected.display_socket
+        && identity.monitor_width_px == expected.monitor_width_px
+        && identity.monitor_height_px == expected.monitor_height_px
+        && identity.monitor_scale_milli == expected.monitor_scale_milli
+        && identity.monitor_refresh_millihz == expected.monitor_refresh_millihz
+        && identity.gtk_version.as_deref() == expected.gtk_version
+        && identity.webkitgtk_version.as_deref() == expected.webkitgtk_version
+        && identity.wkwebview_version.as_deref() == expected.wkwebview_version
+        && identity.virtualized == expected.virtualized
+        && identity.virtualization_image_sha256 == expected.virtualization_image_sha256
+        && identity.snapshot_provider == snapshot_provider;
+    if exact {
+        Ok(())
     } else {
-        let expected = match identity.runner_id.as_str() {
-            "fm-ubuntu-x11-v1" => Some(("Ubuntu", "24.04", "x11")),
-            "fm-ubuntu-wayland-v1" => Some(("Ubuntu", "24.04", "wayland")),
-            "fm-fedora-wayland-v1" => Some(("Fedora Linux", "43", "wayland")),
-            _ => None,
-        };
-        expected.is_some_and(|(product, version, session)| {
-            identity.os_product == product
-                && identity.os_version == version
-                && identity.display_session == session
-                && identity.display_socket.as_deref().is_some_and(|socket| {
-                    if session == "x11" {
-                        socket.starts_with(':')
-                    } else {
-                        socket.starts_with("wayland-")
-                    }
-                })
-                && identity
-                    .gtk_version
-                    .as_deref()
-                    .is_some_and(|value| value.starts_with("3."))
-                && identity
-                    .webkitgtk_version
-                    .as_deref()
-                    .is_some_and(|value| !value.starts_with("4.0") && !value.starts_with("6."))
-                && identity.wkwebview_version.is_none()
-        })
-    };
-    if !fixed_hardware || !fixed_memory || !fixed_display || !platform {
-        return Err(protocol(
-            "identity does not match the exact fixed runner hardware/OS/display/runtime row",
-        ));
+        Err(protocol(
+            "identity does not exactly match the independently provisioned runner row",
+        ))
     }
-    Ok(())
 }
 
 fn lower_hex(value: &str) -> bool {
@@ -325,6 +265,7 @@ fn protocol(message: &str) -> RunnerError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runner::config::PinnedRunnerIdentityConfig;
 
     fn identity(runner_id: &str) -> RunnerIdentityV1 {
         let mac = runner_id.starts_with("fm-macos-");
@@ -411,30 +352,187 @@ mod tests {
         }
     }
 
+    fn pinned(runner_id: &str) -> PinnedRunnerIdentityConfig {
+        let mac = runner_id.starts_with("fm-macos-");
+        PinnedRunnerIdentityConfig {
+            machine_id_sha256: [1; 32],
+            hardware_model: if mac {
+                "MacBookPro16,1"
+            } else {
+                "Reference PC"
+            },
+            cpu_model: match runner_id {
+                "fm-macos-arm64-v1" => "Apple M1",
+                "fm-macos-x86_64-v1" => "Intel(R) Core(TM) i7-9750H CPU",
+                _ => "Intel(R) Core(TM) i5-8500 CPU",
+            },
+            cpu_cores: if runner_id == "fm-macos-arm64-v1" {
+                8
+            } else {
+                6
+            },
+            ram_bytes: 16 * 1024 * 1024 * 1024,
+            arch: if runner_id == "fm-macos-arm64-v1" {
+                "aarch64"
+            } else {
+                "x86_64"
+            },
+            os_product: if mac {
+                "macOS"
+            } else if runner_id == "fm-fedora-wayland-v1" {
+                "Fedora Linux"
+            } else {
+                "Ubuntu"
+            },
+            os_version: if mac {
+                "15.5"
+            } else if runner_id == "fm-fedora-wayland-v1" {
+                "43"
+            } else {
+                "24.04"
+            },
+            os_build: "exact-build",
+            os_image: "exact-image",
+            kernel: if mac { "Darwin 24.5.0" } else { "Linux 6.8.0" },
+            display_session: if mac {
+                "aqua"
+            } else if runner_id == "fm-ubuntu-x11-v1" {
+                "x11"
+            } else {
+                "wayland"
+            },
+            display_socket: (!mac).then_some(if runner_id == "fm-ubuntu-x11-v1" {
+                ":0"
+            } else {
+                "wayland-0"
+            }),
+            monitor_width_px: if runner_id == "fm-macos-arm64-v1" {
+                2560
+            } else {
+                1920
+            },
+            monitor_height_px: if runner_id == "fm-macos-arm64-v1" {
+                1600
+            } else {
+                1080
+            },
+            monitor_scale_milli: 1000,
+            monitor_refresh_millihz: 60_000,
+            gtk_version: (!mac).then_some("3.24.41"),
+            webkitgtk_version: (!mac).then_some("2.44.3"),
+            wkwebview_version: mac.then_some("620.2.4"),
+            virtualized: true,
+            virtualization_image_sha256: Some([2; 32]),
+        }
+    }
+
+    fn validate(identity: &RunnerIdentityV1) -> Result<(), RunnerError> {
+        validate_identity_contract(
+            identity,
+            &identity.runner_id,
+            "provider",
+            &pinned(&identity.runner_id),
+        )
+    }
+
     #[test]
     fn exact_runner_contract_rejects_wrong_platform_family_and_values() {
         for runner in RUNNERS {
-            assert!(validate_identity_contract(&identity(runner)).is_ok());
+            assert!(validate(&identity(runner)).is_ok());
         }
         let mut wrong_family = identity("fm-ubuntu-wayland-v1");
         wrong_family.os_product = "Fedora Linux".into();
-        assert!(validate_identity_contract(&wrong_family).is_err());
+        assert!(validate(&wrong_family).is_err());
 
         let mut wrong_runtime = identity("fm-fedora-wayland-v1");
         wrong_runtime.webkitgtk_version = Some("6.0.0".into());
-        assert!(validate_identity_contract(&wrong_runtime).is_err());
+        assert!(validate(&wrong_runtime).is_err());
 
         let mut wrong_socket_shape = identity("fm-ubuntu-x11-v1");
         wrong_socket_shape.display_socket = Some("wayland-0".into());
-        assert!(validate_identity_contract(&wrong_socket_shape).is_err());
+        assert!(validate(&wrong_socket_shape).is_err());
     }
 
     #[test]
     fn macos_contract_requires_distinct_real_wkwebview_runtime() {
         let mut mac = identity("fm-macos-arm64-v1");
         mac.wkwebview_version = Some(mac.os_build.clone());
-        assert!(validate_identity_contract(&mac).is_err());
+        assert!(validate(&mac).is_err());
         mac.wkwebview_version = None;
-        assert!(validate_identity_contract(&mac).is_err());
+        assert!(validate(&mac).is_err());
+    }
+
+    #[test]
+    fn every_identity_field_is_exact_for_every_runner_row() {
+        for runner in RUNNERS {
+            let expected = identity(runner);
+            let mut mutations = Vec::new();
+            macro_rules! mutate {
+                ($field:ident, $value:expr) => {{
+                    let mut changed = expected.clone();
+                    changed.$field = $value;
+                    mutations.push((stringify!($field), changed));
+                }};
+            }
+            mutate!(runner_id, format!("{runner}-changed"));
+            mutate!(machine_id_sha256, [9; 32]);
+            mutate!(hardware_model, "changed-hardware".into());
+            mutate!(cpu_model, "changed-cpu".into());
+            mutate!(cpu_cores, expected.cpu_cores + 1);
+            mutate!(ram_bytes, expected.ram_bytes - 1);
+            mutate!(arch, "changed-arch".into());
+            mutate!(os_product, "changed-product".into());
+            mutate!(os_version, "changed-version".into());
+            mutate!(os_build, "changed-build".into());
+            mutate!(os_image, "changed-image".into());
+            mutate!(kernel, "changed-kernel".into());
+            mutate!(display_session, "changed-session".into());
+            mutate!(
+                display_socket,
+                expected
+                    .display_socket
+                    .as_ref()
+                    .map_or_else(|| Some("unexpected".into()), |_| None)
+            );
+            mutate!(monitor_width_px, expected.monitor_width_px + 1);
+            mutate!(monitor_height_px, expected.monitor_height_px + 1);
+            mutate!(monitor_scale_milli, expected.monitor_scale_milli + 1);
+            mutate!(
+                monitor_refresh_millihz,
+                expected.monitor_refresh_millihz + 1
+            );
+            mutate!(
+                gtk_version,
+                expected
+                    .gtk_version
+                    .as_ref()
+                    .map_or_else(|| Some("unexpected".into()), |_| None)
+            );
+            mutate!(
+                webkitgtk_version,
+                expected
+                    .webkitgtk_version
+                    .as_ref()
+                    .map_or_else(|| Some("unexpected".into()), |_| None)
+            );
+            mutate!(
+                wkwebview_version,
+                expected
+                    .wkwebview_version
+                    .as_ref()
+                    .map_or_else(|| Some("unexpected".into()), |_| None)
+            );
+            mutate!(virtualized, !expected.virtualized);
+            mutate!(virtualization_image_sha256, Some([8; 32]));
+            mutate!(snapshot_provider, "changed-provider".into());
+
+            for (field, changed) in mutations {
+                assert!(
+                    validate_identity_contract(&changed, runner, "provider", &pinned(runner))
+                        .is_err(),
+                    "{runner} accepted mutated {field}"
+                );
+            }
+        }
     }
 }
