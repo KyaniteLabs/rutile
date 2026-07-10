@@ -81,6 +81,12 @@ fn fixed_assets_and_document_have_exact_security_headers() {
     assert!(bridge.contains("command.source_start>20971520"));
     assert!(bridge.contains("frame!==canonical"));
     assert!(bridge.contains("scrollIntoView"));
+    assert!(bridge.contains("addEventListener('scroll'"));
+    assert!(bridge.contains("type:'scroll',v:1,revision"));
+    assert!(bridge.contains("interaction_id"));
+    assert!(bridge.contains("source_start"));
+    assert!(bridge.contains("user:programmatic===null"));
+    assert!(bridge.contains("requestAnimationFrame(emitScroll)"));
     assert!(!bridge.contains("eval("));
     assert!(!bridge.contains("new Function"));
     assert!(!js.body.is_empty());
@@ -174,4 +180,92 @@ fn scroll_control_is_the_only_bounded_native_to_document_channel() {
     assert_eq!(sink.bytes.last(), Some(&b'\n'));
     assert!(host.deliver_scroll_to(&mut sink, 1, 42, 3).is_err());
     assert_eq!(sink.deliveries, 1);
+}
+
+#[test]
+fn malformed_ipc_frames_are_rejected_without_mutating_state() {
+    let mut host = PreviewHost::new();
+    host.stage_document(RenderUrl::new(5, NONCE), Arc::from(b"page".as_slice()))
+        .unwrap();
+    assert!(host.allow_navigation(&document_url(5), NavigationKind::AppInitiated));
+
+    let cases = [
+        b"not json\n".as_slice(),
+        b"{\"type\":\"painted\"}\n",
+        b"{\"type\":\"painted\",\"v\":2,\"revision\":5,\"frame_seq\":2}\n",
+        b"{\"type\":\"painted\",\"v\":1,\"revision\":5}\n",
+        b"{\"type\":\"scroll\",\"v\":1,\"revision\":5,\"source_start\":20971521,\"interaction_id\":1,\"user\":true}\n",
+        b"{\"type\":\"painted\",\"v\":1,\"revision\":5,\"frame_seq\":2}\n\n",
+        b"{\"type\":\"painted\",\"v\":1,\"revision\":5,\"frame_seq\":2}",
+    ];
+
+    for frame in cases {
+        assert!(
+            host.handle_ipc(frame).is_err(),
+            "frame should be rejected: {:?}",
+            std::str::from_utf8(frame)
+        );
+    }
+}
+
+#[test]
+fn forbidden_navigation_urls_are_rejected() {
+    let mut host = PreviewHost::new();
+    host.stage_document(RenderUrl::new(3, NONCE), Arc::from(b"page".as_slice()))
+        .unwrap();
+
+    for url in [
+        "https://example.com/",
+        "http://example.com/",
+        "file:///etc/passwd",
+        "feathermark://preview/v1/document/3/00000000000000000000000000000000",
+    ] {
+        assert!(
+            !host.allow_navigation(url, NavigationKind::AppInitiated),
+            "{url}"
+        );
+    }
+}
+
+#[test]
+fn required_frame_loss_and_disconnect_are_fatal_to_old_page_authority() {
+    #[derive(Default)]
+    struct DisconnectedSink;
+
+    impl PreviewControlSink for DisconnectedSink {
+        fn deliver_scroll_to(&mut self, _delivery: ScrollDelivery) -> Result<(), HostError> {
+            Err(HostError::Platform(
+                "preview channel disconnected".to_owned(),
+            ))
+        }
+    }
+
+    let mut host = PreviewHost::new();
+    host.stage_document(RenderUrl::new(6, NONCE), Arc::from(b"old".as_slice()))
+        .unwrap();
+    assert!(host.allow_navigation(&document_url(6), NavigationKind::AppInitiated));
+
+    // A missing required painted frame (frame_seq < 2) is accepted by the
+    // protocol but the reducer will never mark the preview Ready.
+    let single_frame = b"{\"type\":\"painted\",\"v\":1,\"revision\":6,\"frame_seq\":1}\n";
+    assert!(matches!(
+        host.handle_ipc(single_frame).unwrap(),
+        PreviewEventV1::Painted {
+            revision: 6,
+            frame_seq: 1
+        }
+    ));
+
+    // Staging a new revision revokes the old page's IPC authority entirely.
+    host.stage_document(RenderUrl::new(7, NONCE), Arc::from(b"new".as_slice()))
+        .unwrap();
+    let old_required = b"{\"type\":\"painted\",\"v\":1,\"revision\":6,\"frame_seq\":2}\n";
+    assert!(matches!(
+        host.handle_ipc(old_required),
+        Err(HostError::NoLoadedDocument)
+    ));
+
+    // A disconnected scroll-control sink propagates the failure.
+    let mut sink = DisconnectedSink;
+    assert!(host.deliver_scroll_to(&mut sink, 7, 0, 1).is_err());
 }

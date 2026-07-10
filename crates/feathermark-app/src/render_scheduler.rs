@@ -1,19 +1,54 @@
 use std::sync::Arc;
 
-use feathermark_core::{RenderError, RenderedPage, render_markdown};
+use feathermark_core::{DocumentSnapshot, RenderError, RenderedPage, render_markdown};
 use feathermark_types::Revision;
 
 pub const DEBOUNCE_MS: u64 = 50;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct RenderRequest {
     pub revision: Revision,
-    pub source: Arc<str>,
+    source: RenderSource,
+}
+
+#[derive(Clone)]
+enum RenderSource {
+    Flat(Arc<str>),
+    Rope(DocumentSnapshot),
+}
+
+impl std::fmt::Debug for RenderSource {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Flat(source) => formatter
+                .debug_struct("Flat")
+                .field("len_bytes", &source.len())
+                .finish(),
+            Self::Rope(snapshot) => formatter
+                .debug_struct("Rope")
+                .field("revision", &snapshot.revision)
+                .field("len_bytes", &snapshot.len_bytes())
+                .finish(),
+        }
+    }
 }
 
 impl RenderRequest {
     pub fn new(revision: Revision, source: Arc<str>) -> Self {
-        Self { revision, source }
+        Self {
+            revision,
+            source: RenderSource::Flat(source),
+        }
+    }
+
+    /// Captures Rope storage in O(1). Any full UTF-8 flattening happens only
+    /// when the render permit executes, which native shells dispatch off the
+    /// UI thread.
+    pub fn from_snapshot(snapshot: DocumentSnapshot) -> Self {
+        Self {
+            revision: snapshot.revision,
+            source: RenderSource::Rope(snapshot),
+        }
     }
 }
 
@@ -21,7 +56,7 @@ impl RenderRequest {
 pub struct RenderPermit {
     id: u64,
     revision: Revision,
-    source: Arc<str>,
+    source: RenderSource,
 }
 
 impl RenderPermit {
@@ -40,7 +75,15 @@ impl RenderPermit {
         self,
         renderer: impl FnOnce(&str, Revision) -> RenderJobResult,
     ) -> CompletedRender {
-        let result = renderer(&self.source, self.revision);
+        let flattened;
+        let source = match &self.source {
+            RenderSource::Flat(source) => source.as_ref(),
+            RenderSource::Rope(snapshot) => {
+                flattened = snapshot.to_string();
+                &flattened
+            }
+        };
+        let result = renderer(source, self.revision);
         CompletedRender {
             id: self.id,
             issued_revision: self.revision,

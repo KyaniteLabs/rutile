@@ -1,4 +1,6 @@
-use feathermark_core::RenderError;
+use std::path::{Path, PathBuf};
+
+use feathermark_core::{DiskVersion, ExternalResolution, RenderError};
 use feathermark_protocol::PreviewEventV1;
 use feathermark_types::{InteractionId, Revision, SafeLinkTarget};
 
@@ -29,13 +31,24 @@ pub enum AppMessage {
     NewDocument,
     DocumentOpened {
         revision: Revision,
+        path: PathBuf,
+        disk: DiskVersion,
     },
     DocumentEdited {
         revision: Revision,
     },
     SaveCompleted {
         revision: Revision,
+        path: PathBuf,
+        disk: DiskVersion,
     },
+    SaveFailed {
+        revision: Revision,
+    },
+    ExternalConflictDetected {
+        disk: DiskVersion,
+    },
+    ResolveExternalConflict(ExternalResolution),
     RenderAccepted {
         revision: Revision,
         page_bytes: usize,
@@ -63,6 +76,16 @@ pub enum AppEffect {
         user: bool,
     },
     PresentLink(SafeLinkTarget),
+    PresentExternalConflict {
+        path: PathBuf,
+        disk: DiskVersion,
+    },
+    ReloadExternal {
+        path: PathBuf,
+    },
+    SaveExternalAs {
+        path: PathBuf,
+    },
     IgnoredStale {
         revision: Revision,
     },
@@ -73,6 +96,9 @@ pub struct AppState {
     revision: Revision,
     dirty: bool,
     preview: PreviewState,
+    path: Option<PathBuf>,
+    saved_disk: Option<DiskVersion>,
+    external_conflict: Option<DiskVersion>,
 }
 
 impl AppState {
@@ -92,17 +118,39 @@ impl AppState {
         &self.preview
     }
 
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    pub fn saved_disk(&self) -> Option<&DiskVersion> {
+        self.saved_disk.as_ref()
+    }
+
+    pub fn external_conflict(&self) -> Option<&DiskVersion> {
+        self.external_conflict.as_ref()
+    }
+
     pub fn reduce(&mut self, message: AppMessage) -> Vec<AppEffect> {
         match message {
             AppMessage::NewDocument => {
                 self.revision = 0;
                 self.dirty = false;
+                self.path = None;
+                self.saved_disk = None;
+                self.external_conflict = None;
                 self.preview = PreviewState::Waiting { revision: 0 };
                 vec![AppEffect::ScheduleRender { revision: 0 }]
             }
-            AppMessage::DocumentOpened { revision } => {
+            AppMessage::DocumentOpened {
+                revision,
+                path,
+                disk,
+            } => {
                 self.revision = revision;
                 self.dirty = false;
+                self.path = Some(path);
+                self.saved_disk = Some(disk);
+                self.external_conflict = None;
                 self.preview = PreviewState::Waiting { revision };
                 vec![AppEffect::ScheduleRender { revision }]
             }
@@ -115,12 +163,57 @@ impl AppState {
                 self.preview = PreviewState::Waiting { revision };
                 vec![AppEffect::ScheduleRender { revision }]
             }
-            AppMessage::SaveCompleted { revision } if revision == self.revision => {
+            AppMessage::SaveCompleted {
+                revision,
+                path,
+                disk,
+            } if revision == self.revision => {
                 self.dirty = false;
+                self.path = Some(path);
+                self.saved_disk = Some(disk);
+                self.external_conflict = None;
                 vec![]
             }
-            AppMessage::SaveCompleted { revision } => {
+            AppMessage::SaveCompleted { revision, .. } => {
                 vec![AppEffect::IgnoredStale { revision }]
+            }
+            AppMessage::SaveFailed { revision } if revision == self.revision => {
+                // A failed save leaves the document dirty and any conflict
+                // unresolved; the platform shell must present the error and
+                // keep the document open.
+                vec![]
+            }
+            AppMessage::SaveFailed { revision } => {
+                vec![AppEffect::IgnoredStale { revision }]
+            }
+            AppMessage::ExternalConflictDetected { disk } => {
+                if self.saved_disk.as_ref() == Some(&disk) {
+                    return vec![];
+                }
+                let Some(path) = self.path.clone() else {
+                    return vec![];
+                };
+                self.external_conflict = Some(disk.clone());
+                vec![AppEffect::PresentExternalConflict { path, disk }]
+            }
+            AppMessage::ResolveExternalConflict(resolution) => {
+                let Some(disk) = self.external_conflict.take() else {
+                    return vec![];
+                };
+                match resolution {
+                    ExternalResolution::ReloadDisk => self
+                        .path
+                        .clone()
+                        .map(|path| vec![AppEffect::ReloadExternal { path }])
+                        .unwrap_or_default(),
+                    ExternalResolution::KeepBuffer => {
+                        self.saved_disk = Some(disk);
+                        vec![]
+                    }
+                    ExternalResolution::SaveBufferAs(path) => {
+                        vec![AppEffect::SaveExternalAs { path }]
+                    }
+                }
             }
             AppMessage::RenderAccepted {
                 revision,

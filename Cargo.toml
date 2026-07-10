@@ -9,8 +9,13 @@ members = [
   "spikes/feathermark-spike-support",
   "spikes/linux-gtk-wry",
   "spikes/macos-iced-wry",
-  "spikes/macos-egui-wry",
 ]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
 
 [workspace.package]
 edition = "2024"

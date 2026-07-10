@@ -40,7 +40,6 @@ fn check_features(name: &str, features: &str) -> std::process::Output {
     let output = Command::new(env!("CARGO"))
         .args([
             "check",
-            "--offline",
             "--quiet",
             "--manifest-path",
             manifest.to_str().unwrap(),

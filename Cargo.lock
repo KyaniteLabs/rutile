@@ -895,8 +895,19 @@ dependencies = [
  "feathermark-core",
  "feathermark-protocol",
  "feathermark-types",
+ "getrandom 0.3.3",
+ "gtk",
+ "iced_renderer",
+ "iced_widget",
+ "iced_winit",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "serde_json",
+ "sourceview4",
  "thiserror 2.0.12",
  "url",
+ "wry",
 ]
 
 [[package]]
@@ -1979,13 +1990,6 @@ name = "log"
 version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
-
-[[package]]
-name = "macos-egui-wry-spike"
-version = "0.1.0"
-dependencies = [
- "feathermark-spike-support",
-]
 
 [[package]]
 name = "macos-iced-wry-spike"
