@@ -1,0 +1,136 @@
+{
+  "schema": "feathermark-security-summary-v1",
+  "version": "0.1.0",
+  "source_commit": "1fd504996666d1d95cbc520e084c9e15f1ccc763",
+  "created_at": "2026-07-10T19:43:11Z",
+  "tools": {
+    "cargo_deny": "0.20.2",
+    "cargo_audit": "0.22.2",
+    "cargo_fuzz": "0.13.2"
+  },
+  "cargo_deny": {
+    "status": "passed",
+    "runs": [
+      {
+        "host": "Liam",
+        "target_triple": "aarch64-apple-darwin",
+        "command": "cargo deny check",
+        "result": "passed"
+      },
+      {
+        "host": "Niko",
+        "target_triple": "x86_64-unknown-linux-gnu",
+        "command": "cargo deny check",
+        "result": "passed"
+      }
+    ]
+  },
+  "cargo_audit": {
+    "status": "completed_with_advisories",
+    "tool_version": "0.22.2",
+    "database_date": "2026-07-10",
+    "ignored_advisories": [
+      {
+        "id": "RUSTSEC-2026-0195",
+        "crate": "quick-xml",
+        "reason": "build-only transitive dependency; vulnerable NsReader API not used"
+      },
+      {
+        "id": "RUSTSEC-2026-0194",
+        "crate": "quick-xml",
+        "reason": "build-only transitive dependency; vulnerable duplicate-attribute API not used"
+      },
+      {
+        "id": "RUSTSEC-2026-0009",
+        "crate": "time",
+        "reason": "transitive via wry cookie handling; no untrusted time parsing"
+      },
+      {
+        "id": "RUSTSEC-2024-0413",
+        "crate": "atk",
+        "reason": "intentional GTK3 binding; upstream no longer maintained"
+      },
+      {
+        "id": "RUSTSEC-2024-0416",
+        "crate": "atk-sys",
+        "reason": "intentional GTK3 binding; upstream no longer maintained"
+      },
+      {
+        "id": "RUSTSEC-2024-0412",
+        "crate": "gdk",
+        "reason": "intentional GTK3 binding; upstream no longer maintained"
+      },
+      {
+        "id": "RUSTSEC-2024-0418",
+        "crate": "gdk-sys",
+        "reason": "intentional GTK3 binding; upstream no longer maintained"
+      },
+      {
+        "id": "RUSTSEC-2024-0415",
+        "crate": "gtk",
+        "reason": "intentional GTK3 binding; upstream no longer maintained"
+      },
+      {
+        "id": "RUSTSEC-2024-0420",
+        "crate": "gtk-sys",
+        "reason": "intentional GTK3 binding; upstream no longer maintained"
+      },
+      {
+        "id": "RUSTSEC-2024-0419",
+        "crate": "gtk3-macros",
+        "reason": "intentional GTK3 binding; upstream no longer maintained"
+      },
+      {
+        "id": "RUSTSEC-2024-0414",
+        "crate": "gtk3-macros",
+        "reason": "intentional GTK3 binding; upstream no longer maintained"
+      },
+      {
+        "id": "RUSTSEC-2024-0417",
+        "crate": "gtk3-macros",
+        "reason": "intentional GTK3 binding; upstream no longer maintained"
+      },
+      {
+        "id": "RUSTSEC-2024-0421",
+        "crate": "gtk3-macros",
+        "reason": "intentional GTK3 binding; upstream no longer maintained"
+      }
+    ]
+  },
+  "fuzz_smoke": {
+    "status": "passed",
+    "targets": [
+      {
+        "name": "preview_event",
+        "duration_sec": 15,
+        "runs": 615797,
+        "crashes": 0,
+        "host": "Liam"
+      },
+      {
+        "name": "render_markdown",
+        "duration_sec": 15,
+        "runs": 45756,
+        "crashes": 0,
+        "host": "Liam"
+      },
+      {
+        "name": "source_blocks",
+        "duration_sec": 15,
+        "runs": 84383,
+        "crashes": 0,
+        "host": "Liam"
+      }
+    ]
+  },
+  "known_debt": [
+    "Intel macOS build not produced",
+    "Native Wayland not exercised",
+    "RPM package not installed on RPM host",
+    "No Apple Developer ID signing or notarization",
+    "No GPG signing of packages or checksums",
+    "No independent builder reproduction",
+    "Only short fuzz smoke runs executed",
+    "No standalone SBOM or runtime system-library audit"
+  ]
+}

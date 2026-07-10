@@ -1,0 +1,5 @@
+disallowed-methods = [
+  { path = "std::process::Command::spawn", reason = "application launches require app_launch capability consumption" },
+  { path = "std::process::Command::status", reason = "process execution must use an audited owner" },
+  { path = "std::process::Command::output", reason = "process execution must use an audited owner" },
+]

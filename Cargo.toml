@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/feathermark-types",
+  "crates/feathermark-core",
+  "crates/feathermark-protocol",
+  "crates/feathermark-app",
+  "xtask",
+  "spikes/feathermark-spike-support",
+  "spikes/linux-gtk-wry",
+  "spikes/macos-iced-wry",
+]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+
+[workspace.dependencies]
+blake3 = "=1.8.2"
+clap = { version = "=4.5.41", features = ["derive"] }
+ed25519-dalek = "=2.1.1"
+feathermark-protocol = { path = "crates/feathermark-protocol", version = "=0.1.0" }
+hex = "=0.4.3"
+getrandom = "=0.3.3"
+html-escape = "=0.2.13"
+libc = "=0.2.172"
+pulldown-cmark = "=0.13.0"
+ropey = "=1.6.1"
+serde = { version = "=1.0.220", features = ["derive"] }
+serde_json = "=1.0.140"
+sha2 = "=0.10.9"
+tempfile = "=3.20.0"
+thiserror = "=2.0.12"
+toml = "=0.8.23"
+url = "=2.5.4"
+walkdir = "=2.5.0"

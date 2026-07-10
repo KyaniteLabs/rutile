@@ -1,0 +1,47 @@
+{
+  "schema": "feathermark.fixtures.v1",
+  "fixtures": [
+    {
+      "name": "small",
+      "file": "small.md",
+      "bytes": 128,
+      "sha256": "6e42913c7bae45c5f834254cfee3256271a1f8fb7caedd0a13be0e4abfdb1ede"
+    },
+    {
+      "name": "unicode",
+      "file": "unicode.md",
+      "bytes": 1024,
+      "sha256": "c9dbe845d981a2fe2612282c234fdb42cf413f4ba029acc2ec6d005a83a22fbc"
+    },
+    {
+      "name": "one-mib",
+      "file": "one-mib.md",
+      "bytes": 1048576,
+      "sha256": "0fd7206ce4d3292b86228a781afcd4aee8fd99d1514977d95aa17ce53879b3e7"
+    },
+    {
+      "name": "five-mib",
+      "file": "five-mib.md",
+      "bytes": 5242880,
+      "sha256": "fc428e46ae2e54fc89c55981270eea519b84e1c2c457c1c4a80642fb30ce1a37"
+    },
+    {
+      "name": "hostile",
+      "file": "hostile.md",
+      "bytes": 4096,
+      "sha256": "090985f7b41aaccc055f74db0a4b907ca528809253961c5bd3461734f3246069"
+    },
+    {
+      "name": "nested",
+      "file": "nested.md",
+      "bytes": 8192,
+      "sha256": "ed66549a939450c135273ce65bc7d310b4646c5f48e63779acacef6b089a2b9f"
+    },
+    {
+      "name": "giant-block",
+      "file": "giant-block.md",
+      "bytes": 65536,
+      "sha256": "6c0fd962721eb374770e77f298488d4bbc90cd35f28fbd8160f0feae52e37d84"
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+error[E0603]: module `app_launch` is private
+ --> tests/ui/runner_capabilities_private.rs:1:12
+  |
+1 | use xtask::app_launch::{AppLaunchSpec, AuthorizedAppLaunch};
+  |            ^^^^^^^^^^ private module
+  |
+note: the module `app_launch` is defined here
+ --> src/lib.rs
+  |
+  | mod app_launch;
+  | ^^^^^^^^^^^^^^
+
+error[E0603]: module `current` is private
+ --> tests/ui/runner_capabilities_private.rs:2:20
+  |
+2 | use xtask::runner::current::VerifiedRunner;
+  |                    ^^^^^^^ private module
+  |
+note: the module `current` is defined here
+ --> src/runner.rs
+  |
+  | pub(crate) mod current;
+  | ^^^^^^^^^^^^^^^^^^^^^^

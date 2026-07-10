@@ -1,0 +1,18 @@
+[package]
+name = "macos-egui-wry-spike"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "macos-egui-wry-spike"
+path = "src/main.rs"
+
+[features]
+default = []
+macos-egui = []
+test-control = []
+
+[dependencies]
+feathermark-spike-support = { path = "../feathermark-spike-support", version = "=0.1.0" }
