@@ -5,7 +5,7 @@ use feathermark_protocol::{PreviewEventV1, decode_preview_event};
 #[test]
 fn committed_preview_seed_set_reaches_all_four_success_variants() {
     let root =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../fuzz/corpus/preview_event");
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/preview_event");
     for (name, expected) in [
         ("bridge_ready_rev0", "bridge_ready"),
         ("painted_rev1", "painted"),

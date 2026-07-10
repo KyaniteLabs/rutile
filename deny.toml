@@ -1,5 +1,27 @@
 [advisories]
 version = 2
+ignore = [
+    # quick-xml is pulled in only as a build-only transitive dependency of
+    # wayland-scanner (via winit/iced on macOS). The vulnerable NsReader API is
+    # not used by FeatherMark code.
+    { id = "RUSTSEC-2026-0195", reason = "build-only transitive dependency; vulnerable API not used" },
+    { id = "RUSTSEC-2026-0194", reason = "build-only transitive dependency; vulnerable API not used" },
+    # time is pulled in by `cookie` via wry. FeatherMark does not parse
+    # untrusted time strings from the network.
+    { id = "RUSTSEC-2026-0009", reason = "transitive via wry cookie; no untrusted time parsing" },
+    # gtk-rs GTK3 bindings are unmaintained. FeatherMark intentionally uses
+    # GTK3/WebKitGTK on Linux; migration to GTK4 is out of scope.
+    { id = "RUSTSEC-2024-0413", reason = "intentional GTK3 binding" },
+    { id = "RUSTSEC-2024-0416", reason = "intentional GTK3 binding" },
+    { id = "RUSTSEC-2024-0412", reason = "intentional GTK3 binding" },
+    { id = "RUSTSEC-2024-0418", reason = "intentional GTK3 binding" },
+    { id = "RUSTSEC-2024-0415", reason = "intentional GTK3 binding" },
+    { id = "RUSTSEC-2024-0420", reason = "intentional GTK3 binding" },
+    { id = "RUSTSEC-2024-0414", reason = "intentional GTK3 binding" },
+    { id = "RUSTSEC-2024-0417", reason = "intentional GTK3 binding" },
+    { id = "RUSTSEC-2024-0419", reason = "intentional GTK3 binding" },
+    { id = "RUSTSEC-2024-0421", reason = "intentional GTK3 binding" },
+]
 
 [licenses]
 version = 2
