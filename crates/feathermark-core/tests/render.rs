@@ -270,3 +270,22 @@ fn one_and_five_mib_render_regression_gates_are_linear_enough_for_interactive_us
         );
     }
 }
+
+#[test]
+fn fuzz_regression_list_item_link_reference_definition_renders_without_panicking() {
+    // 30-minute fuzz campaign artifact (2026-07-10): a tight list item whose
+    // paragraph is only a link-reference definition panicked inside
+    // pulldown-cmark (parse.rs:2199 unwrap on empty tight paragraph).
+    let source = "-\t[`]:I\r\t\t";
+    let rendered = render_markdown(source, 11).unwrap();
+    validate_source_blocks(source, 11, &rendered.blocks).unwrap();
+}
+
+#[test]
+fn fuzz_regression_link_reference_definition_source_blocks_are_valid() {
+    // Fuzz campaign artifact (2026-07-10): build_source_blocks failed its own
+    // validation (InvalidSourceRange) on this 11-byte input.
+    let source = "[ =5(]:$#\n\t";
+    let blocks = feathermark_core::build_source_blocks(source, 23).unwrap();
+    validate_source_blocks(source, 23, &blocks).unwrap();
+}

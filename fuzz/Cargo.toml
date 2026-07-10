@@ -37,3 +37,6 @@ bench = false
 
 [workspace]
 members = []
+
+[patch.crates-io]
+pulldown-cmark = { path = "../vendor/pulldown-cmark" }

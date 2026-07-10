@@ -1,0 +1,6 @@
+host: Simon’s MacBook Air (MacBook Air, arm64)
+macOS: 26.5.1 build 25F80
+WebKit/Safari: 26.5
+WKWebView framework: 
+rustc: rustc 1.88.0 (6b00bc388 2025-06-23)
+clang: Apple clang version 21.0.0 (clang-2100.0.123.102)
