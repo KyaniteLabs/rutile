@@ -892,7 +892,14 @@ fn split_candidate(source: &str, candidate: Candidate) -> Result<Vec<Segment>, R
             start: candidate.start,
             end: candidate.end,
             depth: candidate.depth,
-            kind: candidate.kind,
+            // Zero-width anchors exist (e.g. the empty paragraph pulldown-cmark
+            // emits for a whitespace-only line after a link-reference
+            // definition); only LeafFallback may be zero-width.
+            kind: if candidate.start == candidate.end {
+                SourceBlockKind::LeafFallback
+            } else {
+                candidate.kind
+            },
             placement_kind: candidate.placement_kind,
             event_ordinal: candidate.event_ordinal,
             segment_index: 0,
