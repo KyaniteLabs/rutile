@@ -304,8 +304,29 @@ pub fn decode_gui_command(bytes: &[u8]) -> Result<GuiCommandV1, ProtocolError> {
     Ok(command.into())
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+pub fn encode_gui_command(command: &GuiCommandV1) -> Result<Vec<u8>, ProtocolError> {
+    encode_ndjson(&GuiCommandWireV1::from(command), MAX_GUI_COMMAND_BYTES)
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FocusSurface {
+    Editor,
+    Preview,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuiErrorCode {
+    InvalidCommand,
+    StaleRevision,
+    Timeout,
+    ProcessExited,
+    Protocol,
+    Unsupported,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GuiEventV1 {
     ControlReady {
         request_id: u64,
@@ -330,7 +351,7 @@ pub enum GuiEventV1 {
     },
     FocusChanged {
         request_id: u64,
-        surface: String,
+        surface: FocusSurface,
     },
     BoundsChanged {
         request_id: u64,
@@ -342,14 +363,14 @@ pub enum GuiEventV1 {
     },
     Error {
         request_id: u64,
-        code: String,
+        code: GuiErrorCode,
         message: String,
     },
 }
 
-#[derive(Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum GuiEventWireV1<'a> {
+#[derive(Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum GuiEventWireV1 {
     ControlReady {
         v: u8,
         request_id: u64,
@@ -379,7 +400,7 @@ enum GuiEventWireV1<'a> {
     FocusChanged {
         v: u8,
         request_id: u64,
-        surface: &'a str,
+        surface: FocusSurface,
     },
     BoundsChanged {
         v: u8,
@@ -394,90 +415,192 @@ enum GuiEventWireV1<'a> {
     Error {
         v: u8,
         request_id: u64,
-        code: &'a str,
-        message: &'a str,
+        code: GuiErrorCode,
+        message: String,
     },
 }
 
 pub fn encode_gui_event(event: &GuiEventV1) -> Result<Vec<u8>, ProtocolError> {
-    let wire = match event {
-        GuiEventV1::ControlReady { request_id } => GuiEventWireV1::ControlReady {
-            v: 1,
-            request_id: *request_id,
-        },
-        GuiEventV1::EditAccepted {
-            request_id,
-            revision,
-        } => GuiEventWireV1::EditAccepted {
-            v: 1,
-            request_id: *request_id,
-            revision: *revision,
-        },
-        GuiEventV1::SourcePainted {
-            request_id,
-            revision,
-            frame_seq,
-        } => GuiEventWireV1::SourcePainted {
-            v: 1,
-            request_id: *request_id,
-            revision: *revision,
-            frame_seq: *frame_seq,
-        },
-        GuiEventV1::PreviewPainted {
-            request_id,
-            revision,
-            frame_seq,
-        } => GuiEventWireV1::PreviewPainted {
-            v: 1,
-            request_id: *request_id,
-            revision: *revision,
-            frame_seq: *frame_seq,
-        },
-        GuiEventV1::Interactive {
-            request_id,
-            revision,
-        } => GuiEventWireV1::Interactive {
-            v: 1,
-            request_id: *request_id,
-            revision: *revision,
-        },
-        GuiEventV1::FocusChanged {
-            request_id,
-            surface,
-        } => GuiEventWireV1::FocusChanged {
-            v: 1,
-            request_id: *request_id,
-            surface,
-        },
-        GuiEventV1::BoundsChanged {
-            request_id,
-            width,
-            height,
-        } => GuiEventWireV1::BoundsChanged {
-            v: 1,
-            request_id: *request_id,
-            width: *width,
-            height: *height,
-        },
-        GuiEventV1::Closed { request_id } => GuiEventWireV1::Closed {
-            v: 1,
-            request_id: *request_id,
-        },
-        GuiEventV1::Error {
-            request_id,
-            code,
-            message,
-        } => GuiEventWireV1::Error {
-            v: 1,
-            request_id: *request_id,
-            code,
-            message,
-        },
-    };
-    encode_ndjson(&wire, MAX_GUI_COMMAND_BYTES)
+    encode_ndjson(&GuiEventWireV1::from(event), MAX_GUI_COMMAND_BYTES)
 }
 
-#[derive(Deserialize)]
+pub fn decode_gui_event(bytes: &[u8]) -> Result<GuiEventV1, ProtocolError> {
+    let event: GuiEventWireV1 = decode_ndjson(bytes, MAX_GUI_COMMAND_BYTES)?;
+    if event.version() != 1 {
+        return Err(ProtocolError::UnsupportedVersion);
+    }
+    Ok(event.into())
+}
+
+impl From<&GuiEventV1> for GuiEventWireV1 {
+    fn from(event: &GuiEventV1) -> Self {
+        match event {
+            GuiEventV1::ControlReady { request_id } => GuiEventWireV1::ControlReady {
+                v: 1,
+                request_id: *request_id,
+            },
+            GuiEventV1::EditAccepted {
+                request_id,
+                revision,
+            } => GuiEventWireV1::EditAccepted {
+                v: 1,
+                request_id: *request_id,
+                revision: *revision,
+            },
+            GuiEventV1::SourcePainted {
+                request_id,
+                revision,
+                frame_seq,
+            } => GuiEventWireV1::SourcePainted {
+                v: 1,
+                request_id: *request_id,
+                revision: *revision,
+                frame_seq: *frame_seq,
+            },
+            GuiEventV1::PreviewPainted {
+                request_id,
+                revision,
+                frame_seq,
+            } => GuiEventWireV1::PreviewPainted {
+                v: 1,
+                request_id: *request_id,
+                revision: *revision,
+                frame_seq: *frame_seq,
+            },
+            GuiEventV1::Interactive {
+                request_id,
+                revision,
+            } => GuiEventWireV1::Interactive {
+                v: 1,
+                request_id: *request_id,
+                revision: *revision,
+            },
+            GuiEventV1::FocusChanged {
+                request_id,
+                surface,
+            } => GuiEventWireV1::FocusChanged {
+                v: 1,
+                request_id: *request_id,
+                surface: *surface,
+            },
+            GuiEventV1::BoundsChanged {
+                request_id,
+                width,
+                height,
+            } => GuiEventWireV1::BoundsChanged {
+                v: 1,
+                request_id: *request_id,
+                width: *width,
+                height: *height,
+            },
+            GuiEventV1::Closed { request_id } => GuiEventWireV1::Closed {
+                v: 1,
+                request_id: *request_id,
+            },
+            GuiEventV1::Error {
+                request_id,
+                code,
+                message,
+            } => GuiEventWireV1::Error {
+                v: 1,
+                request_id: *request_id,
+                code: *code,
+                message: message.clone(),
+            },
+        }
+    }
+}
+
+impl GuiEventWireV1 {
+    fn version(&self) -> u8 {
+        match self {
+            Self::ControlReady { v, .. }
+            | Self::EditAccepted { v, .. }
+            | Self::SourcePainted { v, .. }
+            | Self::PreviewPainted { v, .. }
+            | Self::Interactive { v, .. }
+            | Self::FocusChanged { v, .. }
+            | Self::BoundsChanged { v, .. }
+            | Self::Closed { v, .. }
+            | Self::Error { v, .. } => *v,
+        }
+    }
+}
+
+impl From<GuiEventWireV1> for GuiEventV1 {
+    fn from(value: GuiEventWireV1) -> Self {
+        match value {
+            GuiEventWireV1::ControlReady { request_id, .. } => Self::ControlReady { request_id },
+            GuiEventWireV1::EditAccepted {
+                request_id,
+                revision,
+                ..
+            } => Self::EditAccepted {
+                request_id,
+                revision,
+            },
+            GuiEventWireV1::SourcePainted {
+                request_id,
+                revision,
+                frame_seq,
+                ..
+            } => Self::SourcePainted {
+                request_id,
+                revision,
+                frame_seq,
+            },
+            GuiEventWireV1::PreviewPainted {
+                request_id,
+                revision,
+                frame_seq,
+                ..
+            } => Self::PreviewPainted {
+                request_id,
+                revision,
+                frame_seq,
+            },
+            GuiEventWireV1::Interactive {
+                request_id,
+                revision,
+                ..
+            } => Self::Interactive {
+                request_id,
+                revision,
+            },
+            GuiEventWireV1::FocusChanged {
+                request_id,
+                surface,
+                ..
+            } => Self::FocusChanged {
+                request_id,
+                surface,
+            },
+            GuiEventWireV1::BoundsChanged {
+                request_id,
+                width,
+                height,
+                ..
+            } => Self::BoundsChanged {
+                request_id,
+                width,
+                height,
+            },
+            GuiEventWireV1::Closed { request_id, .. } => Self::Closed { request_id },
+            GuiEventWireV1::Error {
+                request_id,
+                code,
+                message,
+                ..
+            } => Self::Error {
+                request_id,
+                code,
+                message,
+            },
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum GuiCommandWireV1 {
     OpenFixture {
@@ -566,6 +689,112 @@ impl GuiCommandWireV1 {
             | Self::Resize { v, .. }
             | Self::HideShow { v, .. }
             | Self::Close { v, .. } => *v,
+        }
+    }
+}
+
+impl From<&GuiCommandV1> for GuiCommandWireV1 {
+    fn from(value: &GuiCommandV1) -> Self {
+        match value {
+            GuiCommandV1::OpenFixture {
+                request_id,
+                fixture,
+            } => Self::OpenFixture {
+                v: 1,
+                request_id: *request_id,
+                fixture: fixture.clone(),
+            },
+            GuiCommandV1::Edit {
+                request_id,
+                start,
+                end,
+                replacement,
+            } => Self::Edit {
+                v: 1,
+                request_id: *request_id,
+                start: *start,
+                end: *end,
+                replacement: replacement.clone(),
+            },
+            GuiCommandV1::BeginComposition {
+                request_id,
+                composition_id,
+                start,
+                end,
+            } => Self::BeginComposition {
+                v: 1,
+                request_id: *request_id,
+                composition_id: *composition_id,
+                start: *start,
+                end: *end,
+            },
+            GuiCommandV1::UpdateComposition {
+                request_id,
+                composition_id,
+                preedit,
+            } => Self::UpdateComposition {
+                v: 1,
+                request_id: *request_id,
+                composition_id: *composition_id,
+                preedit: preedit.clone(),
+            },
+            GuiCommandV1::CommitComposition {
+                request_id,
+                composition_id,
+                replacement,
+            } => Self::CommitComposition {
+                v: 1,
+                request_id: *request_id,
+                composition_id: *composition_id,
+                replacement: replacement.clone(),
+            },
+            GuiCommandV1::CancelComposition {
+                request_id,
+                composition_id,
+            } => Self::CancelComposition {
+                v: 1,
+                request_id: *request_id,
+                composition_id: *composition_id,
+            },
+            GuiCommandV1::SetSourceViewport {
+                request_id,
+                top_visible_byte,
+            } => Self::SetSourceViewport {
+                v: 1,
+                request_id: *request_id,
+                top_visible_byte: *top_visible_byte,
+            },
+            GuiCommandV1::SetPreviewViewport { request_id, y } => Self::SetPreviewViewport {
+                v: 1,
+                request_id: *request_id,
+                y: *y,
+            },
+            GuiCommandV1::FocusEditor { request_id } => Self::FocusEditor {
+                v: 1,
+                request_id: *request_id,
+            },
+            GuiCommandV1::FocusPreview { request_id } => Self::FocusPreview {
+                v: 1,
+                request_id: *request_id,
+            },
+            GuiCommandV1::Resize {
+                request_id,
+                width,
+                height,
+            } => Self::Resize {
+                v: 1,
+                request_id: *request_id,
+                width: *width,
+                height: *height,
+            },
+            GuiCommandV1::HideShow { request_id } => Self::HideShow {
+                v: 1,
+                request_id: *request_id,
+            },
+            GuiCommandV1::Close { request_id } => Self::Close {
+                v: 1,
+                request_id: *request_id,
+            },
         }
     }
 }

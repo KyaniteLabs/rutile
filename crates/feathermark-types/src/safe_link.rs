@@ -18,6 +18,8 @@ pub enum SafeLinkError {
     ForbiddenCharacter,
     #[error("link target contains an invalid percent escape")]
     InvalidPercentEscape,
+    #[error("link target contains a forbidden or noncanonical percent escape")]
+    ForbiddenPercentEscape,
     #[error("link target is not an allowed absolute URL")]
     InvalidUrl,
     #[error("URL scheme is not allowed")]
@@ -112,10 +114,30 @@ fn validate_percent_escapes(value: &str) -> Result<(), SafeLinkError> {
             {
                 return Err(SafeLinkError::InvalidPercentEscape);
             }
+            let decoded = (hex_value(bytes[index + 1]) << 4) | hex_value(bytes[index + 2]);
+            if !decoded.is_ascii()
+                || decoded.is_ascii_control()
+                || decoded.is_ascii_whitespace()
+                || decoded == b'\\'
+                || decoded == b'%'
+                || decoded.is_ascii_alphanumeric()
+                || matches!(decoded, b'-' | b'.' | b'_' | b'~')
+            {
+                return Err(SafeLinkError::ForbiddenPercentEscape);
+            }
             index += 3;
         } else {
             index += 1;
         }
     }
     Ok(())
+}
+
+fn hex_value(byte: u8) -> u8 {
+    match byte {
+        b'0'..=b'9' => byte - b'0',
+        b'a'..=b'f' => byte - b'a' + 10,
+        b'A'..=b'F' => byte - b'A' + 10,
+        _ => unreachable!("validated hexadecimal digit"),
+    }
 }

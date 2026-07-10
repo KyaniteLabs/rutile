@@ -75,3 +75,29 @@ fn rejects_targets_longer_than_768_canonical_bytes() {
 fn parses_bytes_without_accepting_malformed_utf8() {
     assert!(SafeLinkTarget::parse_bytes(&[0xff, 0xfe]).is_err());
 }
+
+#[test]
+fn rejects_percent_encoded_forbidden_bytes_and_alternative_spellings() {
+    let invalid = [
+        "https://example.com/%00",
+        "https://example.com/%0d",
+        "https://example.com/%0A",
+        "https://example.com/%09",
+        "https://example.com/%20",
+        "https://example.com/%5c",
+        "https://example.com/%5C",
+        "https://example.com/%25%35%63",
+        "https://example.com/%41",
+        "https://example.com/%c3%a9",
+    ];
+    for input in invalid {
+        assert!(
+            SafeLinkTarget::parse(input).is_err(),
+            "parse accepted {input}"
+        );
+        assert!(
+            SafeLinkTarget::parse_wire(input).is_err(),
+            "parse_wire accepted {input}"
+        );
+    }
+}

@@ -48,3 +48,12 @@ fn verification_rejects_any_fixture_drift() {
     fs::write(dir.path().join("small.md"), b"changed").unwrap();
     assert!(verify_fixtures(dir.path()).is_err());
 }
+
+#[test]
+fn generation_and_verification_reject_unmanifested_entries() {
+    let dir = tempdir().unwrap();
+    generate_fixtures(dir.path()).unwrap();
+    fs::write(dir.path().join("extra.md"), b"not in manifest").unwrap();
+    assert!(verify_fixtures(dir.path()).is_err());
+    assert!(generate_fixtures(dir.path()).is_err());
+}

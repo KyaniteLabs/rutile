@@ -74,9 +74,14 @@ pub enum FixtureError {
     Json(#[from] serde_json::Error),
     #[error("fixture {0} differs from its deterministic definition")]
     Drift(String),
+    #[error("fixture directory contains an unmanifested entry: {0}")]
+    Unmanifested(String),
 }
 
 pub fn generate_fixtures(directory: &Path) -> Result<FixtureManifest, FixtureError> {
+    if directory.exists() {
+        reject_unmanifested_entries(directory)?;
+    }
     fs::create_dir_all(directory)?;
     let manifest = expected_manifest();
     for spec in FIXTURE_SPECS {
@@ -89,6 +94,7 @@ pub fn generate_fixtures(directory: &Path) -> Result<FixtureManifest, FixtureErr
 }
 
 pub fn verify_fixtures(directory: &Path) -> Result<FixtureManifest, FixtureError> {
+    reject_unmanifested_entries(directory)?;
     let expected = expected_manifest();
     let recorded: FixtureManifest =
         serde_json::from_slice(&fs::read(directory.join("manifest-v1.json"))?)?;
@@ -102,6 +108,21 @@ pub fn verify_fixtures(directory: &Path) -> Result<FixtureManifest, FixtureError
         }
     }
     Ok(recorded)
+}
+
+fn reject_unmanifested_entries(directory: &Path) -> Result<(), FixtureError> {
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let allowed =
+            name == "manifest-v1.json" || FIXTURE_SPECS.iter().any(|spec| name == spec.file_name);
+        if !allowed || !entry.file_type()?.is_file() {
+            return Err(FixtureError::Unmanifested(
+                name.to_string_lossy().into_owned(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn expected_manifest() -> FixtureManifest {

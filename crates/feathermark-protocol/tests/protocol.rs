@@ -1,8 +1,8 @@
 use feathermark_protocol::{
-    GUI_EVENT_TIMEOUT, GuiCommandV1, GuiEventV1, MAX_GUI_COMMAND_BYTES, MAX_PREVIEW_EVENT_BYTES,
-    MAX_SCROLL_CONTROL_BYTES, MetricRecordV1, PreviewEventV1, PreviewHostCommand, RenderUrl,
-    decode_gui_command, decode_metric_record, decode_preview_event, encode_gui_event,
-    encode_scroll_control,
+    FocusSurface, GUI_EVENT_TIMEOUT, GuiCommandV1, GuiErrorCode, GuiEventV1, MAX_GUI_COMMAND_BYTES,
+    MAX_PREVIEW_EVENT_BYTES, MAX_SCROLL_CONTROL_BYTES, MetricRecordV1, PreviewEventV1,
+    PreviewHostCommand, RenderUrl, decode_gui_command, decode_gui_event, decode_metric_record,
+    decode_preview_event, encode_gui_command, encode_gui_event, encode_scroll_control,
 };
 use std::time::Duration;
 
@@ -122,6 +122,157 @@ fn gui_control_is_single_line_correlated_bounded_and_timed_out() {
             br#"{"type":"open_fixture","v":1,"request_id":8,"fixture":"unicode","unknown":0}
 "#
         )
+        .is_err()
+    );
+}
+
+#[test]
+fn gui_command_and_event_codecs_roundtrip_the_complete_closed_surface() {
+    let commands = vec![
+        GuiCommandV1::OpenFixture {
+            request_id: 1,
+            fixture: "unicode".into(),
+        },
+        GuiCommandV1::Edit {
+            request_id: 2,
+            start: 1,
+            end: 3,
+            replacement: "x".into(),
+        },
+        GuiCommandV1::BeginComposition {
+            request_id: 3,
+            composition_id: 4,
+            start: 0,
+            end: 0,
+        },
+        GuiCommandV1::UpdateComposition {
+            request_id: 5,
+            composition_id: 4,
+            preedit: "に".into(),
+        },
+        GuiCommandV1::CommitComposition {
+            request_id: 6,
+            composition_id: 4,
+            replacement: "日本".into(),
+        },
+        GuiCommandV1::CancelComposition {
+            request_id: 7,
+            composition_id: 4,
+        },
+        GuiCommandV1::SetSourceViewport {
+            request_id: 8,
+            top_visible_byte: 10,
+        },
+        GuiCommandV1::SetPreviewViewport {
+            request_id: 9,
+            y: 20,
+        },
+        GuiCommandV1::FocusEditor { request_id: 10 },
+        GuiCommandV1::FocusPreview { request_id: 11 },
+        GuiCommandV1::Resize {
+            request_id: 12,
+            width: 800,
+            height: 600,
+        },
+        GuiCommandV1::HideShow { request_id: 13 },
+        GuiCommandV1::Close { request_id: 14 },
+    ];
+    for command in commands {
+        assert_eq!(
+            decode_gui_command(&encode_gui_command(&command).unwrap()).unwrap(),
+            command
+        );
+    }
+
+    let events = vec![
+        GuiEventV1::ControlReady { request_id: 1 },
+        GuiEventV1::EditAccepted {
+            request_id: 2,
+            revision: 3,
+        },
+        GuiEventV1::SourcePainted {
+            request_id: 4,
+            revision: 3,
+            frame_seq: 5,
+        },
+        GuiEventV1::PreviewPainted {
+            request_id: 6,
+            revision: 3,
+            frame_seq: 7,
+        },
+        GuiEventV1::Interactive {
+            request_id: 8,
+            revision: 3,
+        },
+        GuiEventV1::FocusChanged {
+            request_id: 9,
+            surface: FocusSurface::Preview,
+        },
+        GuiEventV1::BoundsChanged {
+            request_id: 10,
+            width: 800,
+            height: 600,
+        },
+        GuiEventV1::Closed { request_id: 11 },
+        GuiEventV1::Error {
+            request_id: 12,
+            code: GuiErrorCode::StaleRevision,
+            message: "stale".into(),
+        },
+    ];
+    for event in events {
+        assert_eq!(
+            decode_gui_event(&encode_gui_event(&event).unwrap()).unwrap(),
+            event
+        );
+    }
+}
+
+#[test]
+fn gui_codecs_reject_unknown_duplicate_version_and_oversize_records() {
+    assert!(
+        decode_gui_event(
+            br#"{"type":"focus_changed","v":1,"request_id":1,"surface":"other"}
+"#
+        )
+        .is_err()
+    );
+    assert!(
+        decode_gui_event(
+            br#"{"type":"error","v":1,"request_id":1,"code":"other","message":"x"}
+"#
+        )
+        .is_err()
+    );
+    assert!(
+        decode_gui_event(
+            br#"{"type":"closed","v":1,"v":1,"request_id":1}
+"#
+        )
+        .is_err()
+    );
+    assert!(
+        decode_gui_event(
+            br#"{"type":"closed","v":2,"request_id":1}
+"#
+        )
+        .is_err()
+    );
+    assert!(
+        decode_gui_event(
+            br#"{"type":"closed","v":1,"request_id":1,"unknown":true}
+"#
+        )
+        .is_err()
+    );
+    assert!(decode_gui_event(&vec![b'x'; MAX_GUI_COMMAND_BYTES + 1]).is_err());
+    assert!(
+        encode_gui_command(&GuiCommandV1::Edit {
+            request_id: 1,
+            start: 0,
+            end: 0,
+            replacement: "x".repeat(MAX_GUI_COMMAND_BYTES),
+        })
         .is_err()
     );
 }

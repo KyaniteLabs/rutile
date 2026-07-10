@@ -13,6 +13,66 @@ pub const SCAFFOLD_AUTHOR_NAME: &str = "FeatherMark Comparator";
 pub const SCAFFOLD_AUTHOR_EMAIL: &str = "feathermark-comparator@users.noreply.github.com";
 pub const SCAFFOLD_TIMESTAMP: &str = "2026-07-09T00:00:00Z";
 
+const CONTRACTS_MANIFEST: &str = r#"[workspace]
+resolver = "2"
+members = ["feathermark-types", "feathermark-protocol"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+
+[workspace.dependencies]
+html-escape = "=0.2.13"
+serde = { version = "=1.0.219", features = ["derive"] }
+serde_json = "=1.0.140"
+thiserror = "=2.0.12"
+url = "=2.5.4"
+"#;
+
+const XTASK_MANIFEST: &str = r#"[package]
+name = "xtask"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+clap.workspace = true
+ed25519-dalek.workspace = true
+feathermark-protocol.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[workspace]
+resolver = "2"
+members = []
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+
+[workspace.dependencies]
+clap = { version = "=4.5.41", features = ["derive"] }
+ed25519-dalek = "=2.1.1"
+feathermark-protocol = { path = "../contracts/feathermark-protocol" }
+hex = "=0.4.3"
+serde = { version = "=1.0.219", features = ["derive"] }
+serde_json = "=1.0.140"
+sha2 = "=0.10.9"
+tempfile = "=3.20.0"
+thiserror = "=2.0.12"
+walkdir = "=2.5.0"
+"#;
+
 #[derive(Clone, Debug)]
 pub struct ScaffoldCreate {
     pub fixtures: PathBuf,
@@ -68,6 +128,8 @@ pub fn create_scaffold(request: &ScaffoldCreate) -> Result<ScaffoldLock, Scaffol
         copy_tree(contract, &request.out.join("contracts").join(name))?;
     }
     copy_tree(&request.xtask, &request.out.join("xtask"))?;
+    fs::write(request.out.join("contracts/Cargo.toml"), CONTRACTS_MANIFEST)?;
+    fs::write(request.out.join("xtask/Cargo.toml"), XTASK_MANIFEST)?;
     assert_allowlist_on_disk(&request.out)?;
 
     git(&request.out, &["init", "--quiet"])?;

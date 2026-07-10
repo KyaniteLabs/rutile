@@ -14,6 +14,16 @@ fn init_inputs(root: &std::path::Path) {
         fs::create_dir_all(full.parent().unwrap()).unwrap();
         fs::write(full, format!("fixture:{path}\n")).unwrap();
     }
+    fs::write(
+        root.join("crates/feathermark-types/Cargo.toml"),
+        "[package]\nname = \"feathermark-types\"\nversion = \"0.1.0\"\nedition.workspace = true\nrust-version.workspace = true\nlicense.workspace = true\n\n[dependencies]\nhtml-escape.workspace = true\nthiserror.workspace = true\nurl.workspace = true\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("crates/feathermark-protocol/Cargo.toml"),
+        "[package]\nname = \"feathermark-protocol\"\nversion = \"0.1.0\"\nedition.workspace = true\nrust-version.workspace = true\nlicense.workspace = true\n\n[dependencies]\nfeathermark-types = { path = \"../feathermark-types\" }\nserde.workspace = true\nserde_json.workspace = true\nthiserror.workspace = true\n",
+    )
+    .unwrap();
 }
 
 #[test]
@@ -91,4 +101,54 @@ fn scaffold_rejects_symlinks_and_nonempty_output() {
         lock: symlink_root.path().join("lock.json"),
     };
     assert!(create_scaffold(&symlink_request).is_err());
+}
+
+#[test]
+fn scaffold_cargo_manifests_are_self_contained() {
+    let root = tempdir().unwrap();
+    init_inputs(root.path());
+    let out = root.path().join("out");
+    create_scaffold(&ScaffoldCreate {
+        fixtures: root.path().join("tests/fixtures"),
+        contracts: vec![
+            root.path().join("crates/feathermark-types"),
+            root.path().join("crates/feathermark-protocol"),
+        ],
+        xtask: root.path().join("xtask"),
+        out: out.clone(),
+        lock: root.path().join("scaffold-lock.json"),
+    })
+    .unwrap();
+
+    for (manifest, expected_packages) in [
+        (
+            out.join("contracts/Cargo.toml"),
+            ["feathermark-protocol", "feathermark-types"].as_slice(),
+        ),
+        (out.join("xtask/Cargo.toml"), ["xtask"].as_slice()),
+    ] {
+        let metadata = Command::new("cargo")
+            .args(["metadata", "--no-deps", "--format-version", "1"])
+            .arg("--manifest-path")
+            .arg(&manifest)
+            .output()
+            .unwrap();
+        assert!(
+            metadata.status.success(),
+            "cargo metadata failed for {}: {}",
+            manifest.display(),
+            String::from_utf8_lossy(&metadata.stderr)
+        );
+        let value: serde_json::Value = serde_json::from_slice(&metadata.stdout).unwrap();
+        let mut package_names: Vec<_> = value["packages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|package| package["name"].as_str().unwrap())
+            .collect();
+        package_names.sort_unstable();
+        let mut expected_packages = expected_packages.to_vec();
+        expected_packages.sort_unstable();
+        assert_eq!(package_names, expected_packages);
+    }
 }
