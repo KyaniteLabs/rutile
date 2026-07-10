@@ -1,139 +1,18 @@
-use std::{fs, path::PathBuf};
+use std::fs;
 
-use clap::{Parser, Subcommand};
+use clap::Parser;
+use xtask::cli::{
+    Cli, Command, ComparatorCommand, FixtureCommand, GuiCommand, LocalPackageCommand,
+    MetricsCommand, PackageCommand, RunnerCommand, ScaffoldCommand,
+};
 use xtask::comparator::{ScaffoldCreate, create_scaffold, verify_scaffold};
 use xtask::fixtures::{generate_fixtures, verify_fixtures};
 use xtask::gui::validate_transcript;
+use xtask::local_package::{LinuxPackageRequest, MacPackageRequest};
+use xtask::local_package_cli::{LocalPackageCliRequest, ProcessCommandExecutor, run_local_package};
 use xtask::metrics::{MetricAssertion, assert_metric_record};
 use xtask::package::assert_file;
 use xtask::runner::capture_verify_matrix;
-
-#[derive(Parser)]
-#[command(
-    name = "xtask",
-    version,
-    about = "FeatherMark build and evidence driver"
-)]
-struct Cli {
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Subcommand)]
-enum Command {
-    Fixtures {
-        #[command(subcommand)]
-        command: FixtureCommand,
-    },
-    Comparator {
-        #[command(subcommand)]
-        command: ComparatorCommand,
-    },
-    Gui {
-        #[command(subcommand)]
-        command: GuiCommand,
-    },
-    Metrics {
-        #[command(subcommand)]
-        command: MetricsCommand,
-    },
-    Package {
-        #[command(subcommand)]
-        command: PackageCommand,
-    },
-    Runner {
-        #[command(subcommand)]
-        command: RunnerCommand,
-    },
-}
-
-#[derive(Subcommand)]
-enum FixtureCommand {
-    Generate {
-        #[arg(long)]
-        out: PathBuf,
-    },
-    Verify {
-        #[arg(long)]
-        dir: PathBuf,
-    },
-}
-
-#[derive(Subcommand)]
-enum ComparatorCommand {
-    Scaffold {
-        #[command(subcommand)]
-        command: ScaffoldCommand,
-    },
-}
-
-#[derive(Subcommand)]
-enum GuiCommand {
-    ValidateTranscript {
-        #[arg(long)]
-        commands: PathBuf,
-        #[arg(long)]
-        events: PathBuf,
-    },
-}
-
-#[derive(Subcommand)]
-enum MetricsCommand {
-    AssertRecord {
-        #[arg(long)]
-        input: PathBuf,
-        #[arg(long)]
-        minimum_samples: usize,
-        #[arg(long)]
-        maximum_p95: u64,
-    },
-}
-
-#[derive(Subcommand)]
-enum PackageCommand {
-    AssertFile {
-        #[arg(long)]
-        path: PathBuf,
-        #[arg(long)]
-        sha256: String,
-        #[arg(long)]
-        maximum_bytes: u64,
-    },
-}
-
-#[derive(Subcommand)]
-enum RunnerCommand {
-    CaptureVerifyMatrix {
-        #[arg(long, value_delimiter = ',')]
-        runners: Vec<String>,
-        #[arg(long)]
-        capture_dir: PathBuf,
-        #[arg(long)]
-        out: PathBuf,
-    },
-}
-
-#[derive(Subcommand)]
-enum ScaffoldCommand {
-    Create {
-        #[arg(long)]
-        fixtures: PathBuf,
-        #[arg(long, value_delimiter = ',')]
-        contracts: Vec<PathBuf>,
-        #[arg(long)]
-        xtask: PathBuf,
-        #[arg(long)]
-        out: PathBuf,
-        #[arg(long)]
-        lock: PathBuf,
-    },
-    Verify {
-        #[arg(long)]
-        repo: PathBuf,
-        #[arg(long)]
-        lock: PathBuf,
-    },
-}
 
 fn main() {
     if let Err(error) = run(Cli::parse()) {
@@ -208,6 +87,38 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             } => {
                 let result = assert_file(&path, &sha256, maximum_bytes)?;
                 println!("bytes={} sha256={}", result.bytes, result.sha256);
+            }
+            PackageCommand::Local { command } => {
+                let request = match command {
+                    LocalPackageCommand::Macos {
+                        candidate,
+                        build_input_sha256,
+                        source_commit,
+                        output_root,
+                        version,
+                    } => LocalPackageCliRequest::Macos(MacPackageRequest {
+                        candidate,
+                        build_input_sha256,
+                        source_commit,
+                        output_root,
+                        version,
+                    }),
+                    LocalPackageCommand::Linux {
+                        candidate,
+                        build_input_sha256,
+                        source_commit,
+                        output_root,
+                        version,
+                    } => LocalPackageCliRequest::Linux(LinuxPackageRequest {
+                        candidate,
+                        build_input_sha256,
+                        source_commit,
+                        output_root,
+                        version,
+                    }),
+                };
+                let manifests = run_local_package(request, &ProcessCommandExecutor)?;
+                println!("{}", serde_json::to_string_pretty(&manifests)?);
             }
         },
         Command::Runner { command } => match command {
