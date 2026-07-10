@@ -4,6 +4,7 @@ members = [
   "crates/feathermark-types",
   "crates/feathermark-core",
   "crates/feathermark-protocol",
+  "crates/feathermark-app",
   "xtask",
   "spikes/feathermark-spike-support",
   "spikes/linux-gtk-wry",

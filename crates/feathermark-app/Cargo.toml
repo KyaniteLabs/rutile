@@ -1,0 +1,23 @@
+[package]
+name = "feathermark-app"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+
+[[bin]]
+name = "feathermark"
+path = "src/main.rs"
+
+[features]
+default = []
+linux-gtk = []
+macos-shell = []
+test-control = []
+
+[dependencies]
+feathermark-core = { path = "../feathermark-core", version = "=0.1.0" }
+feathermark-protocol = { path = "../feathermark-protocol", version = "=0.1.0" }
+feathermark-types = { path = "../feathermark-types", version = "=0.1.0" }
+thiserror = "=2.0.12"
+url = "=2.5.4"
