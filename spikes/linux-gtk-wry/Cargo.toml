@@ -11,8 +11,14 @@ path = "src/main.rs"
 
 [features]
 default = []
-linux-gtk = []
+linux-gtk = ["dep:gtk", "dep:sourceview4", "dep:wry"]
 test-control = []
 
 [dependencies]
+feathermark-protocol = { path = "../../crates/feathermark-protocol", version = "=0.1.0" }
 feathermark-spike-support = { path = "../feathermark-spike-support", version = "=0.1.0" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = { version = "=0.18.2", optional = true }
+sourceview4 = { version = "=0.5.0", optional = true }
+wry = { version = "=0.55.1", default-features = false, features = ["os-webview", "protocol"], optional = true }

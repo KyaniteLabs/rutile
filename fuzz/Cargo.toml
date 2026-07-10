@@ -8,13 +8,29 @@ edition = "2024"
 cargo-fuzz = true
 
 [dependencies]
+feathermark-core = { path = "../crates/feathermark-core", version = "=0.1.0" }
 feathermark-protocol = { path = "../crates/feathermark-protocol", version = "=0.1.0" }
 feathermark-types = { path = "../crates/feathermark-types", version = "=0.1.0" }
+html-escape = "=0.2.13"
 libfuzzer-sys = "=0.4.10"
 
 [[bin]]
 name = "preview_event"
 path = "fuzz_targets/preview_event.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "render_markdown"
+path = "fuzz_targets/render_markdown.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "source_blocks"
+path = "fuzz_targets/source_blocks.rs"
 test = false
 doc = false
 bench = false

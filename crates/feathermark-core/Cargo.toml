@@ -6,4 +6,20 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+blake3.workspace = true
 feathermark-types = { path = "../feathermark-types", version = "=0.1.0" }
+pulldown-cmark.workspace = true
+ropey.workspace = true
+thiserror.workspace = true
+
+[[bench]]
+name = "edit"
+harness = false
+
+[[bench]]
+name = "scroll"
+harness = false
+
+[[bench]]
+name = "render"
+harness = false
