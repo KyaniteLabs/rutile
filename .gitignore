@@ -1,3 +1,5 @@
 .omc/
 .worktrees/
 .superpowers/
+/target/
+/fuzz/target/

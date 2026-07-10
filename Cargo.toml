@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/feathermark-types",
+  "crates/feathermark-core",
+  "crates/feathermark-protocol",
+  "xtask",
+  "spikes/feathermark-spike-support",
+  "spikes/linux-gtk-wry",
+  "spikes/macos-iced-wry",
+  "spikes/macos-egui-wry",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+
+[workspace.dependencies]
+clap = { version = "=4.5.41", features = ["derive"] }
+html-escape = "=0.2.13"
+serde = { version = "=1.0.219", features = ["derive"] }
+serde_json = "=1.0.140"
+sha2 = "=0.10.9"
+tempfile = "=3.20.0"
+thiserror = "=2.0.12"
+url = "=2.5.4"
+walkdir = "=2.5.0"

@@ -1,0 +1,5 @@
+https://example.com/
+mailto:person@example.com
+HTTPS://EXAMPLE.COM/path
+javascript:alert(1)
+file:///etc/passwd
