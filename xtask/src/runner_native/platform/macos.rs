@@ -1,12 +1,13 @@
 use std::ffi::{CString, c_char, c_long, c_void};
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::os::fd::FromRawFd;
+use std::io::{self, Seek, SeekFrom};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::ptr;
+use std::time::Instant;
 
 use crate::runner_native::path_policy::{MeasuredProbe, open_measured_probe};
+use crate::runner_native::platform::child_io;
 
 type CFAllocatorRef = *const c_void;
 type CFTypeRef = *const c_void;
@@ -127,7 +128,31 @@ pub(in crate::runner_native) fn copy_verify_posix_spawn_capture(
     pins: &SecurityPins,
     expected_uid: u32,
     input: &[u8],
-    max_output: usize,
+    limits: child_io::OutputLimits,
+    deadline: Instant,
+) -> io::Result<Vec<u8>> {
+    let arguments = ["feathermark-runner-probe"];
+    with_verified_copy(
+        measured,
+        execution_root,
+        pins,
+        expected_uid,
+        &NoRace,
+        |path| posix_spawn_capture(path, &arguments, input, limits, deadline),
+    )
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(in crate::runner_native) fn copy_verify_posix_spawn_capture_for_test(
+    measured: &MeasuredProbe,
+    execution_root: &Path,
+    pins: &SecurityPins,
+    expected_uid: u32,
+    arguments: &[&str],
+    input: &[u8],
+    limits: child_io::OutputLimits,
+    deadline: Instant,
 ) -> io::Result<Vec<u8>> {
     with_verified_copy(
         measured,
@@ -135,7 +160,7 @@ pub(in crate::runner_native) fn copy_verify_posix_spawn_capture(
         pins,
         expected_uid,
         &NoRace,
-        |path| posix_spawn_capture(path, input, max_output),
+        |path| posix_spawn_capture(path, arguments, input, limits, deadline),
     )
 }
 
@@ -274,34 +299,63 @@ fn posix_spawn_wait(path: &Path, arguments: &[&str]) -> io::Result<()> {
     Ok(())
 }
 
-fn posix_spawn_capture(path: &Path, input: &[u8], max_output: usize) -> io::Result<Vec<u8>> {
+fn posix_spawn_capture(
+    path: &Path,
+    arguments: &[&str],
+    input: &[u8],
+    limits: child_io::OutputLimits,
+    deadline: Instant,
+) -> io::Result<Vec<u8>> {
+    if arguments.is_empty() {
+        return Err(invalid("posix_spawn requires argv[0]"));
+    }
     let path = CString::new(path.as_os_str().as_encoded_bytes())
         .map_err(|_| invalid("spawn path contains NUL"))?;
-    let name = CString::new("feathermark-runner-probe").expect("literal has no NUL");
-    let mut argv = [name.as_ptr().cast_mut(), ptr::null_mut()];
+    let values: Vec<CString> = arguments
+        .iter()
+        .map(|argument| CString::new(*argument).map_err(|_| invalid("spawn argument contains NUL")))
+        .collect::<io::Result<_>>()?;
+    let mut argv: Vec<*mut c_char> = values
+        .iter()
+        .map(|value| value.as_ptr().cast_mut())
+        .chain(std::iter::once(ptr::null_mut()))
+        .collect();
     let environment = CString::new("PATH=/usr/bin:/bin").expect("literal has no NUL");
     let mut environment = [environment.as_ptr().cast_mut(), ptr::null_mut()];
-    let mut input_pipe = [0; 2];
-    let mut output_pipe = [0; 2];
+    let mut input_pipe = [-1; 2];
+    let mut output_pipe = [-1; 2];
+    let mut error_pipe = [-1; 2];
     if unsafe { libc::pipe(input_pipe.as_mut_ptr()) } != 0
         || unsafe { libc::pipe(output_pipe.as_mut_ptr()) } != 0
+        || unsafe { libc::pipe(error_pipe.as_mut_ptr()) } != 0
     {
-        return Err(io::Error::last_os_error());
+        let error = io::Error::last_os_error();
+        close_pipes(&[input_pipe, output_pipe, error_pipe]);
+        return Err(error);
     }
     let mut actions = std::mem::MaybeUninit::<libc::posix_spawn_file_actions_t>::uninit();
     let initialized = unsafe { posix_spawn_file_actions_init(actions.as_mut_ptr()) };
     if initialized != 0 {
+        close_pipes(&[input_pipe, output_pipe, error_pipe]);
         return Err(io::Error::from_raw_os_error(initialized));
     }
     let mut actions = unsafe { actions.assume_init() };
     let setup = unsafe {
-        posix_spawn_file_actions_adddup2(&mut actions, input_pipe[0], libc::STDIN_FILENO)
-            | posix_spawn_file_actions_adddup2(&mut actions, output_pipe[1], libc::STDOUT_FILENO)
-            | posix_spawn_file_actions_addclose(&mut actions, input_pipe[1])
-            | posix_spawn_file_actions_addclose(&mut actions, output_pipe[0])
+        [
+            posix_spawn_file_actions_adddup2(&mut actions, input_pipe[0], libc::STDIN_FILENO),
+            posix_spawn_file_actions_adddup2(&mut actions, output_pipe[1], libc::STDOUT_FILENO),
+            posix_spawn_file_actions_adddup2(&mut actions, error_pipe[1], libc::STDERR_FILENO),
+            posix_spawn_file_actions_addclose(&mut actions, input_pipe[0]),
+            posix_spawn_file_actions_addclose(&mut actions, input_pipe[1]),
+            posix_spawn_file_actions_addclose(&mut actions, output_pipe[0]),
+            posix_spawn_file_actions_addclose(&mut actions, output_pipe[1]),
+            posix_spawn_file_actions_addclose(&mut actions, error_pipe[0]),
+            posix_spawn_file_actions_addclose(&mut actions, error_pipe[1]),
+        ]
     };
-    if setup != 0 {
+    if let Some(setup) = setup.into_iter().find(|status| *status != 0) {
         unsafe { posix_spawn_file_actions_destroy(&mut actions) };
+        close_pipes(&[input_pipe, output_pipe, error_pipe]);
         return Err(io::Error::from_raw_os_error(setup));
     }
     let mut pid = 0;
@@ -309,7 +363,7 @@ fn posix_spawn_capture(path: &Path, input: &[u8], max_output: usize) -> io::Resu
         posix_spawn(
             &mut pid,
             path.as_ptr(),
-            actions,
+            &actions,
             ptr::null(),
             argv.as_mut_ptr(),
             environment.as_mut_ptr(),
@@ -319,35 +373,36 @@ fn posix_spawn_capture(path: &Path, input: &[u8], max_output: usize) -> io::Resu
     unsafe {
         libc::close(input_pipe[0]);
         libc::close(output_pipe[1]);
+        libc::close(error_pipe[1]);
     }
     if spawned != 0 {
         unsafe {
             libc::close(input_pipe[1]);
             libc::close(output_pipe[0]);
+            libc::close(error_pipe[0]);
         }
         return Err(io::Error::from_raw_os_error(spawned));
     }
-    let mut stdin = unsafe { File::from_raw_fd(input_pipe[1]) };
-    stdin.write_all(input)?;
-    drop(stdin);
-    let mut stdout = unsafe { File::from_raw_fd(output_pipe[0]) };
-    let mut output = Vec::new();
-    std::io::Read::by_ref(&mut stdout)
-        .take((max_output + 1) as u64)
-        .read_to_end(&mut output)?;
-    let mut status = 0;
-    if unsafe { libc::waitpid(pid, &mut status, 0) } != pid {
-        return Err(io::Error::last_os_error());
+    child_io::collect_child(
+        pid,
+        child_io::ChildPipes {
+            stdin: input_pipe[1],
+            stdout: output_pipe[0],
+            stderr: error_pipe[0],
+        },
+        input,
+        deadline,
+        limits,
+        "posix_spawn probe",
+    )
+}
+
+fn close_pipes(pipes: &[[i32; 2]]) {
+    for fd in pipes.iter().flatten().copied().filter(|fd| *fd >= 0) {
+        unsafe {
+            libc::close(fd);
+        }
     }
-    if output.len() > max_output {
-        return Err(invalid("probe output exceeds fixed bound"));
-    }
-    if !libc::WIFEXITED(status) || libc::WEXITSTATUS(status) != 0 {
-        return Err(io::Error::other(format!(
-            "probe exited with wait status {status}"
-        )));
-    }
-    Ok(output)
 }
 
 unsafe fn static_code(path: &Path) -> io::Result<SecStaticCodeRef> {
@@ -492,7 +547,7 @@ unsafe extern "C" {
     fn posix_spawn(
         pid: *mut libc::pid_t,
         path: *const c_char,
-        file_actions: *const c_void,
+        file_actions: *const libc::posix_spawn_file_actions_t,
         attributes: *const c_void,
         argv: *mut *mut c_char,
         environment: *mut *mut c_char,

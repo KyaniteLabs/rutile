@@ -1,43 +1,88 @@
 use std::ffi::CString;
-use std::io::{self, Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::io;
+use std::os::fd::AsRawFd;
 use std::ptr;
+use std::time::Instant;
 
 use crate::runner_native::path_policy::MeasuredProbe;
-const MAX_CHILD_OUTPUT: usize = 64 * 1024 + 8;
+use crate::runner_native::platform::child_io;
 
 pub(in crate::runner_native) fn fexecve_capture(
     measured: &MeasuredProbe,
     input: &[u8],
+    max_stdout: usize,
+    max_stderr: usize,
+    deadline: Instant,
 ) -> io::Result<Vec<u8>> {
-    let mut input_pipe = [0; 2];
-    let mut output_pipe = [0; 2];
+    fexecve_capture_with_arguments(
+        measured,
+        &["feathermark-runner-probe"],
+        input,
+        max_stdout,
+        max_stderr,
+        deadline,
+    )
+}
+
+#[cfg(test)]
+pub(in crate::runner_native) fn fexecve_capture_for_test(
+    measured: &MeasuredProbe,
+    arguments: &[&str],
+    input: &[u8],
+    max_stdout: usize,
+    max_stderr: usize,
+    deadline: Instant,
+) -> io::Result<Vec<u8>> {
+    fexecve_capture_with_arguments(measured, arguments, input, max_stdout, max_stderr, deadline)
+}
+
+fn fexecve_capture_with_arguments(
+    measured: &MeasuredProbe,
+    arguments: &[&str],
+    input: &[u8],
+    max_stdout: usize,
+    max_stderr: usize,
+    deadline: Instant,
+) -> io::Result<Vec<u8>> {
+    if arguments.is_empty() {
+        return Err(invalid("fexecve requires argv[0]"));
+    }
+    let arguments: Vec<CString> = arguments
+        .iter()
+        .map(|argument| CString::new(*argument).map_err(|_| invalid("probe argument contains NUL")))
+        .collect::<io::Result<_>>()?;
+    let mut argv: Vec<_> = arguments.iter().map(|value| value.as_ptr()).collect();
+    argv.push(ptr::null());
+    let environment = probe_environment()?;
+    let mut envp: Vec<_> = environment.iter().map(|value| value.as_ptr()).collect();
+    envp.push(ptr::null());
+
+    let mut input_pipe = [-1; 2];
+    let mut output_pipe = [-1; 2];
+    let mut error_pipe = [-1; 2];
     if unsafe { libc::pipe(input_pipe.as_mut_ptr()) } != 0
         || unsafe { libc::pipe(output_pipe.as_mut_ptr()) } != 0
+        || unsafe { libc::pipe(error_pipe.as_mut_ptr()) } != 0
     {
-        return Err(io::Error::last_os_error());
+        let error = io::Error::last_os_error();
+        close_all(&[input_pipe, output_pipe, error_pipe]);
+        return Err(error);
     }
     let pid = unsafe { libc::fork() };
     if pid < 0 {
-        close_all(&input_pipe, &output_pipe);
-        return Err(io::Error::last_os_error());
+        let error = io::Error::last_os_error();
+        close_all(&[input_pipe, output_pipe, error_pipe]);
+        return Err(error);
     }
     if pid == 0 {
         unsafe {
-            libc::close(input_pipe[1]);
-            libc::close(output_pipe[0]);
             if libc::dup2(input_pipe[0], libc::STDIN_FILENO) < 0
                 || libc::dup2(output_pipe[1], libc::STDOUT_FILENO) < 0
+                || libc::dup2(error_pipe[1], libc::STDERR_FILENO) < 0
             {
                 libc::_exit(125);
             }
-            libc::close(input_pipe[0]);
-            libc::close(output_pipe[1]);
-            let name = CString::new("feathermark-runner-probe").expect("literal has no NUL");
-            let environment = probe_environment().unwrap_or_else(|_| libc::_exit(124));
-            let argv = [name.as_ptr(), ptr::null()];
-            let mut envp: Vec<_> = environment.iter().map(|value| value.as_ptr()).collect();
-            envp.push(ptr::null());
+            close_all(&[input_pipe, output_pipe, error_pipe]);
             libc::fexecve(measured.file().as_raw_fd(), argv.as_ptr(), envp.as_ptr());
             libc::_exit(126);
         }
@@ -46,31 +91,23 @@ pub(in crate::runner_native) fn fexecve_capture(
     unsafe {
         libc::close(input_pipe[0]);
         libc::close(output_pipe[1]);
+        libc::close(error_pipe[1]);
     }
-    let mut child_stdin = unsafe { std::fs::File::from_raw_fd(input_pipe[1]) };
-    child_stdin.write_all(input)?;
-    drop(child_stdin);
-    let mut child_stdout = unsafe { std::fs::File::from_raw_fd(output_pipe[0]) };
-    let mut output = Vec::new();
-    std::io::Read::by_ref(&mut child_stdout)
-        .take((MAX_CHILD_OUTPUT + 1) as u64)
-        .read_to_end(&mut output)?;
-    let mut status = 0;
-    if unsafe { libc::waitpid(pid, &mut status, 0) } != pid {
-        return Err(io::Error::last_os_error());
-    }
-    if output.len() > MAX_CHILD_OUTPUT {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "probe output exceeds fixed bound",
-        ));
-    }
-    if !libc::WIFEXITED(status) || libc::WEXITSTATUS(status) != 0 {
-        return Err(io::Error::other(format!(
-            "fexecve probe exited with wait status {status}"
-        )));
-    }
-    Ok(output)
+    child_io::collect_child(
+        pid,
+        child_io::ChildPipes {
+            stdin: input_pipe[1],
+            stdout: output_pipe[0],
+            stderr: error_pipe[0],
+        },
+        input,
+        deadline,
+        child_io::OutputLimits {
+            stdout: max_stdout,
+            stderr: max_stderr,
+        },
+        "fexecve probe",
+    )
 }
 
 fn probe_environment() -> io::Result<Vec<CString>> {
@@ -84,10 +121,14 @@ fn probe_environment() -> io::Result<Vec<CString>> {
     Ok(environment)
 }
 
-fn close_all(input: &[i32; 2], output: &[i32; 2]) {
-    for fd in input.iter().chain(output) {
+fn close_all(pipes: &[[i32; 2]]) {
+    for fd in pipes.iter().flatten().copied().filter(|fd| *fd >= 0) {
         unsafe {
-            libc::close(*fd);
+            libc::close(fd);
         }
     }
+}
+
+fn invalid(message: &str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message)
 }

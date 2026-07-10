@@ -13,7 +13,7 @@ use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 mod collector;
 mod path_policy;
@@ -25,6 +25,8 @@ const COORDINATOR_MAGIC: &[u8; 8] = b"FMRP\0v1\0";
 const PROBE_INPUT_MAGIC: &[u8; 8] = b"FMPI\0v1\0";
 const PROBE_OUTPUT_MAGIC: &[u8; 8] = b"FMPO\0v1\0";
 const MAX_COORDINATOR_REQUEST: usize = 16 * 1024;
+const NATIVE_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_NATIVE_CHILD_STDERR_BYTES: usize = 8 * 1024;
 
 #[cfg(target_os = "macos")]
 const CONFIG_PATH: &str =
@@ -124,7 +126,10 @@ pub fn launcher_main() -> Result<(), NativeServiceError> {
     child_input.extend_from_slice(&(challenge.len() as u32).to_be_bytes());
     child_input.extend_from_slice(&challenge);
     let started = Instant::now();
-    let child_output = execute_probe(&measured, &config, &child_input)?;
+    let deadline = started
+        .checked_add(NATIVE_PROBE_TIMEOUT)
+        .ok_or_else(|| NativeServiceError::Protocol("native probe deadline overflow".into()))?;
+    let child_output = execute_probe(&measured, &config, &child_input, deadline)?;
     let report_bytes =
         decode_frame_bytes(&child_output, PROBE_OUTPUT_MAGIC, MAX_NATIVE_REPORT_BYTES)?;
     let report = decode_native_report(report_bytes)?;
@@ -229,8 +234,16 @@ fn execute_probe(
     measured: &path_policy::MeasuredProbe,
     _config: &service_config::LauncherConfigV1,
     input: &[u8],
+    deadline: Instant,
 ) -> Result<Vec<u8>, NativeServiceError> {
-    platform::linux::fexecve_capture(measured, input).map_err(NativeServiceError::from)
+    platform::linux::fexecve_capture(
+        measured,
+        input,
+        MAX_NATIVE_REPORT_BYTES + 12,
+        MAX_NATIVE_CHILD_STDERR_BYTES,
+        deadline,
+    )
+    .map_err(NativeServiceError::from)
 }
 
 #[cfg(target_os = "macos")]
@@ -238,6 +251,7 @@ fn execute_probe(
     measured: &path_policy::MeasuredProbe,
     config: &service_config::LauncherConfigV1,
     input: &[u8],
+    deadline: Instant,
 ) -> Result<Vec<u8>, NativeServiceError> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -267,7 +281,11 @@ fn execute_probe(
         &pins,
         0,
         input,
-        MAX_NATIVE_REPORT_BYTES + 12,
+        platform::child_io::OutputLimits {
+            stdout: MAX_NATIVE_REPORT_BYTES + 12,
+            stderr: MAX_NATIVE_CHILD_STDERR_BYTES,
+        },
+        deadline,
     )
     .map_err(NativeServiceError::from)
 }
@@ -467,6 +485,105 @@ mod tests {
     use sha2::Digest;
     use std::fs;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::time::Duration;
+
+    #[cfg(target_os = "macos")]
+    fn macos_test_probe(
+        root: &Path,
+    ) -> (
+        path_policy::MeasuredProbe,
+        platform::macos::SecurityPins,
+        u32,
+    ) {
+        let installed_root = root.join("installed");
+        fs::create_dir(&installed_root).unwrap();
+        let installed = installed_root.join("probe");
+        fs::copy(std::env::current_exe().unwrap(), &installed).unwrap();
+        fs::set_permissions(&installed, fs::Permissions::from_mode(0o500)).unwrap();
+        let uid = fs::metadata(&installed).unwrap().uid();
+        let digest = {
+            let mut file = fs::File::open(&installed).unwrap();
+            path_policy::hash_file(&mut file).unwrap()
+        };
+        let pins = platform::macos::read_security_pins(&installed).unwrap();
+        let measured =
+            path_policy::open_measured_probe(&installed_root, "probe", digest, uid).unwrap();
+        (measured, pins, uid)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn linux_test_probe(root: &Path) -> path_policy::MeasuredProbe {
+        let installed_root = root.join("installed");
+        fs::create_dir(&installed_root).unwrap();
+        let installed = installed_root.join("probe");
+        fs::copy(std::env::current_exe().unwrap(), &installed).unwrap();
+        fs::set_permissions(&installed, fs::Permissions::from_mode(0o500)).unwrap();
+        let uid = fs::metadata(&installed).unwrap().uid();
+        let digest = {
+            let mut file = fs::File::open(&installed).unwrap();
+            path_policy::hash_file(&mut file).unwrap()
+        };
+        path_policy::open_measured_probe(&installed_root, "probe", digest, uid).unwrap()
+    }
+
+    fn assert_reaped(pid_path: &Path) {
+        let pid: libc::pid_t = fs::read_to_string(pid_path)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH)
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    const NATIVE_PROBE_HELPER_ARGS: &[&str] = &[
+        "feathermark-native-probe-test-child",
+        "--ignored",
+        "--exact",
+        "runner_native::tests::native_probe_test_child",
+    ];
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    const NATIVE_PROBE_NON_HANG_TEST_DEADLINE: Duration = Duration::from_secs(15);
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    const NATIVE_PROBE_PROMPT_BOUND: Duration = Duration::from_secs(10);
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    const NATIVE_PROBE_HANG_TEST_DEADLINE: Duration = Duration::from_secs(10);
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    const NATIVE_PROBE_HANG_PROMPT_BOUND: Duration = Duration::from_secs(12);
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    #[ignore = "executed only as a real native probe child"]
+    fn native_probe_test_child() {
+        let mut command = String::new();
+        std::io::stdin().read_to_string(&mut command).unwrap();
+        let (behavior, pid_path) = command.trim().split_once('\n').unwrap();
+        fs::write(pid_path, unsafe { libc::getpid() }.to_string()).unwrap();
+        match behavior {
+            "hang" => loop {
+                std::hint::spin_loop();
+            },
+            "flood_stdout" => {
+                std::io::stdout().write_all(&vec![b'x'; 4096]).unwrap();
+            }
+            "flood_stderr" => {
+                std::io::stderr().write_all(&vec![b'x'; 4096]).unwrap();
+            }
+            "success" => {
+                std::io::stdout().write_all(b"native-probe-ok").unwrap();
+            }
+            "invalid" => panic!("intentional native probe child failure"),
+            _ => panic!("unknown native probe child behavior"),
+        }
+    }
 
     #[test]
     fn probe_report_round_trips_only_the_closed_bounded_tuple() {
@@ -799,5 +916,284 @@ mod tests {
             let _ = fs::remove_file(&installed);
             let _ = fs::remove_file(installed.with_extension("raced"));
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_native_probe_hang_hits_total_deadline_and_is_reaped() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let execution_root = root.join("run");
+        fs::create_dir(&execution_root).unwrap();
+        let (measured, pins, uid) = macos_test_probe(&root);
+        let pid_path = root.join("hung-child.pid");
+        let command = format!("hang\n{}\n", pid_path.display());
+        let started = Instant::now();
+        let error = platform::macos::copy_verify_posix_spawn_capture_for_test(
+            &measured,
+            &execution_root,
+            &pins,
+            uid,
+            NATIVE_PROBE_HELPER_ARGS,
+            command.as_bytes(),
+            platform::child_io::OutputLimits {
+                stdout: 1024,
+                stderr: 1024,
+            },
+            started + NATIVE_PROBE_HANG_TEST_DEADLINE,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < NATIVE_PROBE_HANG_PROMPT_BOUND);
+        assert_reaped(&pid_path);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_native_probe_stdout_flood_is_bounded_and_reaped() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let execution_root = root.join("run");
+        fs::create_dir(&execution_root).unwrap();
+        let (measured, pins, uid) = macos_test_probe(&root);
+        let pid_path = root.join("stdout-flood-child.pid");
+        let command = format!("flood_stdout\n{}\n", pid_path.display());
+        let started = Instant::now();
+        let error = platform::macos::copy_verify_posix_spawn_capture_for_test(
+            &measured,
+            &execution_root,
+            &pins,
+            uid,
+            NATIVE_PROBE_HELPER_ARGS,
+            command.as_bytes(),
+            platform::child_io::OutputLimits {
+                stdout: 1024,
+                stderr: 1024,
+            },
+            started + NATIVE_PROBE_NON_HANG_TEST_DEADLINE,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(started.elapsed() < NATIVE_PROBE_PROMPT_BOUND);
+        assert_reaped(&pid_path);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_native_probe_stderr_flood_is_bounded_and_reaped() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let execution_root = root.join("run");
+        fs::create_dir(&execution_root).unwrap();
+        let (measured, pins, uid) = macos_test_probe(&root);
+        let pid_path = root.join("stderr-flood-child.pid");
+        let command = format!("flood_stderr\n{}\n", pid_path.display());
+        let started = Instant::now();
+        let error = platform::macos::copy_verify_posix_spawn_capture_for_test(
+            &measured,
+            &execution_root,
+            &pins,
+            uid,
+            NATIVE_PROBE_HELPER_ARGS,
+            command.as_bytes(),
+            platform::child_io::OutputLimits {
+                stdout: 8192,
+                stderr: 1024,
+            },
+            started + NATIVE_PROBE_NON_HANG_TEST_DEADLINE,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(started.elapsed() < NATIVE_PROBE_PROMPT_BOUND);
+        assert_reaped(&pid_path);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_native_probe_normal_success_returns_output_and_reaps() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let execution_root = root.join("run");
+        fs::create_dir(&execution_root).unwrap();
+        let (measured, pins, uid) = macos_test_probe(&root);
+        let pid_path = root.join("successful-child.pid");
+        let command = format!("success\n{}\n", pid_path.display());
+        let started = Instant::now();
+        let output = platform::macos::copy_verify_posix_spawn_capture_for_test(
+            &measured,
+            &execution_root,
+            &pins,
+            uid,
+            NATIVE_PROBE_HELPER_ARGS,
+            command.as_bytes(),
+            platform::child_io::OutputLimits {
+                stdout: 8192,
+                stderr: 8192,
+            },
+            started + NATIVE_PROBE_NON_HANG_TEST_DEADLINE,
+        )
+        .unwrap();
+
+        assert!(
+            output
+                .windows(b"native-probe-ok".len())
+                .any(|window| window == b"native-probe-ok")
+        );
+        assert!(started.elapsed() < NATIVE_PROBE_PROMPT_BOUND);
+        assert_reaped(&pid_path);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_native_probe_invalid_exit_is_reaped() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let execution_root = root.join("run");
+        fs::create_dir(&execution_root).unwrap();
+        let (measured, pins, uid) = macos_test_probe(&root);
+        let pid_path = root.join("invalid-child.pid");
+        let command = format!("invalid\n{}\n", pid_path.display());
+        let error = platform::macos::copy_verify_posix_spawn_capture_for_test(
+            &measured,
+            &execution_root,
+            &pins,
+            uid,
+            NATIVE_PROBE_HELPER_ARGS,
+            command.as_bytes(),
+            platform::child_io::OutputLimits {
+                stdout: 8192,
+                stderr: 8192,
+            },
+            Instant::now() + NATIVE_PROBE_NON_HANG_TEST_DEADLINE,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+        assert_reaped(&pid_path);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_native_probe_hang_hits_total_deadline_and_is_reaped() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let measured = linux_test_probe(&root);
+        let pid_path = root.join("hung-child.pid");
+        let command = format!("hang\n{}\n", pid_path.display());
+        let started = Instant::now();
+        let error = platform::linux::fexecve_capture_for_test(
+            &measured,
+            NATIVE_PROBE_HELPER_ARGS,
+            command.as_bytes(),
+            1024,
+            1024,
+            started + NATIVE_PROBE_HANG_TEST_DEADLINE,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < NATIVE_PROBE_HANG_PROMPT_BOUND);
+        assert_reaped(&pid_path);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_native_probe_stdout_flood_is_bounded_and_reaped() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let measured = linux_test_probe(&root);
+        let pid_path = root.join("stdout-flood-child.pid");
+        let command = format!("flood_stdout\n{}\n", pid_path.display());
+        let started = Instant::now();
+        let error = platform::linux::fexecve_capture_for_test(
+            &measured,
+            NATIVE_PROBE_HELPER_ARGS,
+            command.as_bytes(),
+            1024,
+            1024,
+            started + NATIVE_PROBE_NON_HANG_TEST_DEADLINE,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(started.elapsed() < NATIVE_PROBE_PROMPT_BOUND);
+        assert_reaped(&pid_path);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_native_probe_stderr_flood_is_bounded_and_reaped() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let measured = linux_test_probe(&root);
+        let pid_path = root.join("stderr-flood-child.pid");
+        let command = format!("flood_stderr\n{}\n", pid_path.display());
+        let started = Instant::now();
+        let error = platform::linux::fexecve_capture_for_test(
+            &measured,
+            NATIVE_PROBE_HELPER_ARGS,
+            command.as_bytes(),
+            8192,
+            1024,
+            started + NATIVE_PROBE_NON_HANG_TEST_DEADLINE,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(started.elapsed() < NATIVE_PROBE_PROMPT_BOUND);
+        assert_reaped(&pid_path);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_native_probe_normal_success_returns_output_and_reaps() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let measured = linux_test_probe(&root);
+        let pid_path = root.join("successful-child.pid");
+        let command = format!("success\n{}\n", pid_path.display());
+        let started = Instant::now();
+        let output = platform::linux::fexecve_capture_for_test(
+            &measured,
+            NATIVE_PROBE_HELPER_ARGS,
+            command.as_bytes(),
+            8192,
+            8192,
+            started + NATIVE_PROBE_NON_HANG_TEST_DEADLINE,
+        )
+        .unwrap();
+
+        assert!(
+            output
+                .windows(b"native-probe-ok".len())
+                .any(|window| window == b"native-probe-ok")
+        );
+        assert!(started.elapsed() < NATIVE_PROBE_PROMPT_BOUND);
+        assert_reaped(&pid_path);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_native_probe_invalid_exit_is_reaped() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let measured = linux_test_probe(&root);
+        let pid_path = root.join("invalid-child.pid");
+        let command = format!("invalid\n{}\n", pid_path.display());
+        let error = platform::linux::fexecve_capture_for_test(
+            &measured,
+            NATIVE_PROBE_HELPER_ARGS,
+            command.as_bytes(),
+            8192,
+            8192,
+            Instant::now() + NATIVE_PROBE_NON_HANG_TEST_DEADLINE,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+        assert_reaped(&pid_path);
     }
 }

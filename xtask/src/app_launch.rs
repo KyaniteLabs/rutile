@@ -501,7 +501,7 @@ unsafe extern "C" {
     fn app_posix_spawn(
         pid: *mut libc::pid_t,
         path: *const c_char,
-        file_actions: *const c_void,
+        file_actions: *const libc::posix_spawn_file_actions_t,
         attributes: *const c_void,
         argv: *mut *mut c_char,
         environment: *mut *mut c_char,
