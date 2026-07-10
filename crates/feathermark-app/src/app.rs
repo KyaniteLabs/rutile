@@ -27,6 +27,19 @@ pub enum PreviewState {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CloseDecision {
+    Save { untitled_path: Option<PathBuf> },
+    Discard,
+    Cancel,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CloseOutcome {
+    Close,
+    KeepOpen,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AppMessage {
     NewDocument,
     DocumentOpened {
