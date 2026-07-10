@@ -34,7 +34,7 @@ pub(crate) struct TrustRootConfig {
 pub(crate) struct RunnerDispatchConfig {
     pub runner_id: &'static str,
     pub endpoint: &'static str,
-    pub transport_fingerprint: [u8; 32],
+    pub ssh_host_ed25519_public_key: [u8; 32],
     pub launcher_protocol_version: u32,
     #[allow(dead_code)] // Consumed by the root measured-probe launcher, not the coordinator.
     pub probe_path: &'static str,

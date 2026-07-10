@@ -273,6 +273,40 @@ mod tests {
         .unwrap();
         assert!(open_committed_runner_lock_with(&durable_out, &fixture.config).is_ok());
     }
+
+    #[test]
+    fn publication_parent_handle_survives_namespace_substitution() {
+        let fixture = build_valid_lock();
+        let outer = tempfile::tempdir().unwrap();
+        let parent = outer.path().join("parent");
+        std::fs::create_dir(&parent).unwrap();
+        let out = parent.join("runner-lock.json");
+        let error = publish_runner_lock_with(
+            &fixture.bytes,
+            &out,
+            &fixture.config,
+            FailurePoint::AfterParentSwap,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("injected parent namespace swap"));
+        assert!(parent.is_dir());
+        assert_eq!(std::fs::read_dir(&parent).unwrap().count(), 0);
+        let retained = outer.path().join("parent.retained");
+        assert!(retained.is_dir());
+        assert!(std::fs::read_dir(retained).unwrap().count() > 0);
+
+        let symlink_parent = outer.path().join("symlink-parent");
+        std::os::unix::fs::symlink(&parent, &symlink_parent).unwrap();
+        assert!(
+            publish_runner_lock_with(
+                &fixture.bytes,
+                &symlink_parent.join("lock.json"),
+                &fixture.config,
+                FailurePoint::None,
+            )
+            .is_err()
+        );
+    }
 }
 
 #[cfg(test)]

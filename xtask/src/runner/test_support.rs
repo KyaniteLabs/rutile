@@ -109,7 +109,7 @@ fn provisioned_test_material() -> (ProvisionedRunnerConfig, [SigningKey; 5]) {
     let dispatch = array::from_fn(|index| RunnerDispatchConfig {
         runner_id: RUNNERS[index],
         endpoint: TEST_ENDPOINTS[index],
-        transport_fingerprint: [index as u8 + 20; 32],
+        ssh_host_ed25519_public_key: [index as u8 + 20; 32],
         launcher_protocol_version: 1,
         probe_path: TEST_PROBE_PATHS[index],
         probe_sha256: [index as u8 + 30; 32],
@@ -201,7 +201,7 @@ fn identity(index: usize) -> RunnerIdentityV1 {
         os_product: if mac {
             "macOS"
         } else if index == 4 {
-            "Fedora"
+            "Fedora Linux"
         } else {
             "Ubuntu"
         }
@@ -218,7 +218,7 @@ fn identity(index: usize) -> RunnerIdentityV1 {
         os_image: "exact-image".into(),
         kernel: "exact-kernel".into(),
         display_session: if mac {
-            "native"
+            "aqua"
         } else if index == 2 {
             "x11"
         } else {

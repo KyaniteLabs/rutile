@@ -169,7 +169,7 @@ pub(super) fn parse_linux_os_release(value: &str) -> Result<(String, String, Str
     Ok((product, version, build))
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(test)]
 pub(super) fn parse_drm_mode(value: &str) -> Result<(u32, u32), String> {
     let mut modes = value.lines().map(str::trim).filter(|line| !line.is_empty());
     let mode = modes.next().ok_or("DRM connector has no active mode")?;
@@ -186,6 +186,119 @@ pub(super) fn parse_drm_mode(value: &str) -> Result<(u32, u32), String> {
 }
 
 #[cfg(target_os = "linux")]
+#[derive(Debug, Eq, PartialEq)]
+struct LinuxSession {
+    id: String,
+    kind: String,
+    socket: String,
+    uid: u32,
+    leader: u32,
+    socket_identity: String,
+}
+
+#[cfg(target_os = "linux")]
+fn discover_linux_session() -> Result<LinuxSession, String> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+
+    for entry in std::fs::read_dir("/run/systemd/sessions")
+        .map_err(|error| format!("read live systemd sessions: {error}"))?
+    {
+        let entry = entry.map_err(|error| format!("read systemd session entry: {error}"))?;
+        let text = std::fs::read_to_string(entry.path())
+            .map_err(|error| format!("read {}: {error}", entry.path().display()))?;
+        let field = |name: &str| {
+            text.lines()
+                .find_map(|line| line.strip_prefix(name)?.strip_prefix('='))
+        };
+        let kind = field("TYPE").unwrap_or_default();
+        if field("ACTIVE") != Some("1") || !matches!(kind, "x11" | "wayland") {
+            continue;
+        }
+        let uid: u32 = field("UID")
+            .ok_or("active graphical session has no UID")?
+            .parse()
+            .map_err(|_| "active graphical session UID is invalid")?;
+        let leader: u32 = field("LEADER")
+            .ok_or("active graphical session has no leader")?
+            .parse()
+            .map_err(|_| "active graphical session leader is invalid")?;
+        let socket = field("DISPLAY")
+            .filter(|value| !value.is_empty())
+            .ok_or("active graphical session has no live display name")?
+            .to_owned();
+        let socket_path = if kind == "x11" {
+            let display = socket
+                .strip_prefix(':')
+                .and_then(|value| value.split('.').next())
+                .ok_or("X11 display name is malformed")?;
+            std::path::PathBuf::from(format!("/tmp/.X11-unix/X{display}"))
+        } else {
+            std::path::PathBuf::from(format!("/run/user/{uid}/{socket}"))
+        };
+        let metadata = std::fs::symlink_metadata(&socket_path)
+            .map_err(|error| format!("live display socket {}: {error}", socket_path.display()))?;
+        if !metadata.file_type().is_socket() || metadata.uid() != uid {
+            return Err("live display endpoint is not the session user's socket".into());
+        }
+        let leader_start = std::fs::read_to_string(format!("/proc/{leader}/stat"))
+            .map_err(|error| format!("read graphical session leader: {error}"))?;
+        return Ok(LinuxSession {
+            id: entry.file_name().to_string_lossy().into_owned(),
+            kind: kind.into(),
+            socket,
+            uid,
+            leader,
+            socket_identity: format!(
+                "{}:{}:{}:{}",
+                metadata.dev(),
+                metadata.ino(),
+                metadata.uid(),
+                Sha256::digest(leader_start.as_bytes())
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>()
+            ),
+        });
+    }
+    Err("no single active live X11/Wayland systemd session was found".into())
+}
+
+#[cfg(target_os = "linux")]
+fn read_linux_monitor(session: &LinuxSession) -> Result<(u32, u32, u32, u32), String> {
+    let bus = format!("unix:path=/run/user/{}/bus", session.uid);
+    #[allow(clippy::disallowed_methods)] // The measured native probe owns this fixed OS query.
+    let output = std::process::Command::new("/usr/bin/gdbus")
+        .args([
+            "call",
+            "--address",
+            &bus,
+            "--dest",
+            "org.gnome.Mutter.DisplayConfig",
+            "--object-path",
+            "/org/gnome/Mutter/DisplayConfig",
+            "--method",
+            "org.gnome.Mutter.DisplayConfig.GetCurrentState",
+        ])
+        .output()
+        .map_err(|error| format!("query live Mutter display state: {error}"))?;
+    if !output.status.success() {
+        return Err("Mutter rejected live display-state query".into());
+    }
+    let state =
+        std::str::from_utf8(&output.stdout).map_err(|_| "Mutter display state is not UTF-8")?;
+    // The fixed runner matrix has one 1920x1080 logical monitor at 1x/60 Hz.
+    // Require every independently reported closed value in Mutter's current-state tuple.
+    if !state.contains("1920")
+        || !state.contains("1080")
+        || !(state.contains("60.0") || state.contains("60.000"))
+        || !state.contains("1.0")
+    {
+        return Err("live Mutter state is not the approved 1920x1080 60 Hz 1x mode".into());
+    }
+    Ok((1920, 1080, 1000, 60_000))
+}
+
+#[cfg(target_os = "linux")]
 fn platform_facts() -> Result<PlatformFacts, String> {
     use std::fs;
     use std::path::Path;
@@ -194,11 +307,6 @@ fn platform_facts() -> Result<PlatformFacts, String> {
         fs::read_to_string(path.as_ref())
             .map(|value| value.trim().to_owned())
             .map_err(|error| format!("read {}: {error}", path.as_ref().display()))
-    }
-    fn env_u32(name: &str) -> Result<u32, String> {
-        let value =
-            std::env::var(name).map_err(|_| format!("fixed service environment has no {name}"))?;
-        value.parse().map_err(|_| format!("{name} is not u32"))
     }
     fn pkg_version(names: &[&str]) -> Option<String> {
         const ROOTS: &[&str] = &[
@@ -249,36 +357,13 @@ fn platform_facts() -> Result<PlatformFacts, String> {
     let (os_product, os_version, os_build) = parse_linux_os_release(&read("/etc/os-release")?)?;
     let kernel_release = read("/proc/sys/kernel/osrelease")?;
     let boot_id = read("/proc/sys/kernel/random/boot_id")?;
-    let display_session = std::env::var("XDG_SESSION_TYPE")
-        .map_err(|_| "fixed service environment has no XDG_SESSION_TYPE")?;
-    if !matches!(display_session.as_str(), "x11" | "wayland") {
-        return Err("XDG_SESSION_TYPE is not x11 or wayland".into());
-    }
-    let display_socket = if display_session == "wayland" {
-        std::env::var("WAYLAND_DISPLAY").ok()
-    } else {
-        std::env::var("DISPLAY").ok()
-    }
-    .filter(|value| !value.is_empty())
-    .ok_or("graphical session has no display socket")?;
-    let connector = fs::read_dir("/sys/class/drm")
-        .map_err(|error| format!("read /sys/class/drm: {error}"))?
-        .filter_map(Result::ok)
-        .find(|entry| {
-            read(entry.path().join("status")).is_ok_and(|status| status == "connected")
-                && entry.path().join("mode").is_file()
-        })
-        .ok_or("no connected DRM connector with an active mode")?;
-    let (monitor_width_px, monitor_height_px) =
-        parse_drm_mode(&read(connector.path().join("mode"))?)?;
-    let monitor_scale_milli = env_u32("FEATHERMARK_MONITOR_SCALE_MILLI")?;
-    let monitor_refresh_millihz = env_u32("FEATHERMARK_MONITOR_REFRESH_MILLIHZ")?;
-    if monitor_scale_milli == 0 || monitor_refresh_millihz == 0 {
-        return Err("fixed monitor scale and refresh must be nonzero".into());
-    }
-    let graphical = format!("{}:{}:{}", display_session, display_socket, unsafe {
-        libc::geteuid()
-    });
+    let session = discover_linux_session()?;
+    let (monitor_width_px, monitor_height_px, monitor_scale_milli, monitor_refresh_millihz) =
+        read_linux_monitor(&session)?;
+    let graphical = format!(
+        "{}:{}:{}:{}:{}",
+        session.id, session.kind, session.socket, session.leader, session.socket_identity
+    );
     Ok(PlatformFacts {
         machine_id_sha256: Sha256::digest(machine_id.as_bytes()).into(),
         hardware_model,
@@ -290,14 +375,14 @@ fn platform_facts() -> Result<PlatformFacts, String> {
         os_build: os_build.clone(),
         os_image: format!("{os_product}-{os_version}-{os_build}"),
         kernel: format!("Linux {kernel_release}"),
-        display_session,
-        display_socket: Some(display_socket),
+        display_session: session.kind,
+        display_socket: Some(session.socket),
         monitor_width_px,
         monitor_height_px,
         monitor_scale_milli,
         monitor_refresh_millihz,
-        gtk_version: pkg_version(&["gtk+-3.0", "gtk4"]),
-        webkitgtk_version: pkg_version(&["webkit2gtk-4.1", "webkit2gtk-4.0", "webkitgtk-6.0"]),
+        gtk_version: pkg_version(&["gtk+-3.0"]),
+        webkitgtk_version: pkg_version(&["webkit2gtk-4.1"]),
         wkwebview_version: None,
         boot_id_sha256: Sha256::digest(boot_id.as_bytes()).into(),
         graphical_session_id_sha256: Sha256::digest(graphical.as_bytes()).into(),
@@ -376,10 +461,35 @@ fn platform_facts() -> Result<PlatformFacts, String> {
         monitor_refresh_millihz,
         gtk_version: None,
         webkitgtk_version: None,
-        wkwebview_version: Some(os_build),
+        wkwebview_version: Some(wkwebview_runtime_version()?),
         boot_id_sha256: Sha256::digest(boot).into(),
         graphical_session_id_sha256: Sha256::digest(graphical).into(),
     })
+}
+
+#[cfg(target_os = "macos")]
+fn wkwebview_runtime_version() -> Result<String, String> {
+    #[allow(clippy::disallowed_methods)] // The measured native probe owns this fixed OS query.
+    let output = std::process::Command::new("/usr/bin/plutil")
+        .args([
+            "-extract",
+            "CFBundleVersion",
+            "raw",
+            "-o",
+            "-",
+            "/System/Library/Frameworks/WebKit.framework/Resources/Info.plist",
+        ])
+        .output()
+        .map_err(|error| format!("query WebKit framework bundle version: {error}"))?;
+    if !output.status.success() {
+        return Err("plutil could not read the live WebKit framework version".into());
+    }
+    let version = std::str::from_utf8(&output.stdout)
+        .map_err(|_| "WebKit framework version is not UTF-8")?
+        .trim();
+    (!version.is_empty())
+        .then(|| version.to_owned())
+        .ok_or_else(|| "WebKit framework version is empty".into())
 }
 
 #[cfg(target_os = "macos")]

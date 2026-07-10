@@ -42,11 +42,13 @@ root-only `0500` file, rechecking length/hash/signature, and calling SDK `posix_
 copy while retaining both descriptors. Do not enable a row until native replacement-adversary and
 minimum-OS tests pass.
 
-The launcher is a one-request stdin/stdout service. The supplied systemd socket unit uses
-`Accept=yes`; the launchd plist uses `inetdCompatibility`. Both expose a root-only local Unix
-socket. A separately reviewed transport terminator may bridge the pinned remote endpoint to that
-socket, but it must not alter the length-prefixed request or response. The launcher accepts no CLI
-arguments and ignores no caller-selected paths, providers, or trust material.
+The launcher is a one-request stdin/stdout forced-command service. The coordinator reaches it only
+through OpenSSH with `StrictHostKeyChecking=yes`, a generated one-entry known-hosts stream, and the
+exact Ed25519 host public key compiled from the independently reviewed dispatch manifest. The
+server account is `feathermark-runner`; its authorized-key policy forces
+`feathermark-runner-launcher` and forbids forwarding, PTY, and user-selected commands. The supplied
+systemd socket unit and launchd plist remain suitable for root-only local smoke tests, but plaintext
+TCP and peer-asserted fingerprint bytes are not an authorized production transport.
 
 Run the platform installer as root with exactly three independently prepared files:
 
@@ -59,26 +61,18 @@ snapshot file has schema `feathermark.runner-snapshot-attestation.v1` and closed
 `runner_id`, `snapshot_id`, `snapshot_provider`, `snapshot_image_sha256`, `virtualized`, and
 `virtualization_image_sha256`. The final field is present exactly when `virtualized` is true.
 
-`LAUNCHER_CONFIG` has schema `feathermark.runner-launcher-config.v1` and closed fields `runner_id`,
-`key_id`, `transport_fingerprint_sha256`, `probe_sha256`, `macos_designated_requirement`, and
-`macos_cdhash`. macOS rows require both Security-framework pins and set all four Linux display
-fields below to null or omit them. Linux rows set the macOS pins to null and additionally require:
+`LAUNCHER_CONFIG` has schema `feathermark.runner-launcher-config.v1` and only the closed local fields
+`runner_id`, `key_id`, `probe_sha256`, `macos_designated_requirement`, and `macos_cdhash`. The
+dispatch manifest separately contains `ssh_host_ed25519_public_key_hex`; the launcher cannot echo or
+override that coordinator-side authentication pin. macOS rows require both Security-framework
+pins; Linux rows set both to null. No display/session/monitor value is accepted from this config.
 
-```json
-{
-  "linux_display_session": "x11-or-wayland",
-  "linux_display_socket": ":0-or-wayland-N",
-  "linux_monitor_scale_milli": 1000,
-  "linux_monitor_refresh_millihz": 60000
-}
-```
-
-The session value must match the runner id, and the exact 1x/60 Hz values match the fixed Linux
-matrix in the build plan. The launcher constructs a minimal probe environment from those local
-pins; it never inherits or passes the signing key path or bytes. The probe receives only one
-bounded challenge frame and returns only one bounded canonical-CBOR native report. The launcher
-checks the report against the request and provisioned snapshot before it reads the signing key and
-creates the Ed25519 receipt.
+The Linux probe discovers the one active X11/Wayland systemd session, verifies the live display
+socket and session leader, queries current Mutter monitor state, and reads only GTK3 and WebKitGTK
+4.1 runtime metadata. The macOS probe separately reads the OS product/build and the installed WebKit
+framework bundle version. The probe receives only one bounded challenge frame and returns one
+bounded canonical-CBOR native report. The launcher checks that measured report against the exact
+runner row and provisioned snapshot before it reads the signing key and creates the Ed25519 receipt.
 
 ## Enrollment and publication
 

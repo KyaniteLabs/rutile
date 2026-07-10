@@ -154,3 +154,39 @@ fn scaffold_cargo_manifests_are_self_contained() {
         assert_eq!(package_names, expected_packages);
     }
 }
+
+#[test]
+fn generated_xtask_compiles_in_isolation() {
+    let source_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let root = tempdir().unwrap();
+    let out = root.path().join("out");
+    create_scaffold(&ScaffoldCreate {
+        fixtures: source_root.join("tests/fixtures"),
+        contracts: vec![
+            source_root.join("crates/feathermark-types"),
+            source_root.join("crates/feathermark-protocol"),
+        ],
+        xtask: source_root.join("xtask"),
+        out: out.clone(),
+        lock: root.path().join("scaffold-lock.json"),
+    })
+    .unwrap();
+
+    let manifest = out.join("xtask/Cargo.toml");
+    let checked = Command::new("cargo")
+        .args(["check", "--all-targets", "--offline"])
+        .arg("--manifest-path")
+        .arg(&manifest)
+        .arg("--target-dir")
+        .arg(root.path().join("target"))
+        .output()
+        .unwrap();
+    assert!(
+        checked.status.success(),
+        "cargo check failed for {}: {}",
+        manifest.display(),
+        String::from_utf8_lossy(&checked.stderr)
+    );
+}

@@ -43,15 +43,26 @@ license.workspace = true
 clap.workspace = true
 ed25519-dalek.workspace = true
 feathermark-protocol.workspace = true
+getrandom.workspace = true
 hex.workspace = true
+libc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+toml.workspace = true
 walkdir.workspace = true
+
+[build-dependencies]
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+toml.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+trybuild.workspace = true
 
 [workspace]
 resolver = "2"
@@ -66,12 +77,16 @@ license = "MIT"
 clap = { version = "=4.5.41", features = ["derive"] }
 ed25519-dalek = "=2.1.1"
 feathermark-protocol = { path = "../contracts/feathermark-protocol" }
+getrandom = "=0.3.3"
 hex = "=0.4.3"
+libc = "=0.2.172"
 serde = { version = "=1.0.219", features = ["derive"] }
 serde_json = "=1.0.140"
 sha2 = "=0.10.9"
 tempfile = "=3.20.0"
 thiserror = "=2.0.12"
+toml = "=0.8.23"
+trybuild = "=1.0.104"
 walkdir = "=2.5.0"
 "#;
 

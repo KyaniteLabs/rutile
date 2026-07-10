@@ -6,6 +6,7 @@ use crate::candidate::VerifiedCandidateManifest;
 
 use super::RunnerError;
 use super::config::{ProductionRunnerConfig, ProvisionedRunnerConfig, RUNNERS, production_config};
+use super::protocol::ProbePayloadV1;
 use super::protocol::{ProbePurpose, ProbeRequestV1, RunnerIdentityV1};
 use super::transaction::CommittedRunnerLock;
 use super::transport::{LauncherTransport, ProductionLauncherTransport};
@@ -23,6 +24,8 @@ pub(crate) struct VerifiedRunner {
     pub(crate) executable_sha256: [u8; 32],
     pub(crate) boot_id_sha256: [u8; 32],
     pub(crate) graphical_session_id_sha256: [u8; 32],
+    pub(crate) launcher_protocol_version: u32,
+    pub(crate) measured_probe_sha256: [u8; 32],
     pub(crate) expires_at: Instant,
 }
 
@@ -87,6 +90,7 @@ pub(crate) fn verify_current_runner_with<T: LauncherTransport>(
         || payload.captured_at_unix_ms < earliest
         || payload.captured_at_unix_ms > latest
         || payload.elapsed_ms > 30_000
+        || payload.launcher_protocol_version != row.launcher_protocol_version
         || payload.measured_probe_sha256 != row.probe_sha256
         || payload.identity != *enrolled
         || payload.identity.snapshot_provider != expectation.snapshot_provider
@@ -109,6 +113,8 @@ pub(crate) fn verify_current_runner_with<T: LauncherTransport>(
         executable_sha256: expectation.executable_sha256,
         boot_id_sha256: payload.boot_id_sha256,
         graphical_session_id_sha256: payload.graphical_session_id_sha256,
+        launcher_protocol_version: payload.launcher_protocol_version,
+        measured_probe_sha256: payload.measured_probe_sha256,
         expires_at: Instant::now() + Duration::from_secs(5),
     })
 }
@@ -156,14 +162,105 @@ pub(crate) fn recheck_current_session(capability: &VerifiedRunner) -> Result<(),
     };
     let receipt = ProductionLauncherTransport.exchange(row, &request)?;
     let payload = verify_signed_probe(&receipt, config.roots[index].public_key)?;
-    if payload.request != request
+    validate_current_payload(capability, &request, &payload)
+}
+
+fn validate_current_payload(
+    capability: &VerifiedRunner,
+    request: &ProbeRequestV1,
+    payload: &ProbePayloadV1,
+) -> Result<(), RunnerError> {
+    let earliest = request.issued_at_unix_ms.saturating_sub(5_000);
+    let latest = request.not_after_unix_ms.saturating_add(5_000);
+    if payload.request != *request
+        || payload.captured_at_unix_ms < earliest
+        || payload.captured_at_unix_ms > latest
+        || payload.elapsed_ms > 30_000
+        || payload.launcher_protocol_version != capability.launcher_protocol_version
+        || payload.measured_probe_sha256 != capability.measured_probe_sha256
         || payload.identity != capability.identity
         || payload.boot_id_sha256 != capability.boot_id_sha256
         || payload.graphical_session_id_sha256 != capability.graphical_session_id_sha256
     {
         return Err(RunnerError::Protocol(
-            "boot/session changed before capability consumption".into(),
+            "complete fresh runner binding changed before capability consumption".into(),
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runner::protocol::ProbePayloadV1;
+    use crate::runner::test_support::build_valid_lock;
+
+    #[test]
+    fn final_recheck_rejects_every_freshness_launcher_and_probe_binding_mutation() {
+        let fixture = build_valid_lock();
+        let lock: crate::runner::protocol::RunnerLockV1 =
+            serde_json::from_slice(&fixture.bytes).unwrap();
+        let identity = lock.identities[0].clone();
+        let capability = VerifiedRunner {
+            runner_id: identity.runner_id.clone(),
+            matrix_run_id: [4; 32],
+            identity: identity.clone(),
+            lock_sha256: [5; 32],
+            manifest_sha256: [6; 32],
+            snapshot_id: "snapshot".into(),
+            snapshot_provider: identity.snapshot_provider.clone(),
+            snapshot_image_sha256: [7; 32],
+            executable_sha256: [8; 32],
+            boot_id_sha256: [9; 32],
+            graphical_session_id_sha256: [10; 32],
+            launcher_protocol_version: 1,
+            measured_probe_sha256: [11; 32],
+            expires_at: Instant::now() + Duration::from_secs(5),
+        };
+        let request = ProbeRequestV1 {
+            purpose: ProbePurpose::PreSpawn,
+            run_id: capability.matrix_run_id,
+            runner_id: capability.runner_id.clone(),
+            challenge: [12; 32],
+            issued_at_unix_ms: 1_000,
+            not_after_unix_ms: 31_000,
+            expected_snapshot_id: capability.snapshot_id.clone(),
+            expected_snapshot_provider: capability.snapshot_provider.clone(),
+            expected_image_sha256: capability.snapshot_image_sha256,
+            expected_probe_sha256: capability.measured_probe_sha256,
+            enrollment_commitment: None,
+            final_lock_sha256: Some(capability.lock_sha256),
+            candidate_manifest_sha256: Some(capability.manifest_sha256),
+        };
+        let payload = ProbePayloadV1 {
+            request: request.clone(),
+            identity,
+            boot_id_sha256: capability.boot_id_sha256,
+            graphical_session_id_sha256: capability.graphical_session_id_sha256,
+            captured_at_unix_ms: 1_001,
+            elapsed_ms: 1,
+            launcher_protocol_version: 1,
+            measured_probe_sha256: capability.measured_probe_sha256,
+        };
+        assert!(validate_current_payload(&capability, &request, &payload).is_ok());
+        let mut mutations = Vec::new();
+        let mut stale = payload.clone();
+        stale.captured_at_unix_ms = 40_001;
+        mutations.push(stale);
+        let mut elapsed = payload.clone();
+        elapsed.elapsed_ms = 30_001;
+        mutations.push(elapsed);
+        let mut launcher = payload.clone();
+        launcher.launcher_protocol_version = 2;
+        mutations.push(launcher);
+        let mut probe = payload.clone();
+        probe.measured_probe_sha256 = [99; 32];
+        mutations.push(probe);
+        let mut identity = payload.clone();
+        identity.identity.os_build.push_str("-changed");
+        mutations.push(identity);
+        for mutation in mutations {
+            assert!(validate_current_payload(&capability, &request, &mutation).is_err());
+        }
+    }
 }

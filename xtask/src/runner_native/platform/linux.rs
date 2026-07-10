@@ -4,14 +4,11 @@ use std::os::fd::{AsRawFd, FromRawFd};
 use std::ptr;
 
 use crate::runner_native::path_policy::MeasuredProbe;
-use crate::runner_native::service_config::LinuxProbeEnvironment;
-
 const MAX_CHILD_OUTPUT: usize = 64 * 1024 + 8;
 
 pub(in crate::runner_native) fn fexecve_capture(
     measured: &MeasuredProbe,
     input: &[u8],
-    environment_pins: &LinuxProbeEnvironment,
 ) -> io::Result<Vec<u8>> {
     let mut input_pipe = [0; 2];
     let mut output_pipe = [0; 2];
@@ -37,8 +34,7 @@ pub(in crate::runner_native) fn fexecve_capture(
             libc::close(input_pipe[0]);
             libc::close(output_pipe[1]);
             let name = CString::new("feathermark-runner-probe").expect("literal has no NUL");
-            let environment =
-                probe_environment(environment_pins).unwrap_or_else(|_| libc::_exit(124));
+            let environment = probe_environment().unwrap_or_else(|_| libc::_exit(124));
             let argv = [name.as_ptr(), ptr::null()];
             let mut envp: Vec<_> = environment.iter().map(|value| value.as_ptr()).collect();
             envp.push(ptr::null());
@@ -77,25 +73,8 @@ pub(in crate::runner_native) fn fexecve_capture(
     Ok(output)
 }
 
-fn probe_environment(pins: &LinuxProbeEnvironment) -> io::Result<Vec<CString>> {
-    let display_name = if pins.display_session == "x11" {
-        "DISPLAY"
-    } else {
-        "WAYLAND_DISPLAY"
-    };
-    let values = [
-        "PATH=/usr/bin:/bin".to_owned(),
-        format!("XDG_SESSION_TYPE={}", pins.display_session),
-        format!("{display_name}={}", pins.display_socket),
-        format!(
-            "FEATHERMARK_MONITOR_SCALE_MILLI={}",
-            pins.monitor_scale_milli
-        ),
-        format!(
-            "FEATHERMARK_MONITOR_REFRESH_MILLIHZ={}",
-            pins.monitor_refresh_millihz
-        ),
-    ];
+fn probe_environment() -> io::Result<Vec<CString>> {
+    let values = ["PATH=/usr/bin:/bin".to_owned()];
     let mut environment = Vec::with_capacity(values.len());
     for value in values {
         environment.push(CString::new(value).map_err(|_| {

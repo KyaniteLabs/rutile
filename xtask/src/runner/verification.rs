@@ -233,6 +233,80 @@ pub(crate) fn validate_identity_contract(identity: &RunnerIdentityV1) -> Result<
     {
         return Err(protocol("identity contains an empty/presence-only field"));
     }
+    let is_mac = identity.runner_id.starts_with("fm-macos-");
+    let fixed_hardware = match identity.runner_id.as_str() {
+        "fm-macos-arm64-v1" => {
+            identity.arch == "aarch64"
+                && identity.cpu_model.contains("Apple M1")
+                && identity.cpu_cores == 8
+                && identity.monitor_width_px == 2560
+                && identity.monitor_height_px == 1600
+        }
+        "fm-macos-x86_64-v1" => {
+            identity.arch == "x86_64"
+                && identity.cpu_model.contains("i7-9750H")
+                && identity.cpu_cores == 6
+                && identity.monitor_width_px == 1920
+                && identity.monitor_height_px == 1080
+        }
+        "fm-ubuntu-x11-v1" | "fm-ubuntu-wayland-v1" | "fm-fedora-wayland-v1" => {
+            identity.arch == "x86_64"
+                && identity.cpu_model.contains("i5-8500")
+                && identity.cpu_cores == 6
+                && identity.monitor_width_px == 1920
+                && identity.monitor_height_px == 1080
+        }
+        _ => false,
+    };
+    let sixteen_gib = 16_u64 * 1024 * 1024 * 1024;
+    let fixed_memory =
+        identity.ram_bytes >= 15_u64 * 1024 * 1024 * 1024 && identity.ram_bytes <= sixteen_gib;
+    let fixed_display =
+        identity.monitor_scale_milli == 1000 && identity.monitor_refresh_millihz == 60_000;
+    let platform = if is_mac {
+        identity.os_product == "macOS"
+            && identity.display_session == "aqua"
+            && identity.display_socket.is_none()
+            && identity.gtk_version.is_none()
+            && identity.webkitgtk_version.is_none()
+            && identity
+                .wkwebview_version
+                .as_deref()
+                .is_some_and(|version| !version.is_empty() && version != identity.os_build)
+    } else {
+        let expected = match identity.runner_id.as_str() {
+            "fm-ubuntu-x11-v1" => Some(("Ubuntu", "24.04", "x11")),
+            "fm-ubuntu-wayland-v1" => Some(("Ubuntu", "24.04", "wayland")),
+            "fm-fedora-wayland-v1" => Some(("Fedora Linux", "43", "wayland")),
+            _ => None,
+        };
+        expected.is_some_and(|(product, version, session)| {
+            identity.os_product == product
+                && identity.os_version == version
+                && identity.display_session == session
+                && identity.display_socket.as_deref().is_some_and(|socket| {
+                    if session == "x11" {
+                        socket.starts_with(':')
+                    } else {
+                        socket.starts_with("wayland-")
+                    }
+                })
+                && identity
+                    .gtk_version
+                    .as_deref()
+                    .is_some_and(|value| value.starts_with("3."))
+                && identity
+                    .webkitgtk_version
+                    .as_deref()
+                    .is_some_and(|value| !value.starts_with("4.0") && !value.starts_with("6."))
+                && identity.wkwebview_version.is_none()
+        })
+    };
+    if !fixed_hardware || !fixed_memory || !fixed_display || !platform {
+        return Err(protocol(
+            "identity does not match the exact fixed runner hardware/OS/display/runtime row",
+        ));
+    }
     Ok(())
 }
 
@@ -246,4 +320,121 @@ fn lower_hex(value: &str) -> bool {
 
 fn protocol(message: &str) -> RunnerError {
     RunnerError::Protocol(message.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn identity(runner_id: &str) -> RunnerIdentityV1 {
+        let mac = runner_id.starts_with("fm-macos-");
+        RunnerIdentityV1 {
+            runner_id: runner_id.into(),
+            machine_id_sha256: [1; 32],
+            hardware_model: if mac {
+                "MacBookPro16,1"
+            } else {
+                "Reference PC"
+            }
+            .into(),
+            cpu_model: match runner_id {
+                "fm-macos-arm64-v1" => "Apple M1",
+                "fm-macos-x86_64-v1" => "Intel(R) Core(TM) i7-9750H CPU",
+                _ => "Intel(R) Core(TM) i5-8500 CPU",
+            }
+            .into(),
+            cpu_cores: if runner_id == "fm-macos-arm64-v1" {
+                8
+            } else {
+                6
+            },
+            ram_bytes: 16 * 1024 * 1024 * 1024,
+            arch: if runner_id == "fm-macos-arm64-v1" {
+                "aarch64"
+            } else {
+                "x86_64"
+            }
+            .into(),
+            os_product: if mac {
+                "macOS"
+            } else if runner_id == "fm-fedora-wayland-v1" {
+                "Fedora Linux"
+            } else {
+                "Ubuntu"
+            }
+            .into(),
+            os_version: if mac {
+                "15.5"
+            } else if runner_id == "fm-fedora-wayland-v1" {
+                "43"
+            } else {
+                "24.04"
+            }
+            .into(),
+            os_build: "exact-build".into(),
+            os_image: "exact-image".into(),
+            kernel: if mac { "Darwin 24.5.0" } else { "Linux 6.8.0" }.into(),
+            display_session: if mac {
+                "aqua"
+            } else if runner_id == "fm-ubuntu-x11-v1" {
+                "x11"
+            } else {
+                "wayland"
+            }
+            .into(),
+            display_socket: (!mac).then(|| {
+                if runner_id == "fm-ubuntu-x11-v1" {
+                    ":0"
+                } else {
+                    "wayland-0"
+                }
+                .into()
+            }),
+            monitor_width_px: if runner_id == "fm-macos-arm64-v1" {
+                2560
+            } else {
+                1920
+            },
+            monitor_height_px: if runner_id == "fm-macos-arm64-v1" {
+                1600
+            } else {
+                1080
+            },
+            monitor_scale_milli: 1000,
+            monitor_refresh_millihz: 60_000,
+            gtk_version: (!mac).then(|| "3.24.41".into()),
+            webkitgtk_version: (!mac).then(|| "2.44.3".into()),
+            wkwebview_version: mac.then(|| "620.2.4".into()),
+            virtualized: true,
+            virtualization_image_sha256: Some([2; 32]),
+            snapshot_provider: "provider".into(),
+        }
+    }
+
+    #[test]
+    fn exact_runner_contract_rejects_wrong_platform_family_and_values() {
+        for runner in RUNNERS {
+            assert!(validate_identity_contract(&identity(runner)).is_ok());
+        }
+        let mut wrong_family = identity("fm-ubuntu-wayland-v1");
+        wrong_family.os_product = "Fedora Linux".into();
+        assert!(validate_identity_contract(&wrong_family).is_err());
+
+        let mut wrong_runtime = identity("fm-fedora-wayland-v1");
+        wrong_runtime.webkitgtk_version = Some("6.0.0".into());
+        assert!(validate_identity_contract(&wrong_runtime).is_err());
+
+        let mut wrong_socket_shape = identity("fm-ubuntu-x11-v1");
+        wrong_socket_shape.display_socket = Some("wayland-0".into());
+        assert!(validate_identity_contract(&wrong_socket_shape).is_err());
+    }
+
+    #[test]
+    fn macos_contract_requires_distinct_real_wkwebview_runtime() {
+        let mut mac = identity("fm-macos-arm64-v1");
+        mac.wkwebview_version = Some(mac.os_build.clone());
+        assert!(validate_identity_contract(&mac).is_err());
+        mac.wkwebview_version = None;
+        assert!(validate_identity_contract(&mac).is_err());
+    }
 }

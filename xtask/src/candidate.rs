@@ -77,16 +77,54 @@ impl VerifiedCandidateManifest {
         Ok(CandidateSnapshotExpectation {
             runner_id: row.runner_id.clone(),
             snapshot_id: format!(
-                "fm-{}-pristine-{}",
-                row.runner_id
-                    .strip_prefix("fm-")
-                    .and_then(|value| value.strip_suffix("-v1"))
-                    .ok_or(CandidateError::Invalid)?,
-                &hex::encode(self.sha256)[..12]
+                "{}-pristine-{}",
+                row.runner_id,
+                &hex::encode(row.executable_sha256)[..12]
             ),
             snapshot_provider: row.snapshot_provider.clone(),
             snapshot_image_sha256: row.snapshot_image_sha256,
             executable_sha256: row.executable_sha256,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_name_keeps_full_runner_id_and_uses_row_executable_sha12() {
+        let rows: Vec<_> = EXPECTED_RUNNERS
+            .iter()
+            .enumerate()
+            .map(|(index, runner_id)| {
+                let image = [index as u8 + 1; 32];
+                let executable = if index == 0 {
+                    [0xab; 32]
+                } else {
+                    [index as u8 + 10; 32]
+                };
+                serde_json::json!({
+                    "runner_id": runner_id,
+                    "snapshot_provider": "provider",
+                    "snapshot_image_sha256": image,
+                    "executable_sha256": executable,
+                })
+            })
+            .collect();
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "schema": "feathermark.candidate-manifest.v1",
+            "rows": rows,
+        }))
+        .unwrap();
+        let manifest = verify_manifest(&bytes).unwrap();
+        assert_eq!(
+            manifest
+                .expectation("fm-macos-arm64-v1")
+                .unwrap()
+                .snapshot_id,
+            "fm-macos-arm64-v1-pristine-abababababab"
+        );
+        assert_ne!(&hex::encode(manifest.sha256)[..12], "abababababab");
     }
 }

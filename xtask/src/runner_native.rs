@@ -166,7 +166,6 @@ pub fn launcher_main() -> Result<(), NativeServiceError> {
     let output = serde_json::to_vec(&signed)
         .map_err(|error| NativeServiceError::Protocol(error.to_string()))?;
     let mut stdout = std::io::stdout().lock();
-    stdout.write_all(&config.transport_fingerprint)?;
     stdout.write_all(&(output.len() as u32).to_be_bytes())?;
     stdout.write_all(&output)?;
     stdout.flush()?;
@@ -228,13 +227,10 @@ fn validate_request(
 #[cfg(target_os = "linux")]
 fn execute_probe(
     measured: &path_policy::MeasuredProbe,
-    config: &service_config::LauncherConfigV1,
+    _config: &service_config::LauncherConfigV1,
     input: &[u8],
 ) -> Result<Vec<u8>, NativeServiceError> {
-    let environment = config
-        .linux_probe_environment()
-        .map_err(NativeServiceError::Configuration)?;
-    platform::linux::fexecve_capture(measured, input, environment).map_err(NativeServiceError::from)
+    platform::linux::fexecve_capture(measured, input).map_err(NativeServiceError::from)
 }
 
 #[cfg(target_os = "macos")]
@@ -625,13 +621,11 @@ mod tests {
           "schema":"feathermark.runner-launcher-config.v1",
           "runner_id":"fm-macos-arm64-v1",
           "key_id":"runner-key-1",
-          "transport_fingerprint_sha256":"0101010101010101010101010101010101010101010101010101010101010101",
           "probe_sha256":"0202020202020202020202020202020202020202020202020202020202020202",
           "macos_designated_requirement":"identifier \"com.feathermark.runner-probe\"",
           "macos_cdhash":"0303030303030303030303030303030303030303"
         }"#;
         let config = service_config::parse_launcher_config(json).unwrap();
-        assert_eq!(config.transport_fingerprint, [1; 32]);
         assert_eq!(config.probe_sha256, [2; 32]);
         assert_eq!(config.macos_cdhash, Some([3; 20]));
 
@@ -644,20 +638,34 @@ mod tests {
           "schema":"feathermark.runner-launcher-config.v1",
           "runner_id":"fm-ubuntu-wayland-v1",
           "key_id":"runner-key-2",
-          "transport_fingerprint_sha256":"0101010101010101010101010101010101010101010101010101010101010101",
           "probe_sha256":"0202020202020202020202020202020202020202020202020202020202020202",
           "macos_designated_requirement":null,
-          "macos_cdhash":null,
-          "linux_display_session":"wayland",
-          "linux_display_socket":"wayland-0",
-          "linux_monitor_scale_milli":1000,
-          "linux_monitor_refresh_millihz":60000
+          "macos_cdhash":null
         }"#;
         let linux = service_config::parse_launcher_config(linux).unwrap();
-        assert_eq!(
-            linux.linux_probe_environment().unwrap().display_session,
-            "wayland"
-        );
+        assert_eq!(linux.runner_id, "fm-ubuntu-wayland-v1");
+    }
+
+    #[test]
+    fn linux_probe_sources_live_session_monitor_and_exact_runtime_families() {
+        let collector = include_str!("runner_native/collector.rs");
+        let launcher = include_str!("runner_native/platform/linux.rs");
+        assert!(collector.contains("discover_linux_session"));
+        assert!(collector.contains("read_linux_monitor"));
+        assert!(collector.contains("pkg_version(&[\"gtk+-3.0\"])"));
+        assert!(collector.contains("pkg_version(&[\"webkit2gtk-4.1\"])"));
+        assert!(!collector.contains("gtk+-3.0\", \"gtk4"));
+        assert!(!collector.contains("webkit2gtk-4.0"));
+        assert!(!collector.contains("webkitgtk-6.0"));
+        assert!(!launcher.contains("FEATHERMARK_MONITOR_"));
+        assert!(!launcher.contains("XDG_SESSION_TYPE="));
+    }
+
+    #[test]
+    fn macos_probe_does_not_alias_os_build_as_wkwebview_runtime() {
+        let collector = include_str!("runner_native/collector.rs");
+        assert!(collector.contains("wkwebview_runtime_version"));
+        assert!(!collector.contains("wkwebview_version: Some(os_build)"));
     }
 
     #[cfg(target_os = "macos")]

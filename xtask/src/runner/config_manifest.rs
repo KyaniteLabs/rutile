@@ -52,7 +52,7 @@ pub(crate) struct DispatchManifest {
 pub(crate) struct DispatchRow {
     pub runner_id: String,
     pub endpoint: String,
-    pub transport_fingerprint_sha256: String,
+    pub ssh_host_ed25519_public_key_hex: String,
     pub launcher_protocol_version: u32,
     pub probe_path: String,
     pub probe_sha256: String,
@@ -129,7 +129,7 @@ fn validate(trust: &TrustManifest, dispatch: &DispatchManifest) -> Result<(), St
             return Err("invalid dispatch identity or endpoint".into());
         }
         for (value, label) in [
-            (&row.transport_fingerprint_sha256, "transport fingerprint"),
+            (&row.ssh_host_ed25519_public_key_hex, "SSH host public key"),
             (&row.probe_sha256, "probe hash"),
             (&row.enrollment_image_sha256, "image hash"),
         ] {
@@ -216,10 +216,11 @@ pub(crate) fn render_production_config(manifests: &ProvisioningManifests) -> Str
             root.runner_id, root.key_id, key
         ));
         rows.push_str(&format!(
-            "RunnerDispatchConfig {{ runner_id: {:?}, endpoint: {:?}, transport_fingerprint: {:?}, launcher_protocol_version: 1, probe_path: {:?}, probe_sha256: {:?}, enrollment_snapshot_id: {:?}, snapshot_provider: {:?}, enrollment_image_sha256: {:?}, macos_designated_requirement: {:?}, macos_cdhash: {:?} }},",
+            "RunnerDispatchConfig {{ runner_id: {:?}, endpoint: {:?}, ssh_host_ed25519_public_key: {:?}, launcher_protocol_version: 1, probe_path: {:?}, probe_sha256: {:?}, enrollment_snapshot_id: {:?}, snapshot_provider: {:?}, enrollment_image_sha256: {:?}, macos_designated_requirement: {:?}, macos_cdhash: {:?} }},",
             row.runner_id,
             row.endpoint,
-            decode_hash(&row.transport_fingerprint_sha256, "transport").expect("validated"),
+            decode_hash(&row.ssh_host_ed25519_public_key_hex, "SSH host public key")
+                .expect("validated"),
             row.probe_path,
             decode_hash(&row.probe_sha256, "probe").expect("validated"),
             row.enrollment_snapshot_id,
