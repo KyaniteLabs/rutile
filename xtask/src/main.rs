@@ -216,8 +216,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 capture_dir,
                 out,
             } => {
-                let lock = capture_verify_matrix(&runners, &capture_dir, &out)?;
-                println!("verified {} runners", lock.runners.len());
+                let summary = capture_verify_matrix(&runners, &capture_dir, &out)?;
+                println!("verified {} runners", summary.runners);
             }
         },
     }

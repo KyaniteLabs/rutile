@@ -42,6 +42,7 @@ name = "feathermark-fuzz"
 version = "0.0.0"
 dependencies = [
  "feathermark-protocol",
+ "feathermark-types",
  "libfuzzer-sys",
 ]
 

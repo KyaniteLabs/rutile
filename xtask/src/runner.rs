@@ -1,378 +1,279 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
-use std::path::{Path, PathBuf};
+//! Closed production runner enrollment, verification, and launch authority.
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
-use serde::{Deserialize, Serialize};
+use std::path::Path;
+
 use thiserror::Error;
 
-pub const EXPECTED_RUNNERS: [&str; 5] = [
-    "fm-macos-arm64-v1",
-    "fm-macos-x86_64-v1",
-    "fm-ubuntu-x11-v1",
-    "fm-ubuntu-wayland-v1",
-    "fm-fedora-wayland-v1",
-];
+mod config;
+#[cfg(test)]
+#[allow(dead_code)] // Shared build-script parser is only partially exercised by library tests.
+mod config_manifest;
+#[allow(dead_code)] // Task 1C consumes fresh pre-spawn capabilities through app_launch.
+pub(crate) mod current;
+mod encoding;
+mod engine;
+mod protocol;
+mod transaction;
+mod transport;
+mod verification;
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RunnerCapturePayload {
-    pub schema: String,
-    pub runner_id: String,
-    pub cpu_model: String,
-    pub cpu_cores: u16,
-    pub ram_bytes: u64,
-    pub arch: String,
-    pub os_name: String,
-    pub os_version: String,
-    pub os_build: String,
-    pub kernel: String,
-    pub display_session: String,
-    pub xdg_session_type: Option<String>,
-    pub display: Option<String>,
-    pub wayland_display: Option<String>,
-    pub monitor_width_px: u32,
-    pub monitor_height_px: u32,
-    pub monitor_scale_milli: u32,
-    pub monitor_refresh_millihz: u32,
-    pub gtk_version: Option<String>,
-    pub webkitgtk_version: Option<String>,
-    pub wkwebview_version: Option<String>,
-    pub virtualized: bool,
-    pub vm_image_digest: Option<String>,
-    pub snapshot_provider: String,
-    pub snapshot_id: String,
-    pub captured_at: String,
+pub const EXPECTED_RUNNERS: [&str; 5] = config::RUNNERS;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CaptureSummary {
+    pub runners: usize,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct SignedRunnerCapture {
-    pub payload: RunnerCapturePayload,
-    pub signature_hex: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct TrustedRunnerKey {
-    pub runner_id: String,
-    pub public_key_hex: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct TrustedRunnerKeys {
-    pub schema: String,
-    pub keys: Vec<TrustedRunnerKey>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RunnerLock {
-    pub schema: String,
-    pub trusted_keys: Vec<TrustedRunnerKey>,
-    pub runners: Vec<SignedRunnerCapture>,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OfflineLockSummary {
+    pub runners: usize,
+    pub lock_sha256: [u8; 32],
 }
 
 #[derive(Debug, Error)]
 pub enum RunnerError {
-    #[error("runner capture I/O failed: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("runner capture JSON failed: {0}")]
-    Json(#[from] serde_json::Error),
+    #[error("production runner configuration is unprovisioned")]
+    Unprovisioned,
+    #[error("production runner trust is unprovisioned")]
+    UnprovisionedTrust,
     #[error("runner set must be exactly the closed five-row matrix")]
     RunnerSet,
-    #[error("capture directory contains an unexpected entry: {0}")]
-    UnexpectedEntry(PathBuf),
-    #[error("trusted key set is invalid")]
-    TrustedKeys,
-    #[error("runner capture signature is invalid: {0}")]
-    Signature(String),
-    #[error("runner capture violates the locked platform contract: {0}")]
-    Platform(String),
-    #[error("snapshot id is reused: {0}")]
-    ReusedSnapshot(String),
-}
-
-pub fn sign_capture(payload: &RunnerCapturePayload, secret_key: &[u8; 32]) -> SignedRunnerCapture {
-    let signing_key = SigningKey::from_bytes(secret_key);
-    let message = serde_json::to_vec(payload).expect("runner payload serialization cannot fail");
-    SignedRunnerCapture {
-        payload: payload.clone(),
-        signature_hex: hex::encode(signing_key.sign(&message).to_bytes()),
-    }
+    #[error("provisioned runner transport is unavailable: {0}")]
+    Transport(String),
+    #[error("runner protocol is invalid: {0}")]
+    Protocol(String),
+    #[error("runner lock publication failed: {0}")]
+    Publication(String),
+    #[error("filesystem durability contract was lost")]
+    FilesystemContractLost,
+    #[error("runner I/O failed: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("runner JSON failed: {0}")]
+    Json(#[from] serde_json::Error),
 }
 
 pub fn capture_verify_matrix(
     runners: &[String],
     capture_dir: &Path,
     out: &Path,
-) -> Result<RunnerLock, RunnerError> {
+) -> Result<CaptureSummary, RunnerError> {
+    let config = config::production_config();
+    let provisioned = match config {
+        config::ProductionRunnerConfig::Unprovisioned => {
+            return Err(RunnerError::Unprovisioned);
+        }
+        config::ProductionRunnerConfig::Provisioned(provisioned) => provisioned,
+    };
     if runners.iter().map(String::as_str).ne(EXPECTED_RUNNERS) {
         return Err(RunnerError::RunnerSet);
     }
-    reject_unexpected_entries(capture_dir)?;
-    let trusted: TrustedRunnerKeys = read_json(&capture_dir.join("trusted-runner-keys-v1.json"))?;
-    if trusted.schema != "feathermark.trusted-runner-keys.v1" {
-        return Err(RunnerError::TrustedKeys);
-    }
-    let captures = EXPECTED_RUNNERS
-        .iter()
-        .map(|runner_id| read_json(&capture_dir.join(format!("{runner_id}.capture.json"))))
-        .collect::<Result<Vec<_>, _>>()?;
-    let lock = RunnerLock {
-        schema: "feathermark.runner-lock.v1".into(),
-        trusted_keys: trusted.keys,
-        runners: captures,
+    engine::capture_with(
+        &provisioned,
+        &transport::ProductionLauncherTransport,
+        capture_dir,
+        out,
+    )
+}
+
+pub fn verify_runner_lock_bytes(bytes: &[u8]) -> Result<OfflineLockSummary, RunnerError> {
+    let provisioned = match config::production_config() {
+        config::ProductionRunnerConfig::Unprovisioned => {
+            return Err(RunnerError::UnprovisionedTrust);
+        }
+        config::ProductionRunnerConfig::Provisioned(provisioned) => provisioned,
     };
-    verify_lock(&lock)?;
-    if let Some(parent) = out.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let mut encoded = serde_json::to_vec_pretty(&lock)?;
-    encoded.push(b'\n');
-    fs::write(out, encoded)?;
-    verify_runner_lock(out)
-}
-
-pub fn verify_runner_lock(path: &Path) -> Result<RunnerLock, RunnerError> {
-    let lock: RunnerLock = read_json(path)?;
-    verify_lock(&lock)?;
-    Ok(lock)
-}
-
-fn verify_lock(lock: &RunnerLock) -> Result<(), RunnerError> {
-    if lock.schema != "feathermark.runner-lock.v1" {
-        return Err(RunnerError::RunnerSet);
-    }
-    let keys = trusted_key_map(&lock.trusted_keys)?;
-    if lock.runners.len() != EXPECTED_RUNNERS.len() {
-        return Err(RunnerError::RunnerSet);
-    }
-    let mut snapshots = BTreeSet::new();
-    for (expected_id, capture) in EXPECTED_RUNNERS.iter().zip(&lock.runners) {
-        if capture.payload.runner_id != *expected_id {
-            return Err(RunnerError::RunnerSet);
-        }
-        verify_signature(capture, &keys[*expected_id])?;
-        validate_platform(&capture.payload)?;
-        if !snapshots.insert(capture.payload.snapshot_id.clone()) {
-            return Err(RunnerError::ReusedSnapshot(
-                capture.payload.snapshot_id.clone(),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn trusted_key_map(keys: &[TrustedRunnerKey]) -> Result<BTreeMap<String, [u8; 32]>, RunnerError> {
-    if keys.len() != EXPECTED_RUNNERS.len() {
-        return Err(RunnerError::TrustedKeys);
-    }
-    let mut decoded = BTreeMap::new();
-    for key in keys {
-        let bytes: [u8; 32] = hex::decode(&key.public_key_hex)
-            .ok()
-            .and_then(|value| value.try_into().ok())
-            .ok_or(RunnerError::TrustedKeys)?;
-        if decoded.insert(key.runner_id.clone(), bytes).is_some() {
-            return Err(RunnerError::TrustedKeys);
-        }
-    }
-    if decoded.keys().map(String::as_str).collect::<BTreeSet<_>>()
-        != EXPECTED_RUNNERS.into_iter().collect()
-    {
-        return Err(RunnerError::TrustedKeys);
-    }
-    Ok(decoded)
-}
-
-fn verify_signature(
-    capture: &SignedRunnerCapture,
-    public_key: &[u8; 32],
-) -> Result<(), RunnerError> {
-    let verifying_key = VerifyingKey::from_bytes(public_key)
-        .map_err(|_| RunnerError::Signature(capture.payload.runner_id.clone()))?;
-    let signature_bytes: [u8; 64] = hex::decode(&capture.signature_hex)
-        .ok()
-        .and_then(|value| value.try_into().ok())
-        .ok_or_else(|| RunnerError::Signature(capture.payload.runner_id.clone()))?;
-    let signature = Signature::from_bytes(&signature_bytes);
-    let message = serde_json::to_vec(&capture.payload)?;
-    verifying_key
-        .verify(&message, &signature)
-        .map_err(|_| RunnerError::Signature(capture.payload.runner_id.clone()))
-}
-
-fn validate_platform(payload: &RunnerCapturePayload) -> Result<(), RunnerError> {
-    if payload.schema != "feathermark.runner-capture.v1"
-        || payload.ram_bytes != 16 * 1024 * 1024 * 1024
-        || payload.monitor_scale_milli != 1000
-        || payload.monitor_refresh_millihz != 60_000
-        || required(&payload.os_version).is_err()
-        || required(&payload.os_build).is_err()
-        || required(&payload.kernel).is_err()
-        || required(&payload.snapshot_provider).is_err()
-        || required(&payload.snapshot_id).is_err()
-        || required(&payload.captured_at).is_err()
-        || payload.virtualized != payload.vm_image_digest.is_some()
-        || payload
-            .vm_image_digest
-            .as_deref()
-            .is_some_and(|digest| !valid_sha256_digest(digest))
-    {
-        return Err(RunnerError::Platform(payload.runner_id.clone()));
-    }
-    let actual = (
-        payload.cpu_model.as_str(),
-        payload.cpu_cores,
-        payload.arch.as_str(),
-        payload.os_name.as_str(),
-        payload.os_version.as_str(),
-        payload.display_session.as_str(),
-        payload.xdg_session_type.as_deref(),
-        payload.display.is_some(),
-        payload.wayland_display.is_some(),
-        payload.monitor_width_px,
-        payload.monitor_height_px,
-    );
-    let (expected, expects_wkwebview, expects_gtk) = match payload.runner_id.as_str() {
-        "fm-macos-arm64-v1" => (
-            (
-                "Apple M1",
-                8,
-                "aarch64",
-                "macOS",
-                payload.os_version.as_str(),
-                "native",
-                None,
-                false,
-                false,
-                2560,
-                1600,
-            ),
-            true,
-            false,
-        ),
-        "fm-macos-x86_64-v1" => (
-            (
-                "Intel Core i7-9750H",
-                6,
-                "x86_64",
-                "macOS",
-                payload.os_version.as_str(),
-                "native",
-                None,
-                false,
-                false,
-                1920,
-                1080,
-            ),
-            true,
-            false,
-        ),
-        "fm-ubuntu-x11-v1" => (
-            (
-                "Intel Core i5-8500",
-                6,
-                "x86_64",
-                "Ubuntu",
-                "24.04",
-                "x11",
-                Some("x11"),
-                true,
-                false,
-                1920,
-                1080,
-            ),
-            false,
-            true,
-        ),
-        "fm-ubuntu-wayland-v1" => (
-            (
-                "Intel Core i5-8500",
-                6,
-                "x86_64",
-                "Ubuntu",
-                "24.04",
-                "wayland",
-                Some("wayland"),
-                false,
-                true,
-                1920,
-                1080,
-            ),
-            false,
-            true,
-        ),
-        "fm-fedora-wayland-v1" => (
-            (
-                "Intel Core i5-8500",
-                6,
-                "x86_64",
-                "Fedora",
-                "43",
-                "wayland",
-                Some("wayland"),
-                false,
-                true,
-                1920,
-                1080,
-            ),
-            false,
-            true,
-        ),
-        _ => return Err(RunnerError::RunnerSet),
-    };
-    if actual != expected
-        || payload.wkwebview_version.is_some() != expects_wkwebview
-        || payload.gtk_version.is_some() != expects_gtk
-        || payload.webkitgtk_version.is_some() != expects_gtk
-        || payload
-            .wkwebview_version
-            .iter()
-            .chain(payload.gtk_version.iter())
-            .chain(payload.webkitgtk_version.iter())
-            .any(|version| required(version).is_err())
-    {
-        return Err(RunnerError::Platform(payload.runner_id.clone()));
-    }
-    Ok(())
-}
-
-fn required(value: &str) -> Result<(), ()> {
-    if value.is_empty() || value.contains('+') {
-        Err(())
-    } else {
-        Ok(())
-    }
-}
-
-fn valid_sha256_digest(value: &str) -> bool {
-    value.strip_prefix("sha256:").is_some_and(|hex| {
-        hex.len() == 64
-            && hex
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    let verified = verification::verify_runner_lock_bytes_with(bytes, &provisioned)?;
+    Ok(OfflineLockSummary {
+        runners: verified.identities.len(),
+        lock_sha256: verified.lock_sha256,
     })
 }
 
-fn reject_unexpected_entries(capture_dir: &Path) -> Result<(), RunnerError> {
-    let mut allowed: BTreeSet<String> = EXPECTED_RUNNERS
-        .iter()
-        .map(|id| format!("{id}.capture.json"))
-        .collect();
-    allowed.insert("trusted-runner-keys-v1.json".into());
-    for entry in fs::read_dir(capture_dir)? {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if !entry.file_type()?.is_file() || !allowed.contains(&name) {
-            return Err(RunnerError::UnexpectedEntry(entry.path()));
+pub fn open_committed_runner_lock(out: &Path) -> Result<OfflineLockSummary, RunnerError> {
+    let provisioned = match config::production_config() {
+        config::ProductionRunnerConfig::Unprovisioned => {
+            return Err(RunnerError::UnprovisionedTrust);
         }
-    }
-    Ok(())
+        config::ProductionRunnerConfig::Provisioned(provisioned) => provisioned,
+    };
+    Ok(transaction::open_committed_runner_lock_with(out, &provisioned)?.summary())
 }
 
-fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, RunnerError> {
-    Ok(serde_json::from_slice(&fs::read(path)?)?)
+#[cfg(test)]
+mod tests {
+    use super::encoding::{decode_probe_request, encode_probe_request};
+    use super::protocol::{ProbePurpose, ProbeRequestV1};
+    use super::test_support::{build_valid_lock, fake_transport};
+    use super::transaction::{
+        FailurePoint, open_committed_runner_lock_with, publish_runner_lock_with,
+    };
+    use super::verification::verify_runner_lock_bytes_with;
+
+    #[test]
+    fn request_cbor_is_deterministic_and_rejects_noncanonical_integers() {
+        let request = ProbeRequestV1 {
+            purpose: ProbePurpose::Enroll,
+            run_id: [0; 32],
+            runner_id: "fm-macos-arm64-v1".into(),
+            challenge: [1; 32],
+            issued_at_unix_ms: 1_000,
+            not_after_unix_ms: 31_000,
+            expected_snapshot_id: "snapshot".into(),
+            expected_snapshot_provider: "provider".into(),
+            expected_image_sha256: [2; 32],
+            expected_probe_sha256: [3; 32],
+            enrollment_commitment: None,
+            final_lock_sha256: None,
+            candidate_manifest_sha256: None,
+        };
+        let encoded = encode_probe_request(&request);
+        assert_eq!(encoded.first(), Some(&0x8e));
+        assert_eq!(decode_probe_request(&encoded).unwrap(), request);
+        assert_eq!(
+            encode_probe_request(&decode_probe_request(&encoded).unwrap()),
+            encoded
+        );
+
+        let mut noncanonical = encoded;
+        noncanonical.splice(1..2, [0x18, 0x01]);
+        assert!(decode_probe_request(&noncanonical).is_err());
+    }
+
+    #[test]
+    fn ten_exchange_lock_verifies_offline_and_rejects_enrollment_only() {
+        let fixture = build_valid_lock();
+        let verified = verify_runner_lock_bytes_with(&fixture.bytes, &fixture.config).unwrap();
+        assert_eq!(verified.identities.len(), 5);
+
+        let mut enrollment_only: serde_json::Value =
+            serde_json::from_slice(&fixture.bytes).unwrap();
+        enrollment_only["post_lock_exchanges"] = serde_json::json!([]);
+        assert!(
+            verify_runner_lock_bytes_with(
+                &serde_json::to_vec(&enrollment_only).unwrap(),
+                &fixture.config
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn offline_verifier_rejects_replay_stale_commitment_and_identity_mutations() {
+        let fixture = build_valid_lock();
+        let original: serde_json::Value = serde_json::from_slice(&fixture.bytes).unwrap();
+        let mut mutations = Vec::new();
+
+        let mut replay = original.clone();
+        replay["post_lock_exchanges"][0]["request"]["challenge"] =
+            replay["enrollment_exchanges"][0]["request"]["challenge"].clone();
+        mutations.push(replay);
+
+        let mut stale = original.clone();
+        stale["enrollment_exchanges"][0]["receipt"]["payload_cbor_hex"] =
+            serde_json::Value::String("00".into());
+        mutations.push(stale);
+
+        let mut commitment = original.clone();
+        commitment["enrollment_commitment"][0] = serde_json::json!(255);
+        mutations.push(commitment);
+
+        let mut identity = original;
+        identity["identities"][0]["cpu_cores"] = serde_json::json!(7);
+        mutations.push(identity);
+
+        for mutated in mutations {
+            assert!(
+                verify_runner_lock_bytes_with(
+                    &serde_json::to_vec(&mutated).unwrap(),
+                    &fixture.config,
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn production_offline_verifier_never_imports_caller_trust() {
+        let error =
+            super::verify_runner_lock_bytes(br#"{"trusted_keys":["attacker"]}"#).unwrap_err();
+        assert!(matches!(error, super::RunnerError::UnprovisionedTrust));
+    }
+
+    #[test]
+    fn private_fake_transport_drives_exact_ten_exchange_capture() {
+        let fake = fake_transport();
+        let directory = tempfile::tempdir().unwrap();
+        let captures = directory.path().join("captures");
+        let out = directory.path().join("runner-lock-v1.json");
+        let summary = super::engine::capture_with(&fake.config, &fake, &captures, &out).unwrap();
+        assert_eq!(summary.runners, 5);
+        assert_eq!(std::fs::read_dir(captures).unwrap().count(), 10);
+        assert!(open_committed_runner_lock_with(&out, &fake.config).is_ok());
+    }
+
+    #[test]
+    fn committed_pair_is_authoritative_and_precommit_failure_never_authorizes() {
+        let fixture = build_valid_lock();
+        let directory = tempfile::tempdir().unwrap();
+        let out = directory.path().join("runner-lock-v1.json");
+
+        publish_runner_lock_with(&fixture.bytes, &out, &fixture.config, FailurePoint::None)
+            .unwrap();
+        let committed = open_committed_runner_lock_with(&out, &fixture.config).unwrap();
+        assert_eq!(committed.summary().runners, 5);
+
+        let second_out = directory.path().join("failed-lock.json");
+        assert!(
+            publish_runner_lock_with(
+                &fixture.bytes,
+                &second_out,
+                &fixture.config,
+                FailurePoint::BeforeCommittedRename,
+            )
+            .is_err()
+        );
+        assert!(open_committed_runner_lock_with(&second_out, &fixture.config).is_err());
+
+        for (index, failure) in [
+            FailurePoint::AfterIncompleteFsync,
+            FailurePoint::AfterLockFsync,
+            FailurePoint::AfterLockRename,
+            FailurePoint::AfterLockParentFsync,
+            FailurePoint::AfterJournalRewriteFsync,
+            FailurePoint::AfterCommittedRename,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let staged_out = directory.path().join(format!("failed-stage-{index}.json"));
+            assert!(
+                publish_runner_lock_with(&fixture.bytes, &staged_out, &fixture.config, failure,)
+                    .is_err()
+            );
+            assert!(open_committed_runner_lock_with(&staged_out, &fixture.config).is_err());
+        }
+
+        let cleanup_out = directory.path().join("cleanup-lock.json");
+        publish_runner_lock_with(
+            &fixture.bytes,
+            &cleanup_out,
+            &fixture.config,
+            FailurePoint::Cleanup,
+        )
+        .unwrap();
+        assert!(open_committed_runner_lock_with(&cleanup_out, &fixture.config).is_ok());
+
+        let durable_out = directory.path().join("durable-lock.json");
+        publish_runner_lock_with(
+            &fixture.bytes,
+            &durable_out,
+            &fixture.config,
+            FailurePoint::AfterCommittedParentFsync,
+        )
+        .unwrap();
+        assert!(open_committed_runner_lock_with(&durable_out, &fixture.config).is_ok());
+    }
 }
+
+#[cfg(test)]
+mod test_support;

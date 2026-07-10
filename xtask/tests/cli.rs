@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)] // Integration harness launches only the built xtask binary.
+
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::process::Command;

@@ -1,13 +1,18 @@
 # FeatherMark fuzz targets
 
-`preview_event` exercises the real bounded protocol decoder and is an evidence-bearing Task 1A
-target.
+`preview_event` exercises the real bounded protocol decoder and is the evidence-bearing Task 1A
+target. Its exact input grammar is an eight-byte little-endian loaded revision followed by one
+newline-terminated preview-event NDJSON frame. Inputs shorter than eight bytes exercise the
+explicit harness error path without calling the decoder. Successful decodes assert revision,
+scroll-bound, and canonical-link invariants.
 
-`render_markdown` and `source_blocks` are build-only placeholders. The approved plan asks Task 1A
-to fuzz rendering and source-block invariants, but the implementations that own those invariants
-are deliberately sequenced in later tasks. Task 1A previously used local toy implementations;
-those could pass without testing FeatherMark and have been removed.
+The `corpus/render_markdown/` and `corpus/source_blocks/` directories remain unchanged as
+Task-1A-owned reserved, non-evidence seed data. Their former no-op harnesses and bins are removed.
+Task 1C alone recreates real harnesses against its typed-render/source-block owner and may then
+claim these corpora as evidence.
 
-An Architect must resolve the task-ownership contradiction, followed by Critic review, before
-either placeholder may be described as invariant or fuzz evidence. A successful `cargo fuzz
-build` for those two targets proves only that their harness entry points compile.
+Pinned evidence command:
+
+```sh
+cargo +nightly-2026-07-01 fuzz run --fuzz-dir fuzz preview_event -- -runs=10000 -seed=1
+```

@@ -6,5 +6,5 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-feathermark-protocol = { path = "../../crates/feathermark-protocol" }
-feathermark-types = { path = "../../crates/feathermark-types" }
+feathermark-protocol = { path = "../../crates/feathermark-protocol", version = "=0.1.0" }
+feathermark-types = { path = "../../crates/feathermark-types", version = "=0.1.0" }

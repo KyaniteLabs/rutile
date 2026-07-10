@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)] // Integration harnesses launch fixed git/cargo tools only.
+
 use std::fs;
 use std::process::Command;
 use tempfile::tempdir;

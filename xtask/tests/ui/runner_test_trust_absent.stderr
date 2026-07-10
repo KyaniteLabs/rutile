@@ -1,0 +1,16 @@
+error[E0432]: unresolved import `xtask::runner::test_support`
+ --> tests/ui/runner_test_trust_absent.rs:1:20
+  |
+1 | use xtask::runner::test_support::build_valid_lock;
+  |                    ^^^^^^^^^^^^ could not find `test_support` in `runner`
+  |
+note: found an item that was configured out
+ --> src/runner.rs
+  |
+  | mod test_support;
+  |     ^^^^^^^^^^^^
+note: the item is gated here
+ --> src/runner.rs
+  |
+  | #[cfg(test)]
+  | ^^^^^^^^^^^^

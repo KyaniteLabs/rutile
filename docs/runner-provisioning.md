@@ -1,0 +1,63 @@
+# FeatherMark runner provisioning
+
+Task 1A is intentionally fail-closed until the five real runners and their root launcher services
+exist. Do not create placeholder manifests, endpoints, snapshots, keys, or lock evidence.
+
+## Coordinator inputs
+
+An authorized operator independently reviews and places both files beside `xtask/Cargo.toml`:
+
+- `xtask/runner-trust-roots-v1.json`
+- `xtask/runner-dispatch-v1.toml`
+
+Both absent produces a normal `ProductionRunnerConfig::Unprovisioned` build. One missing file or
+any invalid row fails the build. The manifests contain exactly the ordered closed runner ids. Each
+trust row has a distinct nonzero Ed25519 public key. Each dispatch row pins the launcher endpoint,
+transport fingerprint, launcher protocol, absolute installed probe path and SHA-256, independently
+created enrollment snapshot id/provider/base-image SHA-256, and both macOS code-signing pins where
+applicable. Neither `--capture-dir`, environment variables, Cargo features, nor lock contents can
+override those constants.
+
+The production transport uses the pinned endpoint, requires the launcher's 32-byte transport
+fingerprint before accepting its bounded response, and then authenticates every receipt with the
+independently embedded Ed25519 root. Network identity alone is never lock authority.
+
+## Per-runner root service
+
+Install the launcher and probe from the same reviewed release build using the definitions under
+`xtask/launcher/`. Linux paths are `/usr/libexec/feathermark-runner-launcher` and
+`/usr/libexec/feathermark-runner-probe`. macOS paths are
+`/Library/PrivilegedHelperTools/com.feathermark.runner-launcher` and
+`/Library/Application Support/FeatherMark Runner/bin/feathermark-runner-probe`.
+
+The complete installed probe path must be root-owned, non-symlinked, and not group/world writable.
+The probe file must be regular, root-owned, link-count one, and match the coordinator and local
+SHA-256. Each launcher owns a unique Ed25519 private key that is unavailable to the dispatch
+account and probe. Its root-owned replay cache rejects a repeated `(run, purpose, challenge)`.
+
+Linux launch acceptance requires hashing the held no-follow probe descriptor and executing that
+descriptor with `fexecve`. macOS acceptance requires Security-framework validation of the pinned
+designated requirement and cdhash, copying only the held measured descriptor into a unique
+root-only `0500` file, rechecking length/hash/signature, and calling SDK `posix_spawn` on that exact
+copy while retaining both descriptors. Do not enable a row until native replacement-adversary and
+minimum-OS tests pass.
+
+## Enrollment and publication
+
+Restore each row to its independently pinned powered-off enrollment snapshot and start one native
+graphical session. Then build release `xtask` with the reviewed manifests and run the sole capture
+entry point from the build plan. It performs five enrollment exchanges, commits to their ordered
+identities and receipts, and performs five fresh post-lock exchanges on the same boot/session.
+
+`--capture-dir` is diagnostic output only. The authoritative state is the normal output file plus
+one permanent same-parent `.<out>.<run-id>.committed` record binding its basename, run id, length,
+and SHA-256. Writers and readers serialize through `.runner-lock.transaction-lock`; incomplete,
+orphan, multiple, mismatched, or quarantined states never authorize. Preserve the committed record
+for the entire lifetime of the lock.
+
+## External stop gate
+
+Task 1A remains incomplete until all five authentic services, keys, transport identities, snapshots,
+ten signed exchanges, permanent committed pair, exact native acceptance receipts, and final
+comparator scaffold lock exist. The currently reachable hardware is not evidence for the exact
+five-row matrix.

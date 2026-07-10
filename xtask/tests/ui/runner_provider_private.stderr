@@ -1,0 +1,13 @@
+error[E0603]: module `config` is private
+ --> tests/ui/runner_provider_private.rs:1:20
+  |
+1 | use xtask::runner::config::ProductionRunnerConfig;
+  |                    ^^^^^^  ---------------------- enum `ProductionRunnerConfig` is not publicly re-exported
+  |                    |
+  |                    private module
+  |
+note: the module `config` is defined here
+ --> src/runner.rs
+  |
+  | mod config;
+  | ^^^^^^^^^^

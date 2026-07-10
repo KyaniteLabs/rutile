@@ -2,11 +2,13 @@ use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+
+use crate::tool_process;
 use walkdir::WalkDir;
 
 pub const SCAFFOLD_AUTHOR_NAME: &str = "FeatherMark Comparator";
@@ -236,8 +238,9 @@ fn assert_allowlist_on_disk(repo: &Path) -> Result<(), ScaffoldError> {
 }
 
 fn git_commit(repo: &Path) -> Result<(), ScaffoldError> {
-    let output = Command::new("git")
-        .args([
+    let output = tool_process::git(
+        repo,
+        &[
             "-c",
             "commit.gpgsign=false",
             "commit",
@@ -245,15 +248,16 @@ fn git_commit(repo: &Path) -> Result<(), ScaffoldError> {
             "--no-gpg-sign",
             "-m",
             "chore: lock shared comparator scaffold",
-        ])
-        .env("GIT_AUTHOR_NAME", SCAFFOLD_AUTHOR_NAME)
-        .env("GIT_AUTHOR_EMAIL", SCAFFOLD_AUTHOR_EMAIL)
-        .env("GIT_AUTHOR_DATE", SCAFFOLD_TIMESTAMP)
-        .env("GIT_COMMITTER_NAME", SCAFFOLD_AUTHOR_NAME)
-        .env("GIT_COMMITTER_EMAIL", SCAFFOLD_AUTHOR_EMAIL)
-        .env("GIT_COMMITTER_DATE", SCAFFOLD_TIMESTAMP)
-        .current_dir(repo)
-        .output()?;
+        ],
+        &[
+            ("GIT_AUTHOR_NAME", SCAFFOLD_AUTHOR_NAME),
+            ("GIT_AUTHOR_EMAIL", SCAFFOLD_AUTHOR_EMAIL),
+            ("GIT_AUTHOR_DATE", SCAFFOLD_TIMESTAMP),
+            ("GIT_COMMITTER_NAME", SCAFFOLD_AUTHOR_NAME),
+            ("GIT_COMMITTER_EMAIL", SCAFFOLD_AUTHOR_EMAIL),
+            ("GIT_COMMITTER_DATE", SCAFFOLD_TIMESTAMP),
+        ],
+    )?;
     check_git(output, "git commit")?;
     Ok(())
 }
@@ -301,7 +305,7 @@ fn git_text(repo: &Path, args: &[&str]) -> Result<String, ScaffoldError> {
 }
 
 fn git(repo: &Path, args: &[&str]) -> Result<Output, ScaffoldError> {
-    let output = Command::new("git").args(args).current_dir(repo).output()?;
+    let output = tool_process::git(repo, args, &[])?;
     check_git(output, &format!("git {}", args.join(" ")))
 }
 

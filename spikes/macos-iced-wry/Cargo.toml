@@ -15,4 +15,4 @@ macos-iced = []
 test-control = []
 
 [dependencies]
-feathermark-spike-support = { path = "../feathermark-spike-support" }
+feathermark-spike-support = { path = "../feathermark-spike-support", version = "=0.1.0" }
