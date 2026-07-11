@@ -119,6 +119,35 @@ See `design/tokens.css` (primitive → semantic; components/templates reference 
 only). color-system, web-typography, spacing-system, and theming fill the generated
 ramps/scales from these anchors.
 
+## App chrome (native shells) — committed 2026-07-10, "specimen case"
+
+**Scope note:** this section covers the NATIVE app (Iced/macOS, GTK3/Linux). It shares
+tokens with the document surfaces but is implemented per-platform: **same tokens,
+native feel — never pixel-identical twins.** Implementation phase: post-0.2 unless
+pulled forward.
+
+- **Philosophy:** the app is the smoky quartz that holds the writing — quiet,
+  dark-warm, designed but nearly invisible. Chosen over invisible-chrome (a) by Simon.
+- **The app's entire fire budget: the caret.** 1px rutile-gold needle caret
+  (`--color-accent` at `--rule-needle`), subtle glint on focus gain. Nothing else in
+  the chrome may use high chroma.
+- **Grounds:** editor pane uses the document ground tokens (smoky dark / oatmeal
+  light, following system mode). Source and preview are one continuous world split by
+  a 1px hairline divider.
+- **Source typography:** proportional warm humanist face for markdown source
+  (manuscript, not terminal); mono only inside code blocks. Sizes from the type scale.
+- **Quiet syntax staining:** markdown marks (`##`, `**`, `>`, list markers) render
+  low-contrast muted gold; content stays full-contrast ink. Structure visible, syntax
+  receding — the LD-3 companion: never type it, barely see it.
+- **Selection:** warm translucent gold tint; never OS blue. Kyanite blue remains
+  banned in-product (studio moments only: about/first-run).
+- **Toolbar (default-off):** text-only borderless buttons, muted ink, needle-underline
+  hover. No icons in chrome.
+- **Native dialogs stay native:** save panels, dirty-close prompts, file pickers are
+  untouched OS surfaces.
+- **Chrome refusals:** no custom titlebars on Linux, no window tinting, no animated
+  chrome, no badges/dots, nothing competing with the caret.
+
 ## Build order
 
 this file → color-system + web-typography + theming + spacing-system →
