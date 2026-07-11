@@ -9,6 +9,7 @@ compile_error!("feature `linux-gtk` requires a Linux target");
 #[cfg(all(feature = "macos-shell", not(target_os = "macos")))]
 compile_error!("feature `macos-shell` requires a macOS target");
 
+pub mod actions;
 pub mod app;
 pub mod brand;
 pub mod platform;
