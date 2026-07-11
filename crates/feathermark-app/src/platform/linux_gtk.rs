@@ -1482,25 +1482,21 @@ impl LinuxProductSession {
 
     /// Adopts a recovered document (crash-recovery accept) as the live buffer.
     ///
-    /// The recovered snapshot is reconstructed at revision 0, so rather than swap
-    /// it in (which the reducer would treat as stale) the content is inserted as
-    /// a programmatic edit off a fresh untitled document: the buffer ends dirty
-    /// (unsaved work) with the app revision and document revision aligned.
+    /// The recovered document is swapped in directly at its own revision and
+    /// associated with its former path, so it becomes a *dirty* buffer editing
+    /// that file (a save targets the recovered path). This preserves the
+    /// `document_path` the previous insert-as-fresh-edit path dropped, and keeps
+    /// the document's revision instead of advancing it by a spurious edit.
     pub fn adopt_recovered(
         &mut self,
         recovered: RecoveredDocument,
         now_ms: u64,
     ) -> Result<(), String> {
-        let text = recovered.document.snapshot().to_string();
-        self.document = Document::new("").map_err(|error| error.to_string())?;
+        let hint = recovered.entry.document_path.clone().map(PathBuf::from);
+        self.document = recovered.document;
         self.closed = false;
-        for effect in self.app.reduce(AppMessage::NewDocument) {
-            if let AppEffect::ScheduleRender { revision } = effect {
-                self.scheduler
-                    .submit(RenderRequest::new(revision, Arc::from("")), now_ms);
-            }
-        }
-        self.insert_text(Selection::collapsed(0), &text, now_ms)?;
+        let effects = self.app.adopt_recovered(&self.document, hint);
+        self.schedule_effects(&effects, now_ms);
         Ok(())
     }
 
@@ -1886,13 +1882,14 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
                     }
                 };
             let snapshot = session.borrow().snapshot();
-            if let Err(error) = editor_adapter.borrow_mut().install_open_snapshot(&snapshot) {
+            if let Err(error) = follow_shared_edit(
+                &editor_adapter,
+                &snapshot,
+                &applied.changes,
+                applied.selection_after,
+            ) {
                 window.set_title(&status_title(&format!("format mirror failed: {error}")));
-                return;
             }
-            let _ = editor_adapter
-                .borrow()
-                .set_selection(applied.selection_after);
         })
     };
 
@@ -2175,15 +2172,12 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
                     Err(_) => return gtk::glib::Propagation::Proceed,
                 };
                 let snapshot = session.borrow().snapshot();
-                if editor_adapter
-                    .borrow_mut()
-                    .install_open_snapshot(&snapshot)
-                    .is_ok()
-                {
-                    let _ = editor_adapter
-                        .borrow()
-                        .set_selection(applied.selection_after);
-                }
+                let _ = follow_shared_edit(
+                    &editor_adapter,
+                    &snapshot,
+                    &applied.changes,
+                    applied.selection_after,
+                );
                 return gtk::glib::Propagation::Stop;
             }
 
@@ -2992,6 +2986,31 @@ fn prompt_recover(parent: &gtk::ApplicationWindow) -> bool {
     response == gtk::ResponseType::Yes
 }
 
+/// Follows a shared (AppState-driven) mutation on the GTK adapter incrementally
+/// by replaying its `changes` through `apply_external_change` (the same path
+/// external edits and undo/redo use), which preserves the viewport, then
+/// installs `selection`. Falls back to a full `install_open_snapshot` from
+/// `authoritative` only when a `ChangeSet` cannot be applied incrementally — the
+/// fallback replaces the whole buffer, so it recovers correctly even from a
+/// partially-applied change sequence.
+fn follow_shared_edit(
+    adapter: &Rc<RefCell<GtkSourceEditorAdapter>>,
+    authoritative: &feathermark_core::DocumentSnapshot,
+    changes: &[ChangeSet],
+    selection: Selection,
+) -> Result<(), EditorError> {
+    let applied_incrementally = !changes.is_empty() && {
+        let mut adapter = adapter.borrow_mut();
+        changes
+            .iter()
+            .all(|change| adapter.apply_external_change(change).is_ok())
+    };
+    if !applied_incrementally {
+        adapter.borrow_mut().install_open_snapshot(authoritative)?;
+    }
+    adapter.borrow().set_selection(selection)
+}
+
 /// Text-only, borderless, no-icon formatting toolbar (DESIGN-SYSTEM: default-off
 /// chrome). Each button routes through the shared format action.
 fn build_format_toolbar(format_action: &Rc<dyn Fn(FormatCommand)>) -> gtk::Box {
@@ -3236,14 +3255,9 @@ impl FindBar {
                         return;
                     }
                 };
-                let snapshot = session.borrow().snapshot();
-                if adapter
-                    .borrow_mut()
-                    .install_open_snapshot(&snapshot)
-                    .is_ok()
-                    && let Some(selection) = applied.selection_after
-                {
-                    let _ = adapter.borrow().set_selection(selection);
+                if let Some(selection) = applied.selection_after {
+                    let snapshot = session.borrow().snapshot();
+                    let _ = follow_shared_edit(&adapter, &snapshot, &applied.changes, selection);
                 }
             });
         }
@@ -3279,8 +3293,10 @@ impl FindBar {
                         return;
                     }
                 };
-                let snapshot = session.borrow().snapshot();
-                let _ = adapter.borrow_mut().install_open_snapshot(&snapshot);
+                if let Some(selection) = applied.selection_after {
+                    let snapshot = session.borrow().snapshot();
+                    let _ = follow_shared_edit(&adapter, &snapshot, &applied.changes, selection);
+                }
                 window.set_title(&status_title(&format!("Replaced {}", applied.replaced)));
             });
         }

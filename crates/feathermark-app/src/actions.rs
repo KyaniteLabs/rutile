@@ -31,8 +31,8 @@ use std::ops::Range;
 use std::path::PathBuf;
 
 use feathermark_core::{
-    EditError, EditPlanError, FindDirection, FindError, FindQuery, ReplaceError, Selection,
-    SessionWindowV1, SmartEnterAction,
+    ChangeSet, EditError, EditPlanError, FindDirection, FindError, FindQuery, ReplaceError,
+    Selection, SessionWindowV1, SmartEnterAction,
 };
 use feathermark_types::Revision;
 use thiserror::Error;
@@ -94,6 +94,13 @@ pub struct FormatApplied {
     pub selection_after: Selection,
     /// The document revision after the edit committed.
     pub revision: Revision,
+    /// The applied [`ChangeSet`]s, in commit order — always exactly one for a
+    /// format command (a single [`EditPlan`](feathermark_core::EditPlan)). A
+    /// shell replays them through the incremental
+    /// [`apply_external_change`](feathermark_core::EditorAdapter::apply_external_change)
+    /// path (preserving its viewport) instead of re-installing the whole buffer;
+    /// see [`ReplaceApplied::changes`] for why the shape is a `Vec`.
+    pub changes: Vec<ChangeSet>,
     /// Reducer effects (e.g. a coalesced `ScheduleRender`) to run.
     pub effects: Vec<AppEffect>,
 }
@@ -114,6 +121,24 @@ pub struct ReplaceApplied {
     pub selection_after: Option<Selection>,
     /// The document revision after the (possibly no-op) action.
     pub revision: Revision,
+    /// The applied [`ChangeSet`]s, in commit order: one for
+    /// [`replace_current`](crate::app::AppState::replace_current), and one per
+    /// bounded plan chunk for
+    /// [`replace_all`](crate::app::AppState::replace_all) (the engine chunks a
+    /// large replace-all into a sequence of `EditPlan`s). Empty for a no-op.
+    ///
+    /// A `Vec<ChangeSet>` — not a single merged `ChangeSet` — is the shape that
+    /// lets a shell follow the mutation incrementally: each [`ChangeSet`] chains
+    /// `before`→`after` exactly as `Document::apply` produced it, so a shell
+    /// replays the sequence through
+    /// [`apply_external_change`](feathermark_core::EditorAdapter::apply_external_change)
+    /// (the same path it uses for undo/redo and external edits), preserving its
+    /// viewport. Merging into one `ChangeSet` was rejected because the plans are
+    /// applied sequentially: every plan's edit offsets live in the coordinate
+    /// space of the intermediate document (after the prior plans), not a single
+    /// base, so flattening them would require recomputing offsets and could
+    /// introduce overlap — weakening the per-plan bounds Wave 1 froze.
+    pub changes: Vec<ChangeSet>,
     /// Reducer effects to run; empty for a no-op.
     pub effects: Vec<AppEffect>,
 }

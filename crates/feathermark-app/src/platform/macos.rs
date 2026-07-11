@@ -5,10 +5,10 @@ use std::sync::{Arc, Mutex};
 
 use feathermark_core::{
     AdapterCommitId, AutosaveEntryV1, AutosaveStore, ChangeSet, Counts, DiskVersion, Document,
-    Edit, EditTransaction, EditorEvent, FileError, FileService, FindDirection, FindQuery,
-    FormatCommand, LocalFileService, MAX_DOCUMENT_BYTES, RecoveredDocument, ScrollAnchorView,
-    ScrollClock, ScrollGeometry, ScrollMap, ScrollOutcome, ScrollPosition, ScrollSynchronizer,
-    ScrollTarget, Selection, SessionStateV1, SessionWindowV1, TransactionKind, apply_editor_commit,
+    EditorEvent, FileError, FileService, FindDirection, FindQuery, FormatCommand, LocalFileService,
+    MAX_DOCUMENT_BYTES, RecoveredDocument, ScrollAnchorView, ScrollClock, ScrollGeometry,
+    ScrollMap, ScrollOutcome, ScrollPosition, ScrollSynchronizer, ScrollTarget, Selection,
+    SessionStateV1, SessionWindowV1, apply_editor_commit,
 };
 use feathermark_protocol::{PreviewHostCommand, RenderUrl};
 use feathermark_types::{InteractionId, Revision};
@@ -782,39 +782,24 @@ impl ProductSession {
     }
 
     /// Adopts a crash-recovered document as the working buffer. The recovered
-    /// text — newer than any on-disk copy — becomes the current, *dirty* buffer
-    /// (installed via one programmatic edit so the reducer marks it modified);
-    /// its former path is remembered as a save hint. Any bound autosave store is
-    /// preserved so continued autosaves keep monotonic sequences.
+    /// document — newer than any on-disk copy — is swapped in directly at its own
+    /// revision and associated with its former path, so it becomes the current,
+    /// *dirty* buffer editing that file (a save targets the recovered path
+    /// instead of prompting from scratch). The path is also remembered as a save
+    /// hint. Any bound autosave store is preserved so continued autosaves keep
+    /// monotonic sequences.
     pub fn adopt_recovered(&mut self, recovered: RecoveredDocument) -> Result<(), MacError> {
         let hint = recovered.entry.document_path.clone().map(PathBuf::from);
-        let text = recovered.document.snapshot().to_string();
         let store = self.app.autosave_store().cloned();
 
-        let mut document = Document::new("").map_err(|error| MacError::Core(error.to_string()))?;
-        document
-            .apply(EditTransaction {
-                base_revision: document.revision(),
-                id: 0,
-                kind: TransactionKind::Programmatic,
-                edits: vec![Edit {
-                    byte_range: 0..0,
-                    replacement: text,
-                }],
-            })
-            .map_err(|error| MacError::Core(error.to_string()))?;
-
         let mut app = AppState::new();
-        app.reduce(AppMessage::NewDocument);
-        app.reduce(AppMessage::DocumentEdited {
-            revision: document.revision(),
-        });
         if let Some(store) = store {
             app.bind_autosave(store)
                 .map_err(|error| MacError::Core(error.to_string()))?;
         }
+        app.adopt_recovered(&recovered.document, hint.clone());
 
-        self.document = document;
+        self.document = recovered.document;
         self.app = app;
         self.scheduler = RenderScheduler::new();
         self.scroll = None;

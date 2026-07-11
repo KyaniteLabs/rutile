@@ -1,11 +1,36 @@
 use feathermark_app::actions::ActionError;
 use feathermark_app::app::{AppEffect, AppMessage, AppState, PreviewState};
 use feathermark_core::{
-    AutosaveStore, Document, EditPlanError, ExternalResolution, FileService, FindDirection,
-    FindQuery, FormatCommand, LocalFileService, MatchMode, Selection, SmartEnterAction,
+    AutosaveStore, ChangeSet, Document, EditPlanError, ExternalResolution, FileService,
+    FindDirection, FindQuery, FormatCommand, LocalFileService, MatchMode, Selection,
+    SmartEnterAction,
 };
 use feathermark_protocol::PreviewEventV1;
 use feathermark_types::SafeLinkTarget;
+
+/// Replays a returned [`ChangeSet`] sequence against `before` exactly as a shell
+/// does through `apply_external_change` (each change's edits applied last-first),
+/// so a test can prove the returned changes reconstruct the mutated buffer.
+fn replay(before: &str, changes: &[ChangeSet]) -> String {
+    let mut text = before.to_owned();
+    for change in changes {
+        for edit in change.edits.iter().rev() {
+            text.replace_range(edit.byte_range.clone(), &edit.replacement);
+        }
+    }
+    text
+}
+
+/// Asserts the change sequence chains `before`→`after` contiguously from
+/// `first_before`, ending at `last_after`.
+fn assert_chained(changes: &[ChangeSet], first_before: u64, last_after: u64) {
+    assert!(!changes.is_empty(), "expected at least one change");
+    assert_eq!(changes.first().unwrap().before, first_before);
+    assert_eq!(changes.last().unwrap().after, last_after);
+    for pair in changes.windows(2) {
+        assert_eq!(pair[0].after, pair[1].before, "changes must chain");
+    }
+}
 
 #[test]
 fn editing_marks_dirty_and_coalesces_render_through_an_effect() {
@@ -296,6 +321,11 @@ fn format_command_applies_the_plan_through_the_edit_path() {
         applied.effects,
         vec![AppEffect::ScheduleRender { revision: 1 }]
     );
+    // The applied ChangeSet is returned so a shell can follow the mutation
+    // incrementally, and replaying it reconstructs the formatted buffer.
+    assert_eq!(applied.changes.len(), 1);
+    assert_chained(&applied.changes, 0, 1);
+    assert_eq!(replay("bold me", &applied.changes), "**bold** me");
     assert!(state.dirty());
     assert_eq!(state.revision(), 1);
 }
@@ -316,6 +346,9 @@ fn smart_enter_continues_a_list_and_reports_the_action() {
             marker: feathermark_core::ListMarker::Dash
         })
     );
+    assert_eq!(applied.changes.len(), 1);
+    assert_chained(&applied.changes, 0, 1);
+    assert_eq!(replay("- item", &applied.changes), "- item\n- ");
     assert!(state.dirty());
 }
 
@@ -378,6 +411,9 @@ fn replace_current_replaces_the_highlighted_match() {
     assert_eq!(document.snapshot().to_string(), "hello there");
     assert_eq!(applied.replaced, 1);
     assert!(applied.selection_after.is_some());
+    assert_eq!(applied.changes.len(), 1);
+    assert_chained(&applied.changes, 0, 1);
+    assert_eq!(replay("hello world", &applied.changes), "hello there");
     assert!(state.dirty());
     // The stale highlighted range is cleared after the buffer mutates.
     assert_eq!(state.find_session().unwrap().current, None);
@@ -392,6 +428,7 @@ fn replace_all_over_multiple_plans_applies_fully() {
     let mut document = Document::new(&"x ".repeat(count)).unwrap();
     state.start_find(plain_query("x"), FindDirection::Forward, false);
 
+    let before = "x ".repeat(count);
     let applied = state.replace_all(&mut document, "yy".to_owned()).unwrap();
 
     assert_eq!(applied.replaced, count);
@@ -399,6 +436,16 @@ fn replace_all_over_multiple_plans_applies_fully() {
     // More than one plan applied means the revision advanced by more than one.
     assert!(document.revision() >= 2, "expected chunked application");
     assert!(!applied.effects.is_empty());
+    // A chunked replace-all returns one ChangeSet per bounded plan; the sequence
+    // chains contiguously and, replayed in order (as a shell does), reconstructs
+    // the fully replaced buffer.
+    assert!(
+        applied.changes.len() >= 2,
+        "expected more than one ChangeSet for a chunked replace-all"
+    );
+    assert_chained(&applied.changes, 0, document.revision());
+    assert_eq!(applied.changes.len() as u64, document.revision());
+    assert_eq!(replay(&before, &applied.changes), "yy ".repeat(count));
     assert!(state.dirty());
 }
 
@@ -413,6 +460,7 @@ fn replace_all_with_no_matches_is_a_noop() {
     assert_eq!(applied.replaced, 0);
     assert_eq!(applied.selection_after, None);
     assert!(applied.effects.is_empty());
+    assert!(applied.changes.is_empty());
     assert_eq!(document.snapshot().to_string(), "nothing here");
     assert!(!state.dirty());
 }
@@ -477,6 +525,54 @@ fn autosave_tick_then_recover_round_trips() {
     // The next tick continues the sequence past what was recovered.
     let next = restarted.autosave_tick(&document, 2).unwrap().unwrap();
     assert_eq!(next.sequence, 1);
+}
+
+#[test]
+fn adopt_recovered_keeps_revision_and_document_path() {
+    let dir = ScratchDir::new("adopt");
+    let (path, disk) = disk_version("adopt-doc", "on disk");
+
+    // A session editing the file at `path` autosaves its unsaved buffer, so the
+    // journal entry remembers which file it was capturing.
+    let mut state = AppState::new();
+    state
+        .bind_autosave(AutosaveStore::new(dir.0.clone()))
+        .unwrap();
+    state.reduce(AppMessage::DocumentOpened {
+        revision: 0,
+        path: path.clone(),
+        disk,
+    });
+    let document = Document::new("unsaved recovered body").unwrap();
+    let entry = state.autosave_tick(&document, 1).unwrap().unwrap();
+    assert_eq!(entry.document_path.as_deref(), path.to_str());
+
+    // After a crash, a fresh state recovers and adopts the buffer.
+    let mut restarted = AppState::new();
+    restarted
+        .bind_autosave(AutosaveStore::new(dir.0.clone()))
+        .unwrap();
+    let recovered = restarted.recover().unwrap().expect("something to recover");
+    // Core reconstructs recovered snapshots at revision 0 (the open-a-file
+    // baseline); the original numeric revision would need a frozen-core change.
+    assert_eq!(recovered.document.revision(), 0);
+
+    let recovered_path = recovered
+        .entry
+        .document_path
+        .clone()
+        .map(std::path::PathBuf::from);
+    let effects = restarted.adopt_recovered(&recovered.document, recovered_path);
+
+    // The adopted buffer keeps the document's own revision and — the 2L gap this
+    // closes — its document path, so a save targets the original file. It is
+    // dirty with no saved-disk baseline (the recovered content was never
+    // written), and it schedules a render at that revision.
+    assert_eq!(restarted.revision(), recovered.document.revision());
+    assert_eq!(restarted.path(), Some(path.as_path()));
+    assert!(restarted.dirty());
+    assert_eq!(restarted.saved_disk(), None);
+    assert_eq!(effects, vec![AppEffect::ScheduleRender { revision: 0 }]);
 }
 
 #[test]

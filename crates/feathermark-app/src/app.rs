@@ -2,8 +2,8 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use feathermark_core::{
-    AutosaveEntryV1, AutosaveError, AutosaveStore, Counts, DiskVersion, Document, EditError,
-    EditPlan, ExportError, ExportRequest, ExternalResolution, FindDirection, FindQuery,
+    AutosaveEntryV1, AutosaveError, AutosaveStore, ChangeSet, Counts, DiskVersion, Document,
+    EditError, EditPlan, ExportError, ExportRequest, ExternalResolution, FindDirection, FindQuery,
     FormatCommand, RecoveredDocument, RenderError, ReplaceSpec, SESSION_SCHEMA_V1, Selection,
     SessionSelectionV1, SessionStateV1, SessionWindowV1, apply_format, render_export_page,
     smart_enter,
@@ -338,11 +338,12 @@ impl AppState {
         } else {
             (None, apply_format(document, selection, command)?)
         };
-        let (selection_after, effects) = self.apply_edit_plans(document, vec![plan])?;
+        let (selection_after, changes, effects) = self.apply_edit_plans(document, vec![plan])?;
         Ok(FormatApplied {
             action,
             selection_after,
             revision: document.revision(),
+            changes,
             effects,
         })
     }
@@ -425,13 +426,14 @@ impl AppState {
                 replaced: 0,
                 selection_after: None,
                 revision: document.revision(),
+                changes: Vec::new(),
                 effects: Vec::new(),
             });
         };
         let spec = ReplaceSpec::new(query, replacement)?;
         let text = document.snapshot().to_string();
         let plan = feathermark_core::replace_current(document.revision(), &text, &spec, current)?;
-        let (selection_after, effects) = self.apply_edit_plans(document, vec![plan])?;
+        let (selection_after, changes, effects) = self.apply_edit_plans(document, vec![plan])?;
         if let Some(session) = self.find.as_mut() {
             session.current = None;
         }
@@ -439,6 +441,7 @@ impl AppState {
             replaced: 1,
             selection_after: Some(selection_after),
             revision: document.revision(),
+            changes,
             effects,
         })
     }
@@ -468,11 +471,12 @@ impl AppState {
                 replaced: 0,
                 selection_after: None,
                 revision: document.revision(),
+                changes: Vec::new(),
                 effects: Vec::new(),
             });
         }
         let replaced = feathermark_core::match_count(&text, spec.query());
-        let (selection_after, effects) = self.apply_edit_plans(document, plans)?;
+        let (selection_after, changes, effects) = self.apply_edit_plans(document, plans)?;
         if let Some(session) = self.find.as_mut() {
             session.current = None;
         }
@@ -480,6 +484,7 @@ impl AppState {
             replaced,
             selection_after: Some(selection_after),
             revision: document.revision(),
+            changes,
             effects,
         })
     }
@@ -569,6 +574,44 @@ impl AppState {
         }
     }
 
+    /// Adopts a crash-recovered [`Document`] as the working buffer.
+    ///
+    /// The reducer takes on `document`'s own revision and is associated with the
+    /// recovered `document_path` (the file the autosave entry was capturing), so
+    /// saves and session-restore target the original file rather than an
+    /// untitled buffer. The buffer is marked dirty because the recovered
+    /// snapshot is newer than any on-disk copy, and `saved_disk` is cleared (the
+    /// recovered content has never been written). Returns the render effect to
+    /// schedule.
+    ///
+    /// This preserves what the app *can* preserve without touching the frozen
+    /// core contracts: unlike inserting the recovered text as a fresh edit off a
+    /// new untitled document (which advanced the revision by one, added a
+    /// spurious undo entry, and dropped the path), the caller swaps the recovered
+    /// document in directly. The original numeric revision recorded in the
+    /// journal entry (`document_revision`) cannot be restored into the `Document`
+    /// itself — core reconstructs every recovered snapshot at revision 0 and
+    /// exposes no revision setter — so that part is a core follow-up; a
+    /// freshly-loaded document already starts at revision 0, so this matches the
+    /// open-a-file baseline.
+    pub fn adopt_recovered(
+        &mut self,
+        document: &Document,
+        document_path: Option<PathBuf>,
+    ) -> Vec<AppEffect> {
+        self.revision = document.revision();
+        self.dirty = true;
+        self.path = document_path;
+        self.saved_disk = None;
+        self.external_conflict = None;
+        self.preview = PreviewState::Waiting {
+            revision: self.revision,
+        };
+        vec![AppEffect::ScheduleRender {
+            revision: self.revision,
+        }]
+    }
+
     /// Captures session-restore state from the current document path plus the
     /// platform-supplied selection, viewport, and window frame.
     pub fn capture_session_state(
@@ -648,27 +691,30 @@ impl AppState {
 
     /// Applies a non-empty sequence of edit plans through the existing
     /// transaction path and advances the reducer once at the final revision.
-    /// Returns the last plan's selection plus the reducer effects.
+    /// Returns the last plan's selection, the per-plan [`ChangeSet`]s (in commit
+    /// order, so a shell can follow the mutation incrementally), and the reducer
+    /// effects.
     fn apply_edit_plans(
         &mut self,
         document: &mut Document,
         plans: Vec<EditPlan>,
-    ) -> Result<(Selection, Vec<AppEffect>), EditError> {
+    ) -> Result<(Selection, Vec<ChangeSet>, Vec<AppEffect>), EditError> {
         debug_assert!(
             !plans.is_empty(),
             "apply_edit_plans requires a non-empty batch"
         );
         let mut selection_after = Selection::collapsed(0);
+        let mut changes = Vec::with_capacity(plans.len());
         for plan in plans {
             selection_after = plan.selection_after();
             let id = self.next_transaction_id;
             self.next_transaction_id = self.next_transaction_id.saturating_add(1);
-            document.apply(plan.into_transaction(id))?;
+            changes.push(document.apply(plan.into_transaction(id))?);
         }
         let effects = self.reduce(AppMessage::DocumentEdited {
             revision: document.revision(),
         });
-        Ok((selection_after, effects))
+        Ok((selection_after, changes, effects))
     }
 }
 
