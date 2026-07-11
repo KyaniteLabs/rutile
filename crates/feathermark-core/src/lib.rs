@@ -6,6 +6,7 @@ mod export_contract;
 mod files;
 mod find_contract;
 mod format_contract;
+mod format_engine;
 mod render;
 mod scroll;
 mod security;
@@ -39,6 +40,7 @@ pub use format_contract::{
     MAX_PLAN_TOTAL_BYTES, MAX_PLANNED_REPLACEMENT_BYTES, MAX_PLANNED_SPAN_BYTES, OrderedDelimiter,
     SmartEnterAction,
 };
+pub use format_engine::{SmartEnterOutcome, apply_format, smart_enter};
 pub use render::{
     MAX_GENERATED_BODY_BYTES, MAX_RENDER_NESTING_DEPTH, MAX_RENDERED_PAGE_BYTES,
     MAX_SOURCE_BLOCK_BYTES, RenderError, RenderLimits, RenderedPage, SourceBlock, SourceBlockKind,
