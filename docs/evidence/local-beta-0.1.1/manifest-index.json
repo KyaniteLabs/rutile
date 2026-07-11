@@ -1,0 +1,95 @@
+{
+  "schema": "feathermark-local-beta-evidence-v1",
+  "version": "0.1.1",
+  "source_commit": "8b0aae6ff3c2566d975f20f926a9480bcdbc15d4",
+  "created_at": "2026-07-11T03:14:38Z",
+  "delta_over_0_1_0": {
+    "summary": "0.1.1 = 0.1.0 + the three merged render-DoS fixes; no other product-code changes",
+    "security_fix_commits": [
+      {
+        "commit": "62cf4f092ec29dba14dba4e623feabcea3402c1a",
+        "merged_via": "533744c (PR #3, chore/evidence-debt-closure)",
+        "fixes": [
+          "vendored pulldown-cmark 0.13.4 with minimal fm1 patch (empty tight paragraph panic) under vendor/pulldown-cmark via [patch.crates-io]",
+          "zero-width Paragraph source-block anchor coerced to LeafFallback (InvalidSourceRange abort)"
+        ]
+      },
+      {
+        "commit": "52a1219",
+        "merged_via": "832805c (PR #4, qa/ultraqa-round1)",
+        "fixes": [
+          "bounded Markdown nesting depth to prevent stack-overflow DoS on deeply nested input"
+        ]
+      }
+    ],
+    "non_code_changes_since_fixes": "commits be018de..2cfe2cd on main add docs/design files only (DESIGN-SYSTEM.md, design/tokens.css, docs/research, docs/superpowers/specs); zero changes under crates/, xtask/src, vendor/, fuzz/, Cargo.toml, Cargo.lock",
+    "release_branch_change": "commit 8b0aae6 is the version bump only (manifests, lockfiles, xtask packaging consts, and their tests)"
+  },
+  "artifacts": [
+    {
+      "target": "macos-arm64",
+      "label": "local-unnotarized-macos-arm64",
+      "artifact": "Rutile-0.1.1-macos-arm64.app.zip",
+      "bytes": 1835938,
+      "artifact_sha256": "1dac81790f5e35a8c45c719b7775d78be4879c8cd0c0f7b2d2add57071c5c4bd",
+      "manifest_sha256": "8b828bd8c147eee7cd428542ffcc3c8a6f4d8a27099f19be5ee74d31c0370b51",
+      "build_input_sha256": "995d0eb5b37cf15500a06cd3f16a4b92194401e3fb5b322ada68b3df1c4fbea4",
+      "packaged_executable_sha256": "05a152e4b637f4775d7dee960548d8fa74bf587c74fb400ab8c33fbf99a78b6c",
+      "package_smoke": "verified: zip re-extracted with ditto; codesign --verify --strict passed; embedded executable SHA-256 matches manifest; embedded package-manifest-v1.json records version 0.1.1 and source commit 8b0aae6",
+      "signed": false,
+      "notarized": false
+    },
+    {
+      "target": "macos-arm64",
+      "label": "local-unnotarized-macos-arm64",
+      "artifact": "Rutile-0.1.1-macos-arm64.dmg",
+      "bytes": 2315713,
+      "artifact_sha256": "bd8881ce5f76ea0759f49bf1f1c926f8c3d45e28b0a0b2ec96749b891817462a",
+      "manifest_sha256": "45e47b24e7287b2c2e7c80b203d7881d9df1d1b01f9e9d9cf1de1f0984eaf26c",
+      "build_input_sha256": "995d0eb5b37cf15500a06cd3f16a4b92194401e3fb5b322ada68b3df1c4fbea4",
+      "packaged_executable_sha256": "05a152e4b637f4775d7dee960548d8fa74bf587c74fb400ab8c33fbf99a78b6c",
+      "package_smoke": "verified: DMG manifest references the same packaged executable SHA-256 as the app.zip",
+      "signed": false,
+      "notarized": false
+    },
+    {
+      "target": "linux-x86_64",
+      "label": "linux-x86_64-unverified-wayland",
+      "artifact": "Rutile-0.1.1-linux-x86_64.tar.zst",
+      "bytes": 661765,
+      "artifact_sha256": "f3b54ca59a58d2bbe04e756cbdc63e98f492b5d9fd9ffbe6acf9db569e5e3d37",
+      "manifest_sha256": "5356a5d1c31414fe1f5b30948664d2eb0610bc0a19d2b8191466c4e327fc2db8",
+      "build_input_sha256": "a0b4a97da272a12ada7644abeab65ce5490f093494fdf2e95e693cb324a3b68e",
+      "packaged_executable_sha256": "a0b4a97da272a12ada7644abeab65ce5490f093494fdf2e95e693cb324a3b68e",
+      "package_smoke": "verified: archive manifest SHA-256 matches build input; equivalent build-input binary passed the 50-cycle WebKitGTK lifecycle gate under Xvfb on Ubuntu 24.04 x86_64",
+      "signed": false,
+      "notarized": false
+    },
+    {
+      "target": "linux-x86_64",
+      "label": "linux-x86_64-unverified-wayland",
+      "artifact": "feathermark_0.1.1_amd64.deb",
+      "bytes": 662690,
+      "artifact_sha256": "9428df50b9e5aee62001ebbc7c842197668fb75ffd08c409d7e2b842751e9529",
+      "manifest_sha256": "7f73254d49f7e3177390237fc45668e42dd277c5d164bf9700645ca3a71ed60f",
+      "build_input_sha256": "a0b4a97da272a12ada7644abeab65ce5490f093494fdf2e95e693cb324a3b68e",
+      "packaged_executable_sha256": "a0b4a97da272a12ada7644abeab65ce5490f093494fdf2e95e693cb324a3b68e",
+      "package_smoke": "verified: dpkg -i succeeded on Niko; installed /usr/bin/feathermark SHA-256 matches manifest; dpkg reports Version 0.1.1, install ok installed",
+      "signed": false,
+      "notarized": false
+    },
+    {
+      "target": "linux-x86_64",
+      "label": "linux-x86_64-unverified-wayland",
+      "artifact": "feathermark-0.1.1-1.x86_64.rpm",
+      "bytes": 791150,
+      "artifact_sha256": "f060885814fe83c9419cabd7a2e1c166f148d106ec0b0dca792475cf42df5f3a",
+      "manifest_sha256": "79c6e1c6941cf8974663a7c7dd7185e18699076c48244b125d8efb2a75b31aef",
+      "build_input_sha256": "a0b4a97da272a12ada7644abeab65ce5490f093494fdf2e95e693cb324a3b68e",
+      "packaged_executable_sha256": "a0b4a97da272a12ada7644abeab65ce5490f093494fdf2e95e693cb324a3b68e",
+      "package_smoke": "not verified: no RPM-compatible host available (unchanged 0.1.0 debt)",
+      "signed": false,
+      "notarized": false
+    }
+  ]
+}
