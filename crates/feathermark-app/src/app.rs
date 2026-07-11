@@ -703,6 +703,26 @@ impl AppState {
             !plans.is_empty(),
             "apply_edit_plans requires a non-empty batch"
         );
+        // All-or-nothing size guard. The plans are applied in sequence and each
+        // `Document::apply` rejects a post-edit document over the cap. If a
+        // *middle* plan failed that way, earlier plans would already be committed
+        // to the document while the reducer and adapter stayed behind — wedging
+        // every later edit with a StaleRevision until reload. Project the running
+        // document size across the whole batch up front and reject the entire
+        // batch (before mutating anything) if it would ever cross the cap, so a
+        // cap-crossing replace-all can't half-apply.
+        let mut projected = document.len_bytes() as isize;
+        let mut peak = projected;
+        for plan in &plans {
+            for edit in plan.edits() {
+                let span = (edit.byte_range.end - edit.byte_range.start) as isize;
+                projected += edit.replacement.len() as isize - span;
+            }
+            peak = peak.max(projected);
+        }
+        if peak > feathermark_core::MAX_DOCUMENT_BYTES as isize {
+            return Err(EditError::TooLarge);
+        }
         let mut selection_after = Selection::collapsed(0);
         let mut changes = Vec::with_capacity(plans.len());
         for plan in plans {
