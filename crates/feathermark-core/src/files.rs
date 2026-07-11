@@ -1,5 +1,6 @@
 //! The sole filesystem boundary for Markdown document contents.
 
+use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -206,6 +207,67 @@ impl ExternalChangeDebouncer {
         }
         ready
     }
+}
+
+/// Atomically writes `snapshot` to `dir/file_name` (same-directory temp,
+/// fsync, rename, parent fsync) and returns the committed length and digest.
+/// `file_name` must be a bare name; callers pass one validated by the session
+/// contract. Shared by the autosave writer.
+pub(crate) fn write_snapshot_atomic(
+    dir: &Path,
+    file_name: &str,
+    snapshot: &DocumentSnapshot,
+) -> io::Result<(u64, blake3::Hash)> {
+    let (temporary_path, mut temporary_file) =
+        create_same_directory_temp(dir, OsStr::new(file_name))?;
+    let mut cleanup = TempCleanup::new(temporary_path.clone());
+
+    let mut writer = HashingWriter::new(&mut temporary_file);
+    snapshot.write_to(&mut writer)?;
+    writer.flush()?;
+    let digest = writer.finalize();
+    temporary_file.sync_all()?;
+    drop(temporary_file);
+
+    let final_path = dir.join(file_name);
+    fs::rename(&temporary_path, &final_path)?;
+    cleanup.disarm();
+    sync_parent_directory(dir)?;
+
+    let len = fs::metadata(&final_path)?.len();
+    Ok((len, digest))
+}
+
+/// Atomically replaces `dir/file_name` with `bytes`. Shared by session-state
+/// persistence.
+pub(crate) fn write_bytes_atomic(dir: &Path, file_name: &str, bytes: &[u8]) -> io::Result<()> {
+    let (temporary_path, mut temporary_file) =
+        create_same_directory_temp(dir, OsStr::new(file_name))?;
+    let mut cleanup = TempCleanup::new(temporary_path.clone());
+
+    temporary_file.write_all(bytes)?;
+    temporary_file.flush()?;
+    temporary_file.sync_all()?;
+    drop(temporary_file);
+
+    fs::rename(&temporary_path, dir.join(file_name))?;
+    cleanup.disarm();
+    sync_parent_directory(dir)?;
+    Ok(())
+}
+
+/// Durably appends `bytes` to the `dir/file_name` journal (create-if-missing,
+/// fsync file, fsync parent). Shared by the autosave journal writer.
+pub(crate) fn append_bytes_durable(dir: &Path, file_name: &str, bytes: &[u8]) -> io::Result<()> {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join(file_name))?;
+    file.write_all(bytes)?;
+    file.flush()?;
+    file.sync_all()?;
+    sync_parent_directory(dir)?;
+    Ok(())
 }
 
 fn normalized_parent(path: &Path) -> &Path {
