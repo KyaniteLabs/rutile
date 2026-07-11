@@ -289,3 +289,29 @@ fn fuzz_regression_link_reference_definition_source_blocks_are_valid() {
     let blocks = feathermark_core::build_source_blocks(source, 23).unwrap();
     validate_source_blocks(source, 23, &blocks).unwrap();
 }
+
+#[test]
+fn hostile_deep_nesting_is_rejected_not_a_stack_overflow() {
+    // QA round 1 (2026-07-10): a small hostile document of deeply nested
+    // blockquotes ("> " repeated) builds a SafeNode tree whose depth mirrors the
+    // nesting. The tree is traversed recursively (to_html, partition, Drop), so
+    // unbounded nesting overflowed the thread stack and, under panic = "abort",
+    // aborted the whole process -- a hostile-document DoS. A 20 MiB document of
+    // "> " yields millions of levels and overflows any stack. Rendering must now
+    // reject over-deep nesting with a bounded error instead of crashing.
+    let source = "> ".repeat(50_000) + "x";
+    assert_eq!(
+        render_markdown(&source, 1),
+        Err(RenderError::NestingTooDeep),
+    );
+}
+
+#[test]
+fn nesting_at_the_cap_still_renders() {
+    // One below the cap must still render successfully (no false rejection of
+    // merely-deep-but-bounded documents).
+    let depth = feathermark_core::MAX_RENDER_NESTING_DEPTH - 1;
+    let source = "> ".repeat(depth) + "x";
+    let rendered = render_markdown(&source, 1).expect("depth below the cap renders");
+    validate_source_blocks(&source, 1, &rendered.blocks).unwrap();
+}

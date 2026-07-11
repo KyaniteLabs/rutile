@@ -13,6 +13,18 @@ pub const MAX_GENERATED_BODY_BYTES: usize = 80 * 1024 * 1024;
 pub const MAX_RENDERED_PAGE_BYTES: usize = 96 * 1024 * 1024;
 pub const MAX_SOURCE_BLOCK_BYTES: usize = 32 * 1024;
 
+/// Maximum block/inline nesting the renderer will build into a `SafeNode` tree.
+///
+/// The tree is traversed recursively when serializing to HTML, when
+/// partitioning inline segments, and when the tree is dropped. Hostile Markdown
+/// (e.g. a document of `"> "` repeated) can request effectively unbounded
+/// nesting; a document at the 20 MiB cap yields millions of levels, overflowing
+/// any thread stack. With `panic = "abort"` a stack overflow aborts the whole
+/// process, so untrusted input must never reach that depth. This cap bounds the
+/// tree depth to a value far below any stack-overflow threshold while remaining
+/// orders of magnitude beyond any realistic document.
+pub const MAX_RENDER_NESTING_DEPTH: usize = 1024;
+
 const PREVIEW_CSS: &str = "feathermark://preview/v1/assets/preview.css";
 const PREVIEW_BRIDGE: &str = "feathermark://preview/v1/assets/bridge.js";
 const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'none'; font-src 'none'; connect-src 'none'; media-src 'none'; frame-src 'none'; child-src 'none'; object-src 'none'; worker-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; navigate-to 'none'";
@@ -97,6 +109,8 @@ pub enum RenderError {
     InvalidSourceRange,
     #[error("source block count exceeds representable limits")]
     TooManySourceBlocks,
+    #[error("document nesting exceeds the render depth cap")]
+    NestingTooDeep,
 }
 
 pub fn render_markdown(source: &str, revision: Revision) -> Result<RenderedPage, RenderError> {
@@ -145,6 +159,9 @@ pub fn build_source_blocks(
 
         match event {
             Event::Start(tag) => {
+                if stack.len() >= MAX_RENDER_NESTING_DEPTH {
+                    return Err(RenderError::NestingTooDeep);
+                }
                 let suppressed = stack.iter().any(|frame| {
                     matches!(
                         frame.anchor,
@@ -363,6 +380,9 @@ fn render_nodes(source: &str, blocks: &BlockIndex<'_>) -> Result<Vec<SafeNode>, 
         }
         match event {
             Event::Start(tag) => {
+                if stack.len() >= MAX_RENDER_NESTING_DEPTH {
+                    return Err(RenderError::NestingTooDeep);
+                }
                 let in_table_head = stack
                     .iter()
                     .any(|frame| matches!(frame.kind, NodeFrameKind::TableHead));
