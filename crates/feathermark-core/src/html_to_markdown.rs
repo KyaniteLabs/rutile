@@ -321,16 +321,23 @@ fn scan_tag_end(bytes: &[u8], mut index: usize) -> (usize, bool) {
 
 /// Skip the contents of a raw-text element up to and including its close tag.
 /// `content_start` points just past the opening tag's `>`.
-fn skip_raw_text(html: &str, bytes: &[u8], content_start: usize, name: &str) -> usize {
+///
+/// The close tag is matched case-insensitively **in place**: pre-lowercasing the
+/// whole remaining input per raw-text tag is O(n) *per tag*, so a 2 MiB paste of
+/// repeated `<style></style>` pairs would be O(n²) — a denial-of-service on a
+/// single paste. Scanning byte-by-byte for the next `</name` stops at the first
+/// match, keeping adjacent pairs O(total). `name` is already lowercase.
+fn skip_raw_text(_html: &str, bytes: &[u8], content_start: usize, name: &str) -> usize {
     let needle = format!("</{name}");
-    let haystack = &html[content_start.min(html.len())..];
-    match haystack.to_ascii_lowercase().find(&needle) {
-        Some(relative) => {
-            let close_start = content_start + relative + needle.len();
-            skip_to_gt(bytes, close_start)
+    let needle = needle.as_bytes();
+    let mut index = content_start.min(bytes.len());
+    while index + needle.len() <= bytes.len() {
+        if bytes[index] == b'<' && bytes[index..index + needle.len()].eq_ignore_ascii_case(needle) {
+            return skip_to_gt(bytes, index + needle.len());
         }
-        None => bytes.len(),
+        index += 1;
     }
+    bytes.len()
 }
 
 /// Pull the first `href` attribute value out of a start tag's attribute span.

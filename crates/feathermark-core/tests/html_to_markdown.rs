@@ -380,3 +380,25 @@ fn huge_flat_paragraph_count_is_bounded() {
     assert!(markdown.len() <= feathermark_core::MAX_OUTPUT_BYTES);
     assert_safe_roundtrip(&markdown);
 }
+
+#[test]
+fn many_raw_text_tags_do_not_blow_up_quadratically() {
+    // Regression for the O(n^2) skip_raw_text hang: a near-cap paste of repeated
+    // <style></style> pairs used to pre-lowercase the whole remaining input per
+    // tag. With ~2 MiB of pairs this must complete near-instantly, not in minutes.
+    let unit = "<style></style>";
+    let count = (MAX_HTML_INPUT_BYTES / unit.len()) - 1;
+    let html = unit.repeat(count);
+    assert!(html.len() < MAX_HTML_INPUT_BYTES);
+    let started = std::time::Instant::now();
+    let markdown = html_to_markdown(&html).expect("bounded conversion");
+    let elapsed = started.elapsed();
+    // Generous ceiling: the O(n^2) version took tens of seconds to minutes; the
+    // fixed O(n) version is milliseconds. 5s cannot be reached by the fix.
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "raw-text skipping took {elapsed:?} — quadratic regression"
+    );
+    // <style> content is dropped entirely, so the output is empty/whitespace.
+    assert!(markdown.trim().is_empty());
+}
