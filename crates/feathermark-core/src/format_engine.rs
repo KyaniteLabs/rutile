@@ -78,6 +78,15 @@ fn build(
     selection: Selection,
     command: &FormatCommand,
 ) -> Result<Built, EditPlanError> {
+    // The engine slices `text` with the selection offsets (word/line lookup)
+    // *before* any edit reaches the document. The EditPlan contract makes offset
+    // validity the document's job at apply time, so the engine must not assume a
+    // valid selection: a stale or boundary-mismatched offset from a shell would
+    // otherwise panic here (and abort the process under `panic = "abort"`).
+    // Clamp both endpoints to real UTF-8 boundaries; a valid selection is
+    // unchanged, and an out-of-range/mid-scalar one degrades gracefully instead
+    // of crashing.
+    let selection = sanitize_selection(text, selection);
     let built = match command {
         FormatCommand::ToggleBold => toggle_inline(text, selection, "**", false),
         FormatCommand::ToggleItalic => toggle_inline(text, selection, "*", true),
@@ -95,6 +104,25 @@ fn build(
 }
 
 // --- small text helpers -----------------------------------------------------
+
+/// Clamps a selection's endpoints to `[0, text.len()]` and snaps each down to
+/// the nearest UTF-8 boundary, so no downstream slice can panic on a hostile or
+/// stale selection.
+fn sanitize_selection(text: &str, selection: Selection) -> Selection {
+    Selection {
+        anchor: boundary_floor(text, selection.anchor),
+        head: boundary_floor(text, selection.head),
+    }
+}
+
+/// Largest char boundary `<= off`, clamped to `text.len()`.
+fn boundary_floor(text: &str, off: usize) -> usize {
+    let mut off = off.min(text.len());
+    while off > 0 && !text.is_char_boundary(off) {
+        off -= 1;
+    }
+    off
+}
 
 fn ordered_sel(selection: Selection) -> (usize, usize) {
     let a = selection.anchor.min(selection.head);
