@@ -143,6 +143,31 @@ pub struct ReplaceApplied {
     pub effects: Vec<AppEffect>,
 }
 
+/// The result of a successful [`AppState::insert_text`].
+///
+/// This is the shared smart-paste / programmatic-insert primitive: both shells
+/// lower converted-clipboard markdown (or a plain-text fallback) through it and
+/// follow the returned [`changes`](InsertApplied::changes) incrementally via
+/// `apply_external_change`, preserving the viewport instead of reinstalling the
+/// whole buffer.
+///
+/// [`AppState::insert_text`]: crate::app::AppState::insert_text
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InsertApplied {
+    /// The selection to install after the insert (collapsed at the end of the
+    /// inserted text).
+    pub selection_after: Selection,
+    /// The document revision after the insert committed.
+    pub revision: Revision,
+    /// The applied [`ChangeSet`]s, in commit order — one for a single-edit
+    /// insert. A shell replays them through
+    /// [`apply_external_change`](feathermark_core::EditorAdapter::apply_external_change)
+    /// (the same viewport-preserving path undo/redo and external edits use).
+    pub changes: Vec<ChangeSet>,
+    /// Reducer effects (e.g. a coalesced `ScheduleRender`) to run.
+    pub effects: Vec<AppEffect>,
+}
+
 /// A validated, self-contained export page plus a suggested file name.
 ///
 /// The shared side computes both; the platform lane performs the actual file

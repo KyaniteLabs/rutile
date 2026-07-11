@@ -501,6 +501,52 @@ fn replace_all_crossing_the_cap_is_rejected_whole_and_leaves_no_partial() {
 }
 
 #[test]
+fn insert_text_advances_the_reducer_and_returns_followable_changes() {
+    // The shared smart-paste primitive must advance the reducer (dirty/revision)
+    // exactly like every other shared edit and return a ChangeSet a shell can
+    // replay incrementally (viewport-preserving) instead of reinstalling the
+    // buffer — the divergence the Linux paste path had.
+    let mut state = AppState::new();
+    let mut document = Document::new("hello world").unwrap();
+
+    let applied = state
+        .insert_text(
+            &mut document,
+            Selection {
+                anchor: 6,
+                head: 11,
+            },
+            "there",
+        )
+        .unwrap();
+
+    assert_eq!(document.snapshot().to_string(), "hello there");
+    assert_eq!(state.revision(), 1);
+    assert!(state.dirty());
+    assert_eq!(applied.selection_after, Selection::collapsed(11));
+    assert_eq!(applied.revision, document.revision());
+    assert_eq!(applied.changes.len(), 1);
+    assert!(!applied.effects.is_empty());
+    // Replayed as a shell does, the returned change reconstructs the buffer.
+    assert_eq!(replay("hello world", &applied.changes), "hello there");
+    assert_chained(&applied.changes, 0, document.revision());
+}
+
+#[test]
+fn insert_text_over_a_collapsed_selection_inserts_without_replacing() {
+    let mut state = AppState::new();
+    let mut document = Document::new("ab").unwrap();
+
+    let applied = state
+        .insert_text(&mut document, Selection::collapsed(1), "XYZ")
+        .unwrap();
+
+    assert_eq!(document.snapshot().to_string(), "aXYZb");
+    assert_eq!(applied.selection_after, Selection::collapsed(4));
+    assert_eq!(replay("ab", &applied.changes), "aXYZb");
+}
+
+#[test]
 fn export_html_is_inert_and_suggests_a_name() {
     let state = AppState::new();
     let document = Document::new("# Title\n\nBody text.").unwrap();

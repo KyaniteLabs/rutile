@@ -31,7 +31,9 @@ use wry::http::{Response, StatusCode};
 use wry::{NewWindowResponse, Rect, WebContext, WebView, WebViewBuilder, WebViewBuilderExtUnix};
 
 use super::PlatformAdapter;
-use crate::actions::{ExportOutput, FindSession, FormatApplied, ReplaceApplied, SessionRestore};
+use crate::actions::{
+    ExportOutput, FindSession, FormatApplied, InsertApplied, ReplaceApplied, SessionRestore,
+};
 use crate::app::{AppEffect, AppMessage, AppState, CloseDecision, CloseOutcome};
 use crate::brand::{PRODUCT_NAME, SOURCE_EDITOR_LABEL, STARTER_DOCUMENT, status_title};
 use crate::preview_host::{
@@ -1332,38 +1334,26 @@ impl LinuxProductSession {
         self.apply_format(selection, FormatCommand::SmartEnter, now_ms)
     }
 
-    /// Replaces `selection` with `text` as a bounded programmatic edit. The
+    /// Replaces `selection` with `text` as a bounded programmatic edit through
+    /// the shared [`AppState::insert_text`] primitive, so the paste advances the
+    /// reducer exactly like every other shared edit and returns the
+    /// [`ChangeSet`] a shell follows incrementally (viewport-preserving). The
     /// smart-paste path lowers converted-clipboard markdown through here.
     pub fn insert_text(
         &mut self,
         selection: Selection,
         text: &str,
         now_ms: u64,
-    ) -> Result<Revision, String> {
+    ) -> Result<InsertApplied, String> {
         if self.closed {
             return Err("document session is closed".to_owned());
         }
-        let start = selection.anchor.min(selection.head);
-        let end = selection.anchor.max(selection.head);
-        self.next_transaction_id = self
-            .next_transaction_id
-            .checked_add(1)
-            .ok_or_else(|| "transaction id overflow".to_owned())?;
-        let revision = self.document.revision();
-        let change = self
-            .document
-            .apply(EditTransaction {
-                base_revision: revision,
-                id: self.next_transaction_id,
-                kind: TransactionKind::Programmatic,
-                edits: vec![Edit {
-                    byte_range: start..end,
-                    replacement: text.to_owned(),
-                }],
-            })
+        let applied = self
+            .app
+            .insert_text(&mut self.document, selection, text)
             .map_err(|error| error.to_string())?;
-        self.schedule_changed_revision(change.after, now_ms);
-        Ok(change.after)
+        self.schedule_effects(&applied.effects, now_ms);
+        Ok(applied)
     }
 
     /// Smart paste: converts clipboard HTML to markdown via the bounded core
@@ -1374,7 +1364,7 @@ impl LinuxProductSession {
         selection: Selection,
         html: &str,
         now_ms: u64,
-    ) -> Result<Revision, String> {
+    ) -> Result<InsertApplied, String> {
         let markdown = html_to_markdown(html).map_err(|error| error.to_string())?;
         self.insert_text(selection, &markdown, now_ms)
     }
@@ -2256,25 +2246,26 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
             };
             // Claim the paste only once we can honour it.
             view.stop_signal_emission_by_name("paste-clipboard");
-            let start = selection.anchor.min(selection.head);
-            if let Err(error) =
-                session
+            let applied =
+                match session
                     .borrow_mut()
                     .insert_text(selection, &markdown, elapsed_ms(started))
-            {
-                window.set_title(&status_title(&format!("smart paste failed: {error}")));
-                return;
-            }
+                {
+                    Ok(applied) => applied,
+                    Err(error) => {
+                        window.set_title(&status_title(&format!("smart paste failed: {error}")));
+                        return;
+                    }
+                };
+            // Follow the insert incrementally so the viewport is preserved,
+            // instead of reinstalling the whole buffer (which reset scroll).
             let snapshot = session.borrow().snapshot();
-            if editor_adapter
-                .borrow_mut()
-                .install_open_snapshot(&snapshot)
-                .is_ok()
-            {
-                let _ = editor_adapter
-                    .borrow()
-                    .set_selection(Selection::collapsed(start + markdown.len()));
-            }
+            let _ = follow_shared_edit(
+                &editor_adapter,
+                &snapshot,
+                &applied.changes,
+                applied.selection_after,
+            );
         });
     }
 

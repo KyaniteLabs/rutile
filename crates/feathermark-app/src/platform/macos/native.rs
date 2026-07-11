@@ -484,13 +484,19 @@ impl ProductRunner {
         let Some(text) = text else {
             return;
         };
-        match self.source_pane.paste_text(text) {
-            Ok(_) => {
-                if let Err(error) = self.process_editor_events(event_loop) {
-                    self.fail(event_loop, error.to_string());
-                    return;
-                }
-                self.source_pane.update_counts(self.session.counts());
+        // Route the paste through the shared AppState insert primitive and follow
+        // it incrementally (same path as format/replace), unifying the reducer
+        // surface with Linux and preserving the viewport.
+        let selection = match self.source_pane.editor().current_selection() {
+            Ok(selection) => selection,
+            Err(error) => {
+                self.surface_error(error.to_string());
+                return;
+            }
+        };
+        match self.session.insert_text(selection, &text) {
+            Ok(applied) => {
+                self.after_shared_edit(event_loop, &applied.changes, applied.selection_after)
             }
             Err(error) => self.surface_error(error.to_string()),
         }
@@ -1955,18 +1961,6 @@ impl IcedSourcePane {
     fn set_find_bar(&mut self, find_bar: Option<FindBarView>) {
         self.state.find_bar = find_bar;
         self.request_redraw();
-    }
-
-    /// Performs a paste of `text` through the editor's incremental edit path
-    /// (used by smart paste after clipboard-HTML → Markdown conversion, and by
-    /// the plain-text fallback). Emits a `CommitRequested` the runner drains.
-    fn paste_text(&mut self, text: String) -> Result<bool, MacError> {
-        self.state
-            .editor
-            .perform(text_editor::Action::Edit(text_editor::Edit::Paste(
-                Arc::new(text),
-            )))
-            .map_err(|error| MacError::Core(error.to_string()))
     }
 
     fn attach_window(
