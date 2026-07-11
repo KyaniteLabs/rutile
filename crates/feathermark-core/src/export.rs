@@ -57,8 +57,8 @@ const LINK_REPLACEMENT: &str = "<a href=\"";
 /// browser without CSS masking falls back to the plain gold hairline instead
 /// of a filled slab (the fire budget's hard "never a slab" rule holds either
 /// way).
-const EXPORT_CSS: &str = r#":root{color-scheme:light dark;--font-body:Charter,'Bitstream Charter','Sitka Text',Cambria,Georgia,serif;--font-mono:ui-monospace,'SF Mono','Cascadia Code',Menlo,Consolas,monospace;--measure:68ch;--radius:2px;--rule-needle:1px;--dur-fast:150ms;--ease-out:cubic-bezier(.2,0,0,1);--step--1:clamp(.95rem,.92rem + .12vw,1rem);--step-0:clamp(1rem,.96rem + .2vw,1.125rem);--step-1:clamp(1.2rem,1.1rem + .4vw,1.375rem);--step-2:clamp(1.4rem,1.24rem + .7vw,1.75rem);--step-3:clamp(1.7rem,1.42rem + 1.25vw,2.1875rem);--step-4:clamp(2.05rem,1.6rem + 2vw,2.75rem);--accent:#c9921e;--bg:#f6f2e9;--surface:#e9e2d6;--ink:#241e19;--muted:#6b6157;--border:#d8cfbe;--edge:#9f7655}
-@media (prefers-color-scheme:dark){:root{--accent:#f0c24b;--bg:#241e19;--surface:#332d26;--ink:#e9e2d6;--muted:#a69b8c;--border:#3a332b}}
+const EXPORT_CSS: &str = r#":root{color-scheme:light dark;--font-body:Charter,'Bitstream Charter','Sitka Text',Cambria,Georgia,serif;--font-mono:ui-monospace,'SF Mono','Cascadia Code',Menlo,Consolas,monospace;--measure:68ch;--radius:2px;--rule-needle:1px;--dur-fast:150ms;--ease-out:cubic-bezier(.2,0,0,1);--step--1:clamp(.95rem,.92rem + .12vw,1rem);--step-0:clamp(1rem,.96rem + .2vw,1.125rem);--step-1:clamp(1.2rem,1.1rem + .4vw,1.375rem);--step-2:clamp(1.4rem,1.24rem + .7vw,1.75rem);--step-3:clamp(1.7rem,1.42rem + 1.25vw,2.1875rem);--step-4:clamp(2.05rem,1.6rem + 2vw,2.75rem);--accent:#c9921e;--marker:#8f6714;--bg:#f6f2e9;--surface:#e9e2d6;--ink:#241e19;--muted:#6b6157;--border:#d8cfbe;--edge:#9f7655}
+@media (prefers-color-scheme:dark){:root{--accent:#f0c24b;--marker:#f0c24b;--bg:#241e19;--surface:#332d26;--ink:#e9e2d6;--muted:#a69b8c;--border:#3a332b}}
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
 html,body{overflow-x:hidden}
@@ -78,7 +78,7 @@ h1::after{content:"";display:block;width:min(100%,26rem);height:.5rem;margin-blo
 p{margin-block:0 1.2em}
 a{color:inherit;text-decoration:underline;text-decoration-color:var(--accent);text-decoration-thickness:var(--rule-needle);text-underline-offset:.18em;transition:text-decoration-thickness var(--dur-fast) var(--ease-out)}
 a:hover,a:focus-visible{text-decoration-thickness:2px}
-:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+:focus-visible{outline:2px solid var(--marker);outline-offset:2px}
 blockquote{margin-block:1.4em;padding-block:.2em;padding-inline-start:1.1em;border-inline-start:var(--rule-needle) solid var(--accent);color:var(--muted);transition:border-color var(--dur-fast) var(--ease-out)}
 blockquote:hover{border-inline-start-color:var(--edge)}
 code{font-family:var(--font-mono);font-size:.9em;background:var(--surface);padding-block:.1em;padding-inline:.3em;border-radius:var(--radius)}
@@ -86,10 +86,10 @@ pre{background:var(--surface);border:var(--rule-needle) solid var(--border);bord
 pre:hover{border-color:var(--edge)}
 pre code{background:none;padding:0;font-size:.95em}
 hr{border:0;margin-block:2.6em;text-align:center;overflow:visible;line-height:1}
-hr::before{content:"\2736";color:var(--accent);font-size:1.15rem}
+hr::before{content:"\2736";color:var(--marker);font-size:1.15rem}
 ul,ol{padding-inline-start:1.4em}
 li{margin-block:.3em}
-li::marker{color:var(--accent)}
+li::marker{color:var(--marker)}
 img{max-width:100%;height:auto;border:var(--rule-needle) solid var(--border);border-radius:var(--radius)}
 table{display:block;overflow-x:auto;border-collapse:collapse;width:100%;margin-block:1.4em;font-size:var(--step--1)}
 th,td{border:var(--rule-needle) solid var(--border);padding-block:.5em;padding-inline:.7em;text-align:start;transition:border-color var(--dur-fast) var(--ease-out)}
