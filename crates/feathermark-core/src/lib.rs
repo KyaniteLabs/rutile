@@ -1,17 +1,25 @@
 //! FeatherMark's platform-independent document and editor contracts.
 
+mod autosave;
+mod counts;
 mod document;
 mod editor_contract;
 mod export_contract;
 mod files;
 mod find_contract;
+mod find_engine;
 mod format_contract;
+mod format_engine;
 mod html_to_markdown;
 mod render;
 mod scroll;
 mod security;
 mod session_contract;
 
+pub use autosave::{
+    AUTOSAVE_JOURNAL_FILE, AutosaveError, AutosaveStore, RecoveredDocument, SESSION_STATE_FILE,
+};
+pub use counts::{Counts, READING_WPM, char_count, counts, reading_time_seconds, word_count};
 pub use document::{
     ChangeSet, Document, DocumentError, DocumentSnapshot, Edit, EditError, EditTransaction,
     HistoryBoundary, HistoryContext, HistoryEntry, MAX_DOCUMENT_BYTES, MAX_UNDO_BYTES, Selection,
@@ -35,11 +43,15 @@ pub use find_contract::{
     FindDirection, FindError, FindQuery, FindReplaceOp, MAX_FIND_PATTERN_BYTES,
     MAX_FIND_REPLACEMENT_BYTES, MatchMode, ReplaceSpec,
 };
+pub use find_engine::{
+    FindReplaceOutcome, ReplaceError, execute, find_next, match_count, replace_all, replace_current,
+};
 pub use format_contract::{
     EditPlan, EditPlanError, FormatCommand, ListMarker, MAX_LINK_URL_BYTES, MAX_PLAN_EDITS,
     MAX_PLAN_TOTAL_BYTES, MAX_PLANNED_REPLACEMENT_BYTES, MAX_PLANNED_SPAN_BYTES, OrderedDelimiter,
     SmartEnterAction,
 };
+pub use format_engine::{SmartEnterOutcome, apply_format, smart_enter};
 pub use html_to_markdown::{
     HtmlToMarkdownError, MAX_HTML_INPUT_BYTES, MAX_NESTING_DEPTH, MAX_OUTPUT_BYTES,
     html_to_markdown,
