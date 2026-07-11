@@ -11,6 +11,7 @@ mod find_contract;
 mod find_engine;
 mod format_contract;
 mod format_engine;
+mod html_to_markdown;
 mod render;
 mod scroll;
 mod security;
@@ -53,6 +54,10 @@ pub use format_contract::{
     SmartEnterAction,
 };
 pub use format_engine::{SmartEnterOutcome, apply_format, smart_enter};
+pub use html_to_markdown::{
+    HtmlToMarkdownError, MAX_HTML_INPUT_BYTES, MAX_NESTING_DEPTH, MAX_OUTPUT_BYTES,
+    html_to_markdown,
+};
 pub use render::{
     MAX_GENERATED_BODY_BYTES, MAX_RENDER_NESTING_DEPTH, MAX_RENDERED_PAGE_BYTES,
     MAX_SOURCE_BLOCK_BYTES, RenderError, RenderLimits, RenderedPage, SourceBlock, SourceBlockKind,
