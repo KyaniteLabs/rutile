@@ -2,6 +2,7 @@
 
 mod document;
 mod editor_contract;
+mod export;
 mod export_contract;
 mod files;
 mod find_contract;
@@ -21,6 +22,7 @@ pub use editor_contract::{
     EditorCommit, EditorError, EditorEvent, EditorEventSink, ImeCommit, LocalCommitRejection,
     StaleRevision, ViewportState, apply_editor_commit,
 };
+pub use export::render_export_page;
 pub use export_contract::{
     ExportError, ExportPage, ExportRequest, ExportViolation, MAX_EXPORT_PAGE_BYTES,
     MAX_EXPORT_TITLE_BYTES,
