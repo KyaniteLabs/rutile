@@ -9,7 +9,8 @@ use feathermark_app::platform::macos::{
     preview_ipc_channel, split_panes,
 };
 use feathermark_core::{
-    Document, Edit, EditTransaction, EditorAdapter, EditorCommit, EditorEvent, ScrollClock,
+    Document, Edit, EditTransaction, EditorAdapter, EditorCommit, EditorEvent, FindDirection,
+    FindQuery, FormatCommand, MatchMode, ScrollClock, Selection, SessionWindowV1, SmartEnterAction,
     TransactionKind, apply_editor_commit,
 };
 use iced_widget::text_editor;
@@ -484,4 +485,228 @@ fn iced_editor_native_undo_redo_applies_incremental_external_changes() {
     editor.apply_external_change(&redo).unwrap();
     assert_eq!(editor.mirror(), "one!");
     assert_eq!(document.snapshot().to_string(), "one!");
+}
+
+// ---------------------------------------------------------------------------
+// Wave 2M: native input routed to the shared Wave-2S action surface.
+// ---------------------------------------------------------------------------
+
+fn unique_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "feathermark-2m-{name}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn format_command_bolds_the_selection_through_the_shared_surface() {
+    let mut session = ProductSession::new_in_memory("hello world").unwrap();
+    let applied = session
+        .apply_format(Selection { anchor: 0, head: 5 }, FormatCommand::ToggleBold)
+        .unwrap();
+    assert_eq!(session.source(), "**hello** world");
+    // The bolded run stays selected inside the new markers.
+    assert!(applied.selection_after.anchor <= applied.selection_after.head);
+    assert!(session.app_state().dirty());
+    assert_eq!(session.app_state().revision(), session.snapshot().revision);
+}
+
+#[test]
+fn smart_enter_continues_a_bullet_list() {
+    let mut session = ProductSession::new_in_memory("- item").unwrap();
+    let applied = session.smart_enter(Selection::collapsed(6)).unwrap();
+    assert!(matches!(
+        applied.action,
+        Some(SmartEnterAction::ContinueBullet { .. })
+    ));
+    assert!(
+        session.source().starts_with("- item\n- "),
+        "unexpected smart-enter result: {:?}",
+        session.source()
+    );
+}
+
+#[test]
+fn format_then_editor_resync_keeps_the_mirror_authoritative() {
+    let mut session = ProductSession::new_in_memory("hello world").unwrap();
+    let mut editor = IcedEditorAdapter::new();
+    editor.install_open_snapshot(&session.snapshot()).unwrap();
+
+    let applied = session
+        .apply_format(
+            Selection { anchor: 0, head: 5 },
+            FormatCommand::ToggleItalic,
+        )
+        .unwrap();
+    editor
+        .resync_to(&session.snapshot(), applied.selection_after)
+        .unwrap();
+
+    assert_eq!(editor.mirror(), session.source());
+    assert_eq!(editor.revision(), session.snapshot().revision);
+    assert!(!editor.is_composing());
+}
+
+#[test]
+fn resync_to_applies_a_minimal_diff_across_char_boundaries() {
+    let mut editor = IcedEditorAdapter::new();
+    let start = Document::new("caf\u{e9} \u{4e16}\u{754c}").unwrap();
+    editor.install_open_snapshot(&start.snapshot()).unwrap();
+
+    // Insert an astral emoji in the middle; only the changed span should move.
+    let changed = Document::new("caf\u{e9} \u{1f600}\u{4e16}\u{754c}").unwrap();
+    editor
+        .resync_to(&changed.snapshot(), Selection::collapsed(0))
+        .unwrap();
+    assert_eq!(editor.mirror(), "caf\u{e9} \u{1f600}\u{4e16}\u{754c}");
+
+    // Deleting back to the original is also a single minimal edit.
+    editor
+        .resync_to(&start.snapshot(), Selection::collapsed(0))
+        .unwrap();
+    assert_eq!(editor.mirror(), "caf\u{e9} \u{4e16}\u{754c}");
+    assert_eq!(editor.revision(), start.snapshot().revision);
+}
+
+#[test]
+fn find_locates_forward_matches_and_records_the_current() {
+    let mut session = ProductSession::new_in_memory("abc abc abc").unwrap();
+    let query = FindQuery::new("abc".to_owned(), MatchMode::Plain, false).unwrap();
+    session.start_find(query, FindDirection::Forward, true);
+
+    assert_eq!(session.find_next(0).unwrap(), Some(0..3));
+    assert_eq!(session.find_next(1).unwrap(), Some(4..7));
+    assert_eq!(session.find_next(5).unwrap(), Some(8..11));
+    // Wrap around back to the first match.
+    assert_eq!(session.find_next(9).unwrap(), Some(0..3));
+    assert_eq!(
+        session.find_session().and_then(|s| s.current.clone()),
+        Some(0..3)
+    );
+}
+
+#[test]
+fn replace_current_edits_only_the_located_match() {
+    let mut session = ProductSession::new_in_memory("abc abc").unwrap();
+    let query = FindQuery::new("abc".to_owned(), MatchMode::Plain, false).unwrap();
+    session.start_find(query, FindDirection::Forward, true);
+    session.find_next(0).unwrap();
+
+    let applied = session.replace_current("xyz".to_owned()).unwrap();
+    assert_eq!(applied.replaced, 1);
+    assert_eq!(session.source(), "xyz abc");
+}
+
+#[test]
+fn replace_all_replaces_every_match() {
+    let mut session = ProductSession::new_in_memory("aa aa aa").unwrap();
+    let query = FindQuery::new("aa".to_owned(), MatchMode::Plain, false).unwrap();
+    session.start_find(query, FindDirection::Forward, true);
+
+    let applied = session.replace_all("bb".to_owned()).unwrap();
+    assert_eq!(applied.replaced, 3);
+    assert_eq!(session.source(), "bb bb bb");
+}
+
+#[test]
+fn export_html_is_self_contained_and_scriptless() {
+    let session = ProductSession::new_in_memory("# Title\n\nBody **bold**.\n").unwrap();
+    let output = session.export_html().unwrap();
+    assert_eq!(output.suggested_file_name, "untitled.html");
+
+    let lowered = output.html.to_ascii_lowercase();
+    assert!(lowered.contains("<!doctype html"));
+    assert!(!lowered.contains("<script"));
+    assert!(!lowered.contains("src=\"http"));
+    assert!(!lowered.contains("href=\"http://"));
+
+    let dir = unique_dir("export");
+    let path = dir.join("note.html");
+    session.save_html_as(&path).unwrap();
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(on_disk, output.html);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn counts_report_words_chars_and_reading_time() {
+    let session = ProductSession::new_in_memory("the quick brown fox").unwrap();
+    let counts = session.counts();
+    assert_eq!(counts.words, 4);
+    assert_eq!(counts.chars, 19);
+    assert_eq!(counts.reading_time_seconds(), 1);
+}
+
+#[test]
+fn autosave_then_recover_and_adopt_round_trips_the_unsaved_buffer() {
+    let dir = unique_dir("autosave");
+
+    let mut session = ProductSession::new_in_memory("draft").unwrap();
+    session.bind_autosave(dir.clone()).unwrap();
+    edit_session(&mut session, "recovered content \u{1fab6}");
+    let entry = session
+        .autosave_tick(1)
+        .unwrap()
+        .expect("an autosave entry");
+    assert_eq!(entry.sequence, 0);
+
+    // A fresh session (as after a crash) recovers the highest verified snapshot.
+    let mut relaunched = ProductSession::new_in_memory("# Rutile\n").unwrap();
+    relaunched.bind_autosave(dir.clone()).unwrap();
+    let recovered = relaunched.recover().unwrap().expect("something to recover");
+    assert_eq!(
+        recovered.document.snapshot().to_string(),
+        "recovered content \u{1fab6}"
+    );
+
+    relaunched.adopt_recovered(recovered).unwrap();
+    assert_eq!(relaunched.source(), "recovered content \u{1fab6}");
+    assert!(relaunched.app_state().dirty());
+
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn session_state_round_trips_last_file_selection_and_window() {
+    let dir = unique_dir("session");
+    let doc_path = dir.join("note.md");
+
+    let mut session = ProductSession::new_in_memory("hello world\n").unwrap();
+    session.bind_autosave(dir.clone()).unwrap();
+    session.save_as(&doc_path).unwrap();
+
+    let window = SessionWindowV1 {
+        x: 12,
+        y: 34,
+        width: 800,
+        height: 600,
+    };
+    let state = session.capture_session_state(
+        99,
+        Some(Selection { anchor: 0, head: 5 }),
+        Some(4),
+        Some(window),
+    );
+    session.save_session_state(&state).unwrap();
+
+    let relaunched = ProductSession::new_in_memory("# Rutile\n").unwrap();
+    let mut relaunched = relaunched;
+    relaunched.bind_autosave(dir.clone()).unwrap();
+    let loaded = relaunched
+        .load_session_state()
+        .unwrap()
+        .expect("persisted session state");
+    let restore = relaunched.restore_session(&loaded);
+    assert_eq!(restore.last_file.as_deref(), Some(doc_path.as_path()));
+    assert_eq!(restore.selection, Some(Selection { anchor: 0, head: 5 }));
+    assert_eq!(restore.top_visible_byte, Some(4));
+    assert_eq!(restore.window, Some(window));
+
+    let _ = std::fs::remove_dir_all(dir);
 }

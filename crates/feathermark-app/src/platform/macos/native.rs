@@ -1,12 +1,17 @@
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::future::Future;
-use std::path::PathBuf;
+use std::ops::Range;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use feathermark_core::{CompositionCancelReason, EditorAdapter, EditorEvent, ScrollClock};
+use feathermark_core::{
+    CompositionCancelReason, Counts, EditorAdapter, EditorEvent, FindDirection, FindQuery,
+    FormatCommand, MatchMode, RecoveredDocument, ScrollClock, Selection, SessionWindowV1,
+    html_to_markdown,
+};
 use feathermark_protocol::{PreviewEventV1, ProtocolError};
 use iced_widget::text_editor;
 use iced_winit::Clipboard;
@@ -19,7 +24,9 @@ use iced_winit::program::runtime::UserInterface;
 use iced_winit::program::runtime::user_interface;
 use iced_winit::winit;
 use objc2::MainThreadMarker;
-use objc2_app_kit::{NSModalResponseOK, NSSavePanel};
+use objc2_app_kit::{
+    NSModalResponseOK, NSPasteboard, NSPasteboardTypeHTML, NSPasteboardTypeString, NSSavePanel,
+};
 use objc2_foundation::NSString;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
@@ -33,6 +40,7 @@ use super::{
     AppKitMainThread, EditorVisualReceipt, IcedEditorAdapter, MacError, MacScrollDispatch,
     PreviewIpcFatal, PreviewIpcIngress, ProductSession, preview_ipc_channel, split_panes,
 };
+use crate::actions::SessionRestore;
 use crate::app::{AppEffect, CloseDecision, CloseOutcome};
 use crate::brand::{PRODUCT_NAME, SOURCE_EDITOR_LABEL, STARTER_DOCUMENT, status_title};
 use crate::preview_host::{
@@ -44,6 +52,32 @@ const WINDOW_WIDTH: u32 = 1_000;
 const WINDOW_HEIGHT: u32 = 720;
 const SMOKE_TIMEOUT: Duration = Duration::from_secs(60);
 const SMOKE_LIFECYCLE_CYCLES: u64 = 50;
+
+/// Autosave cadence for the crash-recovery journal (SPEC §9). A dirty buffer is
+/// journaled at most this often from `about_to_wait`.
+const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(5);
+
+// ---------------------------------------------------------------------------
+// DESIGN-SYSTEM.md "specimen case" app-chrome tokens (committed 2026-07-10).
+// Rutile-gold accent used at needle weight only; warm translucent selection;
+// oatmeal-paper ground in light mode; full-contrast ink for content.
+// The gold *caret* is deferred to Wave 3: iced 0.14 `text_editor::Style` has no
+// independent caret color (the caret follows `value`), so a gold needle caret
+// without staining the body text is not reachable in this shell yet.
+// ---------------------------------------------------------------------------
+
+/// Oatmeal paper ground, `#E9E2D6` (DESIGN-SYSTEM light-mode paper family).
+const GROUND_LIGHT: (u8, u8, u8) = (233, 226, 214);
+/// Full-contrast document ink, `#1C1C1A`.
+const INK: core::Color = core::Color::from_rgb8(28, 28, 26);
+/// Rutile-gold accent anchor, `#C9921E`.
+const ACCENT_GOLD: core::Color = core::Color::from_rgb8(201, 146, 30);
+/// Warm translucent gold selection tint (never OS blue).
+const SELECTION_GOLD: core::Color = core::Color::from_rgba8(201, 146, 30, 0.28);
+/// Receding muted ink for chrome labels (toolbar, status, syntax staining).
+const MUTED_INK: core::Color = core::Color::from_rgba8(28, 28, 26, 0.60);
+/// Toolbar/status chrome font size.
+const CHROME_FONT_SIZE: f32 = 12.0;
 
 pub(super) fn run_native(path: Option<PathBuf>, smoke: bool) -> Result<(), MacError> {
     AppKitMainThread::claim()?;
@@ -88,6 +122,12 @@ struct ProductRunner {
     preview_frame: u64,
     visibility_cycles: u64,
     compositor_resume_cycles: u64,
+    // Wave 2M shell-integration state.
+    find_bar: Option<FindBarView>,
+    format_commands: Arc<Mutex<VecDeque<FormatCommand>>>,
+    last_autosave: Instant,
+    pending_recovery: Option<RecoveredDocument>,
+    pending_restore: Option<SessionRestore>,
 }
 
 impl ProductRunner {
@@ -106,6 +146,31 @@ impl ProductRunner {
         let editor_events = Arc::new(Mutex::new(VecDeque::new()));
         let mut source_pane = IcedSourcePane::new(&snapshot)?;
         source_pane.set_event_queue(Arc::clone(&editor_events));
+        let format_commands = Arc::new(Mutex::new(VecDeque::new()));
+        source_pane.set_format_sink(Arc::clone(&format_commands));
+        source_pane.update_counts(session.counts());
+
+        // Crash-recovery + session-restore setup (never in smoke, which owns a
+        // deterministic proof flow and must not be perturbed by prior journals).
+        let mut pending_recovery = None;
+        let mut pending_restore = None;
+        if !smoke
+            && let Some(dir) = autosave_dir()
+            && std::fs::create_dir_all(&dir).is_ok()
+            && session.bind_autosave(dir).is_ok()
+        {
+            // Offer recovery only when the journal holds content that differs
+            // from what actually loaded (otherwise every clean restart would
+            // prompt). Journal rotation on clean exit is a Wave 3 refinement.
+            pending_recovery =
+                session.recover().ok().flatten().filter(|recovered| {
+                    recovered.document.snapshot().to_string() != session.source()
+                });
+            if let Ok(Some(state)) = session.load_session_state() {
+                pending_restore = Some(session.restore_session(&state));
+            }
+        }
+
         Ok(Self {
             webview: None,
             web_context: Some(WebContext::new(None)),
@@ -139,6 +204,11 @@ impl ProductRunner {
             preview_frame: 0,
             visibility_cycles: 0,
             compositor_resume_cycles: 0,
+            find_bar: None,
+            format_commands,
+            last_autosave: Instant::now(),
+            pending_recovery,
+            pending_restore,
         })
     }
 
@@ -288,6 +358,494 @@ impl ProductRunner {
                 .map_err(|error| MacError::Native(error.to_string()))?;
         }
         Ok(())
+    }
+
+    // --- Wave 2M: native input routed to the shared action surface ----------
+
+    /// Re-synchronizes the editor mirror, status counts, and preview after a
+    /// shared (AppState-driven) document mutation — format, smart Enter, or a
+    /// find/replace — installing `selection_after`.
+    fn after_shared_edit(&mut self, event_loop: &ActiveEventLoop, selection: Selection) {
+        let snapshot = self.session.snapshot();
+        if let Err(error) = self
+            .source_pane
+            .editor_mut()
+            .resync_to(&snapshot, selection)
+        {
+            self.fail(event_loop, error.to_string());
+            return;
+        }
+        self.source_pane.update_counts(self.session.counts());
+        if let Err(error) = self.render_and_navigate() {
+            self.fail(event_loop, error.to_string());
+            return;
+        }
+        self.source_pane.request_redraw();
+    }
+
+    /// Routes a [`FormatCommand`] (key binding or toolbar button) through
+    /// [`ProductSession::apply_format`]. A clean engine rejection (e.g. an empty
+    /// plan) becomes a status message, never a fatal error.
+    fn run_format_command(&mut self, event_loop: &ActiveEventLoop, command: FormatCommand) {
+        let selection = match self.source_pane.editor().current_selection() {
+            Ok(selection) => selection,
+            Err(error) => {
+                self.surface_error(error.to_string());
+                return;
+            }
+        };
+        match self.session.apply_format(selection, command) {
+            Ok(applied) => self.after_shared_edit(event_loop, applied.selection_after),
+            Err(error) => self.surface_error(error.to_string()),
+        }
+    }
+
+    /// Routes Enter to [`ProductSession::smart_enter`].
+    fn run_smart_enter(&mut self, event_loop: &ActiveEventLoop) {
+        let selection = match self.source_pane.editor().current_selection() {
+            Ok(selection) => selection,
+            Err(error) => {
+                self.surface_error(error.to_string());
+                return;
+            }
+        };
+        match self.session.smart_enter(selection) {
+            Ok(applied) => self.after_shared_edit(event_loop, applied.selection_after),
+            Err(error) => self.surface_error(error.to_string()),
+        }
+    }
+
+    /// Drains toolbar-emitted format commands (pushed from the Iced program).
+    fn drain_format_commands(&mut self, event_loop: &ActiveEventLoop) {
+        loop {
+            let command = self
+                .format_commands
+                .lock()
+                .ok()
+                .and_then(|mut queue| queue.pop_front());
+            match command {
+                Some(command) => self.run_format_command(event_loop, command),
+                None => break,
+            }
+        }
+    }
+
+    /// Smart paste: convert clipboard HTML (`public.html`) via the core
+    /// `html_to_markdown` before insert, falling back to plain text when there
+    /// is no HTML flavor or the conversion is rejected.
+    fn run_smart_paste(&mut self, event_loop: &ActiveEventLoop) {
+        let text = clipboard_html()
+            .and_then(|html| html_to_markdown(&html).ok())
+            .or_else(clipboard_string);
+        let Some(text) = text else {
+            return;
+        };
+        match self.source_pane.paste_text(text) {
+            Ok(_) => {
+                if let Err(error) = self.process_editor_events(event_loop) {
+                    self.fail(event_loop, error.to_string());
+                    return;
+                }
+                self.source_pane.update_counts(self.session.counts());
+            }
+            Err(error) => self.surface_error(error.to_string()),
+        }
+    }
+
+    /// Save-as-HTML through a native `NSSavePanel`, using the validated
+    /// self-contained export page.
+    fn run_save_html(&mut self) {
+        let default = self
+            .session
+            .path()
+            .and_then(Path::file_stem)
+            .map(|stem| format!("{}.html", stem.to_string_lossy()))
+            .unwrap_or_else(|| "Untitled.html".to_owned());
+        match choose_save_path(&default) {
+            Ok(Some(path)) => match self.session.save_html_as(&path) {
+                Ok(()) => self.surface_error(format!("Exported HTML to {}", path.display())),
+                Err(error) => self.surface_error(format!("Export failed: {error}")),
+            },
+            Ok(None) => {}
+            Err(error) => self.surface_error(error.to_string()),
+        }
+    }
+
+    /// Copy-as-HTML onto the general pasteboard (HTML + plain flavors).
+    fn run_copy_html(&mut self) {
+        match self.session.export_html() {
+            Ok(output) => {
+                copy_html_to_clipboard(&output.html);
+                self.surface_error("Copied HTML to clipboard");
+            }
+            Err(error) => self.surface_error(format!("Copy HTML failed: {error}")),
+        }
+    }
+
+    fn toggle_toolbar(&mut self) {
+        let visible = self.source_pane.toggle_toolbar();
+        self.surface_error(if visible {
+            "Formatting toolbar shown"
+        } else {
+            "Formatting toolbar hidden"
+        });
+    }
+
+    // --- find / replace bar -------------------------------------------------
+
+    fn open_find(&mut self, replace_enabled: bool) {
+        let seed = self
+            .source_pane
+            .editor()
+            .current_selection()
+            .ok()
+            .filter(|selection| !selection.is_collapsed())
+            .and_then(|selection| {
+                let (start, end) = (
+                    selection.anchor.min(selection.head),
+                    selection.anchor.max(selection.head),
+                );
+                self.session.source().get(start..end).map(str::to_owned)
+            });
+        let mut bar = self.find_bar.take().unwrap_or_else(|| FindBarView {
+            query: String::new(),
+            replacement: String::new(),
+            replace_enabled,
+            focus: FindField::Query,
+            status: String::new(),
+        });
+        if let Some(seed) = seed {
+            bar.query = seed;
+        }
+        bar.replace_enabled = bar.replace_enabled || replace_enabled;
+        bar.focus = FindField::Query;
+        self.find_bar = Some(bar);
+        self.refresh_search();
+    }
+
+    fn close_find(&mut self) {
+        self.find_bar = None;
+        self.session.end_find();
+        self.source_pane.set_find_bar(None);
+    }
+
+    fn set_find_status(&mut self, status: impl Into<String>) {
+        if let Some(bar) = self.find_bar.as_mut() {
+            bar.status = status.into();
+        }
+    }
+
+    fn push_find_display(&mut self) {
+        self.source_pane.set_find_bar(self.find_bar.clone());
+    }
+
+    fn toggle_find_focus(&mut self) {
+        if let Some(bar) = self.find_bar.as_mut()
+            && bar.replace_enabled
+        {
+            bar.focus = match bar.focus {
+                FindField::Query => FindField::Replace,
+                FindField::Replace => FindField::Query,
+            };
+        }
+        self.push_find_display();
+    }
+
+    fn find_input(&mut self, character: char) {
+        let mut requery = false;
+        if let Some(bar) = self.find_bar.as_mut() {
+            match bar.focus {
+                FindField::Query => {
+                    bar.query.push(character);
+                    requery = true;
+                }
+                FindField::Replace => bar.replacement.push(character),
+            }
+        }
+        if requery {
+            self.refresh_search();
+        } else {
+            self.push_find_display();
+        }
+    }
+
+    fn find_backspace(&mut self) {
+        let mut requery = false;
+        if let Some(bar) = self.find_bar.as_mut() {
+            match bar.focus {
+                FindField::Query => {
+                    bar.query.pop();
+                    requery = true;
+                }
+                FindField::Replace => {
+                    bar.replacement.pop();
+                }
+            }
+        }
+        if requery {
+            self.refresh_search();
+        } else {
+            self.push_find_display();
+        }
+    }
+
+    /// (Re)starts the find session from the current query and locates the first
+    /// match from the caret.
+    fn refresh_search(&mut self) {
+        let query = self.find_bar.as_ref().map(|bar| bar.query.clone());
+        let Some(query) = query else {
+            return;
+        };
+        if query.is_empty() {
+            self.session.end_find();
+            self.set_find_status("Type to search");
+            self.push_find_display();
+            return;
+        }
+        let Ok(find_query) = FindQuery::new(query, MatchMode::Plain, false) else {
+            self.set_find_status("Invalid search pattern");
+            self.push_find_display();
+            return;
+        };
+        self.session
+            .start_find(find_query, FindDirection::Forward, true);
+        let from = self.source_pane.editor().caret_byte().unwrap_or(0);
+        self.locate_and_report(FindDirection::Forward, from);
+    }
+
+    /// Advances to the next/previous match relative to the current one.
+    fn find_move(&mut self, direction: FindDirection) {
+        if self.session.find_session().is_none() {
+            self.refresh_search();
+            return;
+        }
+        let current = self
+            .session
+            .find_session()
+            .and_then(|session| session.current.clone());
+        let from = match (&current, direction) {
+            (Some(range), FindDirection::Forward) => range.start.saturating_add(1),
+            (Some(range), FindDirection::Backward) => range.start.saturating_sub(1),
+            (None, _) => self.source_pane.editor().caret_byte().unwrap_or(0),
+        };
+        self.locate_and_report(direction, from);
+    }
+
+    fn locate_and_report(&mut self, direction: FindDirection, from: usize) {
+        let result = match direction {
+            FindDirection::Forward => self.session.find_next(from),
+            FindDirection::Backward => self.session.find_prev(from),
+        };
+        match result {
+            Ok(Some(range)) => {
+                self.highlight_match(&range);
+                self.set_find_status(format!("Match at byte {}", range.start));
+            }
+            Ok(None) => self.set_find_status("No matches"),
+            Err(error) => self.set_find_status(error.to_string()),
+        }
+        self.push_find_display();
+    }
+
+    fn highlight_match(&mut self, range: &Range<usize>) {
+        let revision = self.session.snapshot().revision;
+        let _ = self.source_pane.editor_mut().set_selection(
+            revision,
+            Selection {
+                anchor: range.start,
+                head: range.end,
+            },
+        );
+        self.source_pane.request_redraw();
+    }
+
+    fn run_replace_current(&mut self, event_loop: &ActiveEventLoop) {
+        let replacement = self.find_bar.as_ref().map(|bar| bar.replacement.clone());
+        let Some(replacement) = replacement else {
+            return;
+        };
+        match self.session.replace_current(replacement) {
+            Ok(applied) => {
+                if let Some(selection) = applied.selection_after {
+                    self.after_shared_edit(event_loop, selection);
+                }
+                self.find_move(FindDirection::Forward);
+            }
+            Err(error) => {
+                self.set_find_status(error.to_string());
+                self.push_find_display();
+            }
+        }
+    }
+
+    fn run_replace_all(&mut self, event_loop: &ActiveEventLoop) {
+        let replacement = self.find_bar.as_ref().map(|bar| bar.replacement.clone());
+        let Some(replacement) = replacement else {
+            return;
+        };
+        match self.session.replace_all(replacement) {
+            Ok(applied) => {
+                if let Some(selection) = applied.selection_after {
+                    self.after_shared_edit(event_loop, selection);
+                }
+                self.set_find_status(format!("Replaced {} match(es)", applied.replaced));
+            }
+            Err(error) => self.set_find_status(error.to_string()),
+        }
+        self.push_find_display();
+    }
+
+    /// Handles a keystroke while the find bar is open. Returns `true` when the
+    /// keystroke was consumed by the bar (so the editor must not also see it).
+    fn handle_find_key(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        key_event: &winit::event::KeyEvent,
+        command: bool,
+        shift: bool,
+    ) -> bool {
+        use winit::keyboard::NamedKey;
+        if self.find_bar.is_none() {
+            return false;
+        }
+        if command {
+            return match &key_event.logical_key {
+                Key::Named(NamedKey::Enter) => {
+                    self.run_replace_all(event_loop);
+                    true
+                }
+                Key::Character(character) if character.eq_ignore_ascii_case("g") => {
+                    self.find_move(if shift {
+                        FindDirection::Backward
+                    } else {
+                        FindDirection::Forward
+                    });
+                    true
+                }
+                // Let other command bindings (Cmd+F/Cmd+Shift+F/Cmd+S/…) run.
+                _ => false,
+            };
+        }
+        match &key_event.logical_key {
+            Key::Named(NamedKey::Escape) => {
+                self.close_find();
+                true
+            }
+            Key::Named(NamedKey::Enter) => {
+                let focus = self.find_bar.as_ref().map(|bar| bar.focus);
+                if shift {
+                    self.find_move(FindDirection::Backward);
+                } else if focus == Some(FindField::Replace) {
+                    self.run_replace_current(event_loop);
+                } else {
+                    self.find_move(FindDirection::Forward);
+                }
+                true
+            }
+            Key::Named(NamedKey::Tab) => {
+                self.toggle_find_focus();
+                true
+            }
+            Key::Named(NamedKey::Backspace) => {
+                self.find_backspace();
+                true
+            }
+            Key::Named(NamedKey::Space) => {
+                self.find_input(' ');
+                true
+            }
+            Key::Character(text) => {
+                for character in text.chars() {
+                    self.find_input(character);
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    // --- autosave / recovery / session restore ------------------------------
+
+    fn maybe_autosave(&mut self) {
+        if self.smoke {
+            return;
+        }
+        if self.session.app_state().dirty() && self.last_autosave.elapsed() >= AUTOSAVE_INTERVAL {
+            if let Err(error) = self.session.autosave_tick(unix_ms_now()) {
+                self.surface_error(format!("Autosave failed: {error}"));
+            }
+            self.last_autosave = Instant::now();
+        }
+    }
+
+    fn adopt_recovery(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(recovered) = self.pending_recovery.take() else {
+            return;
+        };
+        if let Err(error) = self.session.adopt_recovered(recovered) {
+            self.fail(event_loop, error.to_string());
+            return;
+        }
+        if let Err(error) = self.source_pane.replace(&self.session.snapshot()) {
+            self.fail(event_loop, error.to_string());
+            return;
+        }
+        self.source_pane.update_counts(self.session.counts());
+        if let Err(error) = self.render_and_navigate() {
+            self.fail(event_loop, error.to_string());
+            return;
+        }
+        if let Some(window) = &self.window {
+            window.set_title(&status_title("Recovered unsaved changes"));
+        }
+    }
+
+    fn dismiss_recovery(&mut self) {
+        self.pending_recovery = None;
+        if let Some(window) = &self.window {
+            window.set_title(PRODUCT_NAME);
+        }
+    }
+
+    fn apply_restore(&mut self) {
+        let Some(restore) = self.pending_restore.take() else {
+            return;
+        };
+        if let (Some(window), Some(frame)) = (&self.window, restore.window) {
+            let _ =
+                window.request_inner_size(winit::dpi::LogicalSize::new(frame.width, frame.height));
+            window.set_outer_position(winit::dpi::LogicalPosition::new(frame.x, frame.y));
+        }
+        if let Some(selection) = restore.selection {
+            let revision = self.session.snapshot().revision;
+            let _ = self
+                .source_pane
+                .editor_mut()
+                .set_selection(revision, selection);
+        }
+    }
+
+    fn save_session_on_exit(&mut self) {
+        if self.smoke {
+            return;
+        }
+        let revision = self.session.snapshot().revision;
+        let selection = self.source_pane.editor().current_selection().ok();
+        let top_visible_byte = self.source_pane.editor().top_visible_byte(revision).ok();
+        let window = self.window.as_ref().map(|window| {
+            let position = window.outer_position().ok();
+            let size = window.inner_size();
+            SessionWindowV1 {
+                x: position.map(|p| p.x).unwrap_or(0),
+                y: position.map(|p| p.y).unwrap_or(0),
+                width: size.width,
+                height: size.height,
+            }
+        });
+        let state =
+            self.session
+                .capture_session_state(unix_ms_now(), selection, top_visible_byte, window);
+        let _ = self.session.save_session_state(&state);
     }
 
     fn process_preview_event(&mut self, event_loop: &ActiveEventLoop, event: PreviewEventV1) {
@@ -600,7 +1158,21 @@ impl ApplicationHandler for ProductRunner {
             Ok(webview) => {
                 self.webview = Some(webview);
                 self.window = Some(window);
-                event_loop.set_control_flow(ControlFlow::WaitUntil(self.deadline));
+                self.apply_restore();
+                if self.pending_recovery.is_some()
+                    && let Some(window) = &self.window
+                {
+                    window.set_title(&status_title(
+                        "Recovered unsaved changes: ⌘Y Restore · Esc Dismiss",
+                    ));
+                }
+                if self.smoke {
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(self.deadline));
+                } else {
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(
+                        Instant::now() + AUTOSAVE_INTERVAL,
+                    ));
+                }
             }
             Err(error) => self.fail(event_loop, error.to_string()),
         }
@@ -622,6 +1194,7 @@ impl ApplicationHandler for ProductRunner {
                     window.request_redraw();
                 }
             } else {
+                self.save_session_on_exit();
                 event_loop.exit();
             }
             return;
@@ -692,7 +1265,10 @@ impl ApplicationHandler for ProductRunner {
                     && matches!(key_event.logical_key, Key::Character(ref key) if key.eq_ignore_ascii_case("d"))
                 {
                     match self.session.decide_close(CloseDecision::Discard) {
-                        Ok(CloseOutcome::Close) => event_loop.exit(),
+                        Ok(CloseOutcome::Close) => {
+                            self.save_session_on_exit();
+                            event_loop.exit();
+                        }
                         Ok(CloseOutcome::KeepOpen) => self.pending_close = false,
                         Err(error) => self.surface_error(error.to_string()),
                     }
@@ -702,7 +1278,7 @@ impl ApplicationHandler for ProductRunner {
                     && matches!(key_event.logical_key, Key::Character(ref key) if key.eq_ignore_ascii_case("s"))
                 {
                     let untitled_path = if self.session.path().is_none() {
-                        match choose_save_path() {
+                        match choose_save_path("Untitled.md") {
                             Ok(Some(path)) => Some(path),
                             Ok(None) => {
                                 let _ = self.session.decide_close(CloseDecision::Cancel);
@@ -724,13 +1300,116 @@ impl ApplicationHandler for ProductRunner {
                         .session
                         .decide_close(CloseDecision::Save { untitled_path })
                     {
-                        Ok(CloseOutcome::Close) => event_loop.exit(),
+                        Ok(CloseOutcome::Close) => {
+                            self.save_session_on_exit();
+                            event_loop.exit();
+                        }
                         Ok(CloseOutcome::KeepOpen) => self.pending_close = false,
                         Err(error) => self.surface_error(format!("Save failed: {error}")),
                     }
                     return;
                 }
             }
+            let shift = self.modifiers.shift_key();
+
+            // Crash-recovery prompt (non-smoke): ⌘Y restore · Esc dismiss.
+            if self.pending_recovery.is_some() {
+                if command
+                    && matches!(key_event.logical_key, Key::Character(ref key) if key.eq_ignore_ascii_case("y"))
+                {
+                    self.adopt_recovery(event_loop);
+                    return;
+                }
+                if matches!(
+                    key_event.logical_key,
+                    Key::Named(winit::keyboard::NamedKey::Escape)
+                ) {
+                    self.dismiss_recovery();
+                    return;
+                }
+            }
+
+            // Find/replace bar captures non-command keys while open.
+            if self.find_bar.is_some()
+                && self.handle_find_key(event_loop, key_event, command, shift)
+            {
+                self.source_pane.request_redraw();
+                return;
+            }
+
+            // Open find (⌘F) / open find+replace (⌘⇧F).
+            if command
+                && matches!(key_event.logical_key, Key::Character(ref key) if key.eq_ignore_ascii_case("f"))
+            {
+                self.open_find(shift);
+                return;
+            }
+            // Find next (⌘G) / find previous (⌘⇧G).
+            if command
+                && matches!(key_event.logical_key, Key::Character(ref key) if key.eq_ignore_ascii_case("g"))
+            {
+                self.find_move(if shift {
+                    FindDirection::Backward
+                } else {
+                    FindDirection::Forward
+                });
+                return;
+            }
+
+            // Smart paste (⌘V): clipboard HTML → Markdown, else plain text.
+            if command
+                && !shift
+                && matches!(key_event.logical_key, Key::Character(ref key) if key.eq_ignore_ascii_case("v"))
+            {
+                self.run_smart_paste(event_loop);
+                return;
+            }
+
+            // Save-as-HTML (⌘⇧S) and Copy-as-HTML (⌘⇧C).
+            if command
+                && shift
+                && matches!(key_event.logical_key, Key::Character(ref key) if key.eq_ignore_ascii_case("s"))
+            {
+                self.run_save_html();
+                return;
+            }
+            if command
+                && shift
+                && matches!(key_event.logical_key, Key::Character(ref key) if key.eq_ignore_ascii_case("c"))
+            {
+                self.run_copy_html();
+                return;
+            }
+
+            // Toggle the formatting toolbar (⌘⇧T; default off).
+            if command
+                && shift
+                && matches!(key_event.logical_key, Key::Character(ref key) if key.eq_ignore_ascii_case("t"))
+            {
+                self.toggle_toolbar();
+                return;
+            }
+
+            // Format commands: ⌘B/I/K/E and ⌘⇧K/H/B/L/O/X.
+            if let Some(format_command) = format_command_for(&key_event.logical_key, command, shift)
+            {
+                self.run_format_command(event_loop, format_command);
+                return;
+            }
+
+            // Smart Enter routes plain Enter through the format engine (not while
+            // an IME composition is in flight — that Enter confirms the preedit).
+            if !command
+                && matches!(
+                    key_event.logical_key,
+                    Key::Named(winit::keyboard::NamedKey::Enter)
+                )
+                && !self.source_pane.editor().is_composing()
+            {
+                self.run_smart_enter(event_loop);
+                return;
+            }
+
             if command
                 && matches!(key_event.logical_key, Key::Character(ref key) if key.eq_ignore_ascii_case("s"))
             {
@@ -817,6 +1496,9 @@ impl ApplicationHandler for ProductRunner {
             Ok(false) => {}
             Err(error) => self.fail(event_loop, error.to_string()),
         }
+        // Toolbar button presses surface as queued format commands, not editor
+        // edits, so drain them after every processed event.
+        self.drain_format_commands(event_loop);
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
@@ -856,6 +1538,10 @@ impl ApplicationHandler for ProductRunner {
                     return;
                 }
             }
+        }
+        self.maybe_autosave();
+        if !self.smoke {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + AUTOSAVE_INTERVAL));
         }
         if self.smoke && Instant::now() >= self.deadline {
             self.fail(
@@ -907,6 +1593,24 @@ fn to_wry_response(response: SchemeResponse) -> Response<Cow<'static, [u8]>> {
         .expect("typed preview response headers are valid")
 }
 
+/// Which field of the find bar has keyboard focus.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FindField {
+    Query,
+    Replace,
+}
+
+/// The rendered state of the find/replace bar (a projection of the runner's
+/// live [`crate::actions::FindSession`] plus its editable buffers).
+#[derive(Clone, Debug)]
+struct FindBarView {
+    query: String,
+    replacement: String,
+    replace_enabled: bool,
+    focus: FindField,
+    status: String,
+}
+
 #[derive(Default)]
 struct SourceProgram;
 
@@ -915,12 +1619,64 @@ struct SourceState {
     error: Option<String>,
     window: Option<Arc<Window>>,
     pane_width: f32,
+    toolbar_visible: bool,
+    counts: Counts,
+    reading_seconds: u64,
+    find_bar: Option<FindBarView>,
+    format_sink: Option<Arc<Mutex<VecDeque<FormatCommand>>>>,
 }
 
 #[derive(Clone, Debug)]
 enum SourceMessage {
     Edit(text_editor::Action),
+    Format(FormatCommand),
 }
+
+/// Text-only, borderless toolbar button per DESIGN-SYSTEM ("text-only,
+/// borderless buttons, muted ink, needle-underline hover. No icons in chrome").
+fn chrome_button_style(
+    _theme: &core::theme::Theme,
+    status: iced_widget::button::Status,
+) -> iced_widget::button::Style {
+    use iced_widget::button::Status;
+    let text_color = match status {
+        Status::Hovered | Status::Pressed => ACCENT_GOLD,
+        _ => MUTED_INK,
+    };
+    iced_widget::button::Style {
+        background: None,
+        text_color,
+        border: core::Border::default(),
+        shadow: core::Shadow::default(),
+        snap: false,
+    }
+}
+
+fn editor_style(_theme: &core::theme::Theme, _status: text_editor::Status) -> text_editor::Style {
+    text_editor::Style {
+        background: core::Background::Color(core::Color::from_rgb8(
+            GROUND_LIGHT.0,
+            GROUND_LIGHT.1,
+            GROUND_LIGHT.2,
+        )),
+        border: core::Border::default(),
+        placeholder: MUTED_INK,
+        value: INK,
+        selection: SELECTION_GOLD,
+    }
+}
+
+/// Toolbar entries: (label, command). Text-only labels, no icons (LD-3 chrome).
+const TOOLBAR_ITEMS: &[(&str, FormatCommand)] = &[
+    ("Bold", FormatCommand::ToggleBold),
+    ("Italic", FormatCommand::ToggleItalic),
+    ("Code", FormatCommand::ToggleCodeSpan),
+    ("Heading", FormatCommand::CycleHeading),
+    ("Quote", FormatCommand::ToggleQuote),
+    ("List", FormatCommand::ToggleBulletList),
+    ("Ordered", FormatCommand::ToggleOrderedList),
+    ("Checklist", FormatCommand::ToggleChecklist),
+];
 
 impl Program for SourceProgram {
     type State = SourceState;
@@ -948,6 +1704,11 @@ impl Program for SourceProgram {
                 error: None,
                 window: None,
                 pane_width: WINDOW_WIDTH as f32 / 2.0,
+                toolbar_visible: false,
+                counts: Counts::default(),
+                reading_seconds: 0,
+                find_bar: None,
+                format_sink: None,
             },
             Task::none(),
         )
@@ -960,6 +1721,13 @@ impl Program for SourceProgram {
                     state.error = Some(error.to_string());
                 }
             }
+            SourceMessage::Format(command) => {
+                if let Some(sink) = &state.format_sink
+                    && let Ok(mut queue) = sink.lock()
+                {
+                    queue.push_back(command);
+                }
+            }
         }
         Task::none()
     }
@@ -969,16 +1737,97 @@ impl Program for SourceProgram {
         state: &'a Self::State,
         _window: core::window::Id,
     ) -> core::Element<'a, Self::Message, Self::Theme, Self::Renderer> {
-        iced_widget::container(
-            text_editor(state.editor.content())
-                .id(core::widget::Id::new("feathermark-source-editor"))
-                .placeholder("Write Markdown…")
-                .on_action(SourceMessage::Edit),
-        )
-        .width(core::Length::Fixed(state.pane_width))
-        .height(core::Length::Fill)
-        .padding(16)
-        .into()
+        let mut rows: Vec<core::Element<'a, Self::Message, Self::Theme, Self::Renderer>> =
+            Vec::new();
+
+        if state.toolbar_visible {
+            let mut buttons: Vec<core::Element<'a, Self::Message, Self::Theme, Self::Renderer>> =
+                Vec::new();
+            for (label, command) in TOOLBAR_ITEMS {
+                buttons.push(
+                    iced_widget::button(iced_widget::text(*label).size(CHROME_FONT_SIZE))
+                        .padding([2, 6])
+                        .style(chrome_button_style)
+                        .on_press(SourceMessage::Format(command.clone()))
+                        .into(),
+                );
+            }
+            rows.push(iced_widget::row(buttons).spacing(4).padding([4, 0]).into());
+        }
+
+        if let Some(find) = &state.find_bar {
+            let query_marker = if find.focus == FindField::Query {
+                "▸"
+            } else {
+                " "
+            };
+            let mut find_lines: Vec<core::Element<'a, Self::Message, Self::Theme, Self::Renderer>> =
+                Vec::new();
+            find_lines.push(
+                iced_widget::text(format!("{query_marker} Find: {}", find.query))
+                    .size(CHROME_FONT_SIZE)
+                    .color(INK)
+                    .into(),
+            );
+            if find.replace_enabled {
+                let replace_marker = if find.focus == FindField::Replace {
+                    "▸"
+                } else {
+                    " "
+                };
+                find_lines.push(
+                    iced_widget::text(format!("{replace_marker} Replace: {}", find.replacement))
+                        .size(CHROME_FONT_SIZE)
+                        .color(INK)
+                        .into(),
+                );
+            }
+            find_lines.push(
+                iced_widget::text(find.status.clone())
+                    .size(CHROME_FONT_SIZE)
+                    .color(MUTED_INK)
+                    .into(),
+            );
+            rows.push(
+                iced_widget::column(find_lines)
+                    .spacing(2)
+                    .padding([4, 0])
+                    .into(),
+            );
+        }
+
+        rows.push(
+            iced_widget::container(
+                text_editor(state.editor.content())
+                    .id(core::widget::Id::new("feathermark-source-editor"))
+                    .placeholder("Write Markdown…")
+                    .style(editor_style)
+                    .on_action(SourceMessage::Edit),
+            )
+            .height(core::Length::Fill)
+            .into(),
+        );
+
+        let reading = state.reading_seconds;
+        let status = format!(
+            "{} words · {} chars · {}:{:02} read",
+            state.counts.words,
+            state.counts.chars,
+            reading / 60,
+            reading % 60,
+        );
+        rows.push(
+            iced_widget::text(status)
+                .size(CHROME_FONT_SIZE)
+                .color(MUTED_INK)
+                .into(),
+        );
+
+        iced_widget::container(iced_widget::column(rows).spacing(6))
+            .width(core::Length::Fixed(state.pane_width))
+            .height(core::Length::Fill)
+            .padding(16)
+            .into()
     }
 }
 
@@ -1038,6 +1887,42 @@ impl IcedSourcePane {
 
     fn editor_mut(&mut self) -> &mut IcedEditorAdapter {
         &mut self.state.editor
+    }
+
+    fn editor(&self) -> &IcedEditorAdapter {
+        &self.state.editor
+    }
+
+    fn set_format_sink(&mut self, sink: Arc<Mutex<VecDeque<FormatCommand>>>) {
+        self.state.format_sink = Some(sink);
+    }
+
+    fn toggle_toolbar(&mut self) -> bool {
+        self.state.toolbar_visible = !self.state.toolbar_visible;
+        self.request_redraw();
+        self.state.toolbar_visible
+    }
+
+    fn update_counts(&mut self, counts: Counts) {
+        self.state.counts = counts;
+        self.state.reading_seconds = counts.reading_time_seconds();
+    }
+
+    fn set_find_bar(&mut self, find_bar: Option<FindBarView>) {
+        self.state.find_bar = find_bar;
+        self.request_redraw();
+    }
+
+    /// Performs a paste of `text` through the editor's incremental edit path
+    /// (used by smart paste after clipboard-HTML → Markdown conversion, and by
+    /// the plain-text fallback). Emits a `CommitRequested` the runner drains.
+    fn paste_text(&mut self, text: String) -> Result<bool, MacError> {
+        self.state
+            .editor
+            .perform(text_editor::Action::Edit(text_editor::Edit::Paste(
+                Arc::new(text),
+            )))
+            .map_err(|error| MacError::Core(error.to_string()))
     }
 
     fn attach_window(
@@ -1258,6 +2143,13 @@ impl IcedSourcePane {
                         .perform(action)
                         .map_err(|error| MacError::Core(error.to_string()))?;
                 }
+                SourceMessage::Format(command) => {
+                    if let Some(sink) = &self.state.format_sink
+                        && let Ok(mut queue) = sink.lock()
+                    {
+                        queue.push_back(command);
+                    }
+                }
             }
         }
         if let Some(text) = input_commit {
@@ -1313,19 +2205,17 @@ impl IcedSourcePane {
             renderer,
         );
         let theme = <core::theme::Theme as core::theme::Base>::default(core::theme::Mode::Light);
-        let background = core::Color::from_rgb8(245, 245, 240);
+        let background = core::Color::from_rgb8(GROUND_LIGHT.0, GROUND_LIGHT.1, GROUND_LIGHT.2);
         interface.draw(
             renderer,
             &theme,
-            &core::renderer::Style {
-                text_color: core::Color::from_rgb8(28, 28, 26),
-            },
+            &core::renderer::Style { text_color: INK },
             self.cursor,
         );
         self.cache = interface.into_cache();
 
         let pixels = compositor.screenshot(renderer, viewport, background);
-        let background_rgba = [245, 245, 240, 255];
+        let background_rgba = [GROUND_LIGHT.0, GROUND_LIGHT.1, GROUND_LIGHT.2, 255];
         self.ink_pixels = pixels
             .chunks_exact(4)
             .filter(|pixel| *pixel != background_rgba)
@@ -1369,11 +2259,50 @@ fn block_on_ready<F: Future>(future: F) -> Result<F::Output, MacError> {
     }
 }
 
-fn choose_save_path() -> Result<Option<PathBuf>, MacError> {
+/// Maps a `⌘`-modified key to its [`FormatCommand`], per the DESIGN-SYSTEM
+/// text-formatting bindings. Returns `None` for non-command or unmapped keys.
+fn format_command_for(key: &Key, command: bool, shift: bool) -> Option<FormatCommand> {
+    if !command {
+        return None;
+    }
+    let Key::Character(text) = key else {
+        return None;
+    };
+    let is = |candidate: &str| text.eq_ignore_ascii_case(candidate);
+    if shift {
+        if is("k") {
+            Some(FormatCommand::ToggleCodeBlock)
+        } else if is("h") {
+            Some(FormatCommand::CycleHeading)
+        } else if is("b") {
+            Some(FormatCommand::ToggleQuote)
+        } else if is("l") {
+            Some(FormatCommand::ToggleBulletList)
+        } else if is("o") {
+            Some(FormatCommand::ToggleOrderedList)
+        } else if is("x") {
+            Some(FormatCommand::ToggleChecklist)
+        } else {
+            None
+        }
+    } else if is("b") {
+        Some(FormatCommand::ToggleBold)
+    } else if is("i") {
+        Some(FormatCommand::ToggleItalic)
+    } else if is("k") {
+        Some(FormatCommand::InsertLink { url: None })
+    } else if is("e") {
+        Some(FormatCommand::ToggleCodeSpan)
+    } else {
+        None
+    }
+}
+
+fn choose_save_path(default_name: &str) -> Result<Option<PathBuf>, MacError> {
     let mtm = MainThreadMarker::new()
         .ok_or_else(|| MacError::Native("save panel must run on the AppKit main thread".into()))?;
     let panel = NSSavePanel::savePanel(mtm);
-    panel.setNameFieldStringValue(&NSString::from_str("Untitled.md"));
+    panel.setNameFieldStringValue(&NSString::from_str(default_name));
     if panel.runModal() != NSModalResponseOK {
         return Ok(None);
     }
@@ -1381,4 +2310,48 @@ fn choose_save_path() -> Result<Option<PathBuf>, MacError> {
         .URL()
         .and_then(|url| url.path())
         .map(|path| PathBuf::from(path.to_string())))
+}
+
+/// Stable per-user autosave/session directory
+/// (`~/Library/Application Support/Rutile`).
+fn autosave_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .map(|home| PathBuf::from(home).join("Library/Application Support/Rutile"))
+}
+
+fn unix_ms_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
+}
+
+/// Reads clipboard HTML (`public.html`) for smart paste, if present.
+fn clipboard_html() -> Option<String> {
+    let pasteboard = NSPasteboard::generalPasteboard();
+    let html_type = unsafe { NSPasteboardTypeHTML };
+    pasteboard
+        .stringForType(html_type)
+        .map(|value| value.to_string())
+}
+
+/// Reads the plain-text clipboard flavor (smart-paste fallback).
+fn clipboard_string() -> Option<String> {
+    let pasteboard = NSPasteboard::generalPasteboard();
+    let string_type = unsafe { NSPasteboardTypeString };
+    pasteboard
+        .stringForType(string_type)
+        .map(|value| value.to_string())
+}
+
+/// Copy-as-HTML: writes the self-contained export page to the general
+/// pasteboard under both the HTML and plain-text flavors.
+fn copy_html_to_clipboard(html: &str) {
+    let pasteboard = NSPasteboard::generalPasteboard();
+    pasteboard.clearContents();
+    let value = NSString::from_str(html);
+    let html_type = unsafe { NSPasteboardTypeHTML };
+    let string_type = unsafe { NSPasteboardTypeString };
+    pasteboard.setString_forType(&value, html_type);
+    pasteboard.setString_forType(&value, string_type);
 }

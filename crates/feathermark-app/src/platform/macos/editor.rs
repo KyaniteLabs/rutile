@@ -4,7 +4,7 @@ use std::sync::Arc;
 use feathermark_core::{
     AdapterCommitId, ChangeSet, CompositionCancelReason, CompositionTracker, DocumentSnapshot,
     Edit, EditTransaction, EditorAdapter, EditorCommit, EditorError, EditorEvent, EditorEventSink,
-    LocalCommitRejection, StaleRevision, TransactionKind,
+    LocalCommitRejection, Selection, StaleRevision, TransactionKind,
 };
 use feathermark_types::{InteractionId, Revision};
 use iced_widget::text_editor;
@@ -358,6 +358,99 @@ impl IcedEditorAdapter {
         }
     }
 
+    /// Reads the current caret/selection as document byte offsets. Format and
+    /// find/replace shell gestures feed this into the shared Wave-2S action
+    /// surface (`apply_format_command`, `smart_enter`, `find_next`, …).
+    pub fn current_selection(&self) -> Result<Selection, EditorError> {
+        let cursor = self.content.cursor();
+        let head = self
+            .index
+            .byte_at(cursor.position.line, cursor.position.column)?;
+        let anchor = cursor
+            .selection
+            .map(|position| self.index.byte_at(position.line, position.column))
+            .transpose()?
+            .unwrap_or(head);
+        Ok(Selection { anchor, head })
+    }
+
+    /// Byte offset of the caret (the selection head).
+    pub fn caret_byte(&self) -> Result<usize, EditorError> {
+        Ok(self.current_selection()?.head)
+    }
+
+    /// Whether an IME composition is currently in flight (so a shell can leave
+    /// the confirming Enter to the composition path instead of Smart Enter).
+    pub fn is_composing(&self) -> bool {
+        self.composition.is_some()
+    }
+
+    /// Installs `selection` (document byte offsets) as the caret/selection.
+    /// `revision` must match the adapter's current revision so a shell can never
+    /// place a selection against stale text.
+    pub fn set_selection(
+        &mut self,
+        revision: Revision,
+        selection: Selection,
+    ) -> Result<(), EditorError> {
+        if revision != self.revision {
+            return Err(EditorError::Platform(
+                "set_selection revision does not match the acknowledged revision".into(),
+            ));
+        }
+        let head = self.index.position_at(selection.head)?;
+        let anchor = if selection.is_collapsed() {
+            None
+        } else {
+            Some(self.index.position_at(selection.anchor)?)
+        };
+        self.content.move_to(text_editor::Cursor {
+            position: head,
+            selection: anchor,
+        });
+        Ok(())
+    }
+
+    /// Re-synchronizes the mirror to an authoritative snapshot produced by a
+    /// shared (AppState-driven) mutation — a format command, smart Enter, or a
+    /// find/replace — then installs `selection`.
+    ///
+    /// The shared action surface applies its bounded [`EditPlan`]s directly to
+    /// the sibling `Document` and does not hand back a [`ChangeSet`], so the
+    /// adapter cannot follow those edits the way it follows `apply_external_change`
+    /// (undo/redo). Rather than re-install the whole buffer (which would drop the
+    /// viewport and every incremental invariant), this computes the single
+    /// minimal changed span between the current mirror and the new snapshot and
+    /// applies exactly that edit — keeping the mirror update proportional to what
+    /// the format engine actually changed, not to document size.
+    pub fn resync_to(
+        &mut self,
+        snapshot: &DocumentSnapshot,
+        selection: Selection,
+    ) -> Result<(), EditorError> {
+        let new_text = snapshot.to_string();
+        if new_text != self.mirror {
+            let (range, replacement) = minimal_diff(&self.mirror, &new_text);
+            let start = self.index.position_at(range.start)?;
+            let end = self.index.position_at(range.end)?;
+            self.content.move_to(text_editor::Cursor {
+                position: end,
+                selection: Some(start),
+            });
+            self.content
+                .perform(text_editor::Action::Edit(text_editor::Edit::Paste(
+                    Arc::new(replacement.clone()),
+                )));
+            self.mirror.replace_range(range.clone(), &replacement);
+            self.index.apply(range, &replacement);
+        }
+        self.revision = snapshot.revision;
+        self.pending_commit = None;
+        self.composition = None;
+        self.top_visible_byte = self.top_visible_byte.min(self.mirror.len());
+        self.set_selection(self.revision, selection)
+    }
+
     fn next_commit_id(&mut self) -> AdapterCommitId {
         self.next_commit_id = self.next_commit_id.saturating_add(1);
         self.next_commit_id
@@ -385,6 +478,45 @@ impl IcedEditorAdapter {
             sink(event);
         }
     }
+}
+
+/// Computes the single minimal changed span between `old` and `new`: the range
+/// (in `old` byte coordinates) to replace and the replacement text taken from
+/// `new`. Endpoints are aligned to `char` boundaries in both strings, so the
+/// returned edit is always valid to apply. `old == new` yields an empty edit at
+/// the shared prefix.
+fn minimal_diff(old: &str, new: &str) -> (Range<usize>, String) {
+    let old_bytes = old.as_bytes();
+    let new_bytes = new.as_bytes();
+
+    let max_prefix = old_bytes.len().min(new_bytes.len());
+    let mut prefix = 0;
+    while prefix < max_prefix && old_bytes[prefix] == new_bytes[prefix] {
+        prefix += 1;
+    }
+    while prefix > 0 && (!old.is_char_boundary(prefix) || !new.is_char_boundary(prefix)) {
+        prefix -= 1;
+    }
+
+    let max_suffix = (old_bytes.len() - prefix).min(new_bytes.len() - prefix);
+    let mut suffix = 0;
+    while suffix < max_suffix
+        && old_bytes[old_bytes.len() - 1 - suffix] == new_bytes[new_bytes.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+    let mut old_end = old_bytes.len() - suffix;
+    let mut new_end = new_bytes.len() - suffix;
+    while old_end < old_bytes.len()
+        && (!old.is_char_boundary(old_end) || !new.is_char_boundary(new_end))
+    {
+        old_end += 1;
+        new_end += 1;
+    }
+    let old_end = old_end.max(prefix);
+    let new_end = new_end.max(prefix);
+
+    (prefix..old_end, new[prefix..new_end].to_owned())
 }
 
 impl EditorAdapter for IcedEditorAdapter {
