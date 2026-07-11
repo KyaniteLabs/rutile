@@ -10,10 +10,193 @@ use feathermark_app::platform::linux_gtk::{
 };
 use feathermark_app::preview_host::{PreviewControlSink, PreviewHost};
 use feathermark_core::{
-    Document, Edit, EditTransaction, EditorAdapter, EditorEvent, ExternalResolution, ScrollClock,
-    TransactionKind, apply_editor_commit,
+    AutosaveStore, Document, Edit, EditTransaction, EditorAdapter, EditorEvent, ExternalResolution,
+    FindDirection, FindQuery, FormatCommand, MatchMode, ScrollClock, Selection, TransactionKind,
+    apply_editor_commit, html_to_markdown,
 };
 use gtk::prelude::*;
+
+#[test]
+fn format_command_bolds_the_selection_through_the_shared_engine() {
+    let mut session = LinuxProductSession::new().unwrap();
+    session.replace_all("hello world", 0).unwrap();
+    let before = session.revision();
+
+    let applied = session
+        .apply_format(
+            Selection { anchor: 0, head: 5 },
+            FormatCommand::ToggleBold,
+            10,
+        )
+        .unwrap();
+
+    assert_eq!(session.source(), "**hello** world");
+    assert!(applied.revision > before);
+    assert_eq!(applied.revision, session.revision());
+}
+
+#[test]
+fn heading_cycle_and_smart_enter_route_through_the_action_surface() {
+    let mut session = LinuxProductSession::new().unwrap();
+    session.replace_all("title\n", 0).unwrap();
+    session
+        .apply_format(Selection::collapsed(0), FormatCommand::CycleHeading, 10)
+        .unwrap();
+    assert_eq!(session.source(), "# title\n");
+
+    // Smart Enter continues a bullet list.
+    let mut list = LinuxProductSession::new().unwrap();
+    list.replace_all("- item", 0).unwrap();
+    let end = list.source().len();
+    list.smart_enter(Selection::collapsed(end), 20).unwrap();
+    let continued = list.source();
+    assert!(
+        continued.starts_with("- item\n"),
+        "smart Enter must continue the list: {continued:?}"
+    );
+    assert!(continued.len() > "- item\n".len());
+}
+
+#[test]
+fn smart_paste_converts_clipboard_html_to_markdown_before_insert() {
+    let mut session = LinuxProductSession::new().unwrap();
+    session.replace_all("", 0).unwrap();
+    let html = "<h1>Title</h1><p>Some <strong>bold</strong> and <em>italic</em>.</p>";
+    let expected = html_to_markdown(html).unwrap();
+
+    session
+        .paste_html(Selection::collapsed(0), html, 10)
+        .unwrap();
+
+    assert_eq!(session.source(), expected);
+    assert!(session.source().contains("bold"));
+    assert!(session.source().contains("Title"));
+}
+
+#[test]
+fn export_html_is_self_contained_and_scriptless() {
+    let directory = std::env::temp_dir().join(format!(
+        "feathermark-linux-export-test-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("note.html");
+
+    let mut session = LinuxProductSession::new().unwrap();
+    session
+        .replace_all("# Recipe\n\nMix **flour** and _water_.\n", 0)
+        .unwrap();
+
+    let output = session.export_html(Some("Recipe".to_owned())).unwrap();
+    let lower = output.html.to_lowercase();
+    assert!(lower.contains("<!doctype html>"));
+    assert!(!lower.contains("<script"));
+    assert!(!lower.contains("http://"));
+    assert!(!lower.contains("https://"));
+    assert!(!lower.contains("src=\"http"));
+
+    session.save_html(&path, Some("Recipe".to_owned())).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), output.html);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn find_and_replace_route_through_the_shared_actions() {
+    let mut session = LinuxProductSession::new().unwrap();
+    session.replace_all("foo bar foo baz foo", 0).unwrap();
+
+    session.start_find(
+        FindQuery::new("foo".to_owned(), MatchMode::Plain, false).unwrap(),
+        FindDirection::Forward,
+        true,
+    );
+    assert_eq!(session.find_next(0).unwrap(), Some(0..3));
+    let replaced = session.replace_current_match("qux".to_owned(), 10).unwrap();
+    assert_eq!(replaced.replaced, 1);
+    assert_eq!(session.source(), "qux bar foo baz foo");
+
+    // Replace-all over the remaining matches.
+    session.start_find(
+        FindQuery::new("foo".to_owned(), MatchMode::Plain, false).unwrap(),
+        FindDirection::Forward,
+        true,
+    );
+    let all = session.replace_all_matches("X".to_owned(), 20).unwrap();
+    assert_eq!(all.replaced, 2);
+    assert_eq!(session.source(), "qux bar X baz X");
+}
+
+#[test]
+fn counts_report_words_and_characters() {
+    let mut session = LinuxProductSession::new().unwrap();
+    session.replace_all("one two three", 0).unwrap();
+    let counts = session.counts();
+    assert_eq!(counts.words, 3);
+    assert_eq!(counts.chars, "one two three".chars().count());
+}
+
+#[test]
+fn autosave_then_recover_restores_the_unsaved_buffer() {
+    let directory = std::env::temp_dir().join(format!(
+        "feathermark-linux-autosave-test-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+
+    let mut writer = LinuxProductSession::new().unwrap();
+    writer
+        .bind_autosave(AutosaveStore::new(directory.clone()))
+        .unwrap();
+    writer.replace_all("unsaved recovery content", 0).unwrap();
+    let entry = writer.autosave_tick(1_000).unwrap();
+    assert!(entry.is_some());
+
+    // A fresh session pointed at the same journal recovers the content.
+    let mut recovered_session = LinuxProductSession::new().unwrap();
+    recovered_session
+        .bind_autosave(AutosaveStore::new(directory.clone()))
+        .unwrap();
+    let recovered = recovered_session
+        .recover()
+        .unwrap()
+        .expect("a recoverable entry");
+    recovered_session.adopt_recovered(recovered, 10).unwrap();
+    assert_eq!(recovered_session.source(), "unsaved recovery content");
+    assert!(recovered_session.dirty());
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn session_state_round_trips_through_the_store() {
+    let directory = std::env::temp_dir().join(format!(
+        "feathermark-linux-session-test-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let file = directory.join("note.md");
+
+    let mut session = LinuxProductSession::new().unwrap();
+    session
+        .bind_autosave(AutosaveStore::new(directory.clone()))
+        .unwrap();
+    session.replace_all("body", 0).unwrap();
+    session.save_as(&file).unwrap();
+
+    let state =
+        session.capture_session_state(5_000, Some(Selection { anchor: 1, head: 3 }), Some(0), None);
+    session.save_session_state(&state).unwrap();
+
+    let loaded = session
+        .load_session_state()
+        .unwrap()
+        .expect("saved session");
+    let restore = session.restore_session(&loaded);
+    assert_eq!(restore.last_file.as_deref(), Some(file.as_path()));
+    assert_eq!(restore.selection, Some(Selection { anchor: 1, head: 3 }));
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
 
 #[test]
 fn product_session_edits_through_the_bounded_renderer_and_stages_preview() {

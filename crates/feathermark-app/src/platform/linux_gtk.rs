@@ -18,14 +18,20 @@ use feathermark_core::{
     ScrollPosition, ScrollSynchronizer, ScrollTarget, StaleRevision, TransactionKind,
     apply_editor_commit,
 };
+use feathermark_core::{
+    AutosaveEntryV1, AutosaveStore, Counts, FindDirection, FindQuery, FormatCommand, MatchMode,
+    RecoveredDocument, Selection, SessionStateV1, SessionWindowV1, html_to_markdown,
+};
 use feathermark_protocol::RenderUrl;
 use feathermark_types::{InteractionId, Revision};
+use gtk::gdk::keys::constants as keys;
 use gtk::prelude::*;
 use sourceview4::prelude::*;
 use wry::http::{Response, StatusCode};
 use wry::{NewWindowResponse, Rect, WebContext, WebView, WebViewBuilder, WebViewBuilderExtUnix};
 
 use super::PlatformAdapter;
+use crate::actions::{ExportOutput, FindSession, FormatApplied, ReplaceApplied, SessionRestore};
 use crate::app::{AppEffect, AppMessage, AppState, CloseDecision, CloseOutcome};
 use crate::brand::{PRODUCT_NAME, SOURCE_EDITOR_LABEL, STARTER_DOCUMENT, status_title};
 use crate::preview_host::{
@@ -439,6 +445,47 @@ impl GtkSourceEditorAdapter {
     fn iter_at_byte(&self, byte: usize) -> Result<gtk::TextIter, EditorError> {
         let (line, index) = self.inner.borrow().index.line_and_index(byte)?;
         Ok(self.buffer.iter_at_line_index(line, index))
+    }
+
+    /// Current native selection in document byte coordinates. A collapsed cursor
+    /// yields an empty [`Selection`]; the anchor is the selection bound and the
+    /// head is the insertion point so the format engine sees the caret side.
+    pub fn selection(&self) -> Result<Selection, EditorError> {
+        let inner = self.inner.borrow();
+        if let Some((start, end)) = self.buffer.selection_bounds() {
+            let anchor = inner.index.byte_at(start.line(), start.line_index())?;
+            let head = inner.index.byte_at(end.line(), end.line_index())?;
+            return Ok(Selection { anchor, head });
+        }
+        let insert = self
+            .buffer
+            .get_insert()
+            .map(|mark| self.buffer.iter_at_mark(&mark))
+            .unwrap_or_else(|| self.buffer.start_iter());
+        let byte = inner.index.byte_at(insert.line(), insert.line_index())?;
+        Ok(Selection::collapsed(byte))
+    }
+
+    /// Whether an IME composition (preedit) is currently active. Smart Enter and
+    /// other key interceptions must defer to the IME while composing so a CJK
+    /// commit-on-Enter is never stolen.
+    pub fn is_composing(&self) -> bool {
+        self.inner.borrow().composition.is_some()
+    }
+
+    /// Installs a document-byte [`Selection`] into the native buffer and scrolls
+    /// the caret into view. Used after a programmatic edit (format, smart paste,
+    /// find/replace) resyncs the mirror.
+    pub fn set_selection(&self, selection: Selection) -> Result<(), EditorError> {
+        let anchor = self.iter_at_byte(selection.anchor)?;
+        let head = self.iter_at_byte(selection.head)?;
+        self.buffer.select_range(&head, &anchor);
+        if let Some(view) = self.inner.borrow().view.clone()
+            && let Some(mark) = self.buffer.get_insert()
+        {
+            view.scroll_to_mark(&mark, 0.1, false, 0.0, 0.0);
+        }
+        Ok(())
     }
 }
 
@@ -1239,6 +1286,252 @@ impl LinuxProductSession {
     }
 }
 
+/// Wave 2L shell-integration wiring: native GTK input routed to the frozen
+/// Wave-2S [`AppState`] action surface. Every mutating method routes through the
+/// shared action (format engine / find-replace / arbitrary insert), then submits
+/// the resulting render through the same scheduler path typed edits use. The
+/// caller resyncs the native mirror from [`Self::snapshot`] afterwards.
+impl LinuxProductSession {
+    pub fn snapshot(&self) -> feathermark_core::DocumentSnapshot {
+        self.document.snapshot()
+    }
+
+    fn schedule_effects(&mut self, effects: &[AppEffect], now_ms: u64) {
+        for effect in effects {
+            if let AppEffect::ScheduleRender { revision } = effect {
+                self.submit_rope_render(*revision, now_ms);
+            }
+        }
+    }
+
+    /// Applies a [`FormatCommand`] (bold/italic/link/heading/code/quote/list/
+    /// checklist, or `SmartEnter`) at `selection` through the shared engine.
+    pub fn apply_format(
+        &mut self,
+        selection: Selection,
+        command: FormatCommand,
+        now_ms: u64,
+    ) -> Result<FormatApplied, String> {
+        if self.closed {
+            return Err("document session is closed".to_owned());
+        }
+        let applied = self
+            .app
+            .apply_format_command(&mut self.document, selection, command)
+            .map_err(|error| error.to_string())?;
+        self.schedule_effects(&applied.effects, now_ms);
+        Ok(applied)
+    }
+
+    /// Smart-Enter keystroke: continues/exits lists, quotes, and checklists.
+    pub fn smart_enter(
+        &mut self,
+        selection: Selection,
+        now_ms: u64,
+    ) -> Result<FormatApplied, String> {
+        self.apply_format(selection, FormatCommand::SmartEnter, now_ms)
+    }
+
+    /// Replaces `selection` with `text` as a bounded programmatic edit. The
+    /// smart-paste path lowers converted-clipboard markdown through here.
+    pub fn insert_text(
+        &mut self,
+        selection: Selection,
+        text: &str,
+        now_ms: u64,
+    ) -> Result<Revision, String> {
+        if self.closed {
+            return Err("document session is closed".to_owned());
+        }
+        let start = selection.anchor.min(selection.head);
+        let end = selection.anchor.max(selection.head);
+        self.next_transaction_id = self
+            .next_transaction_id
+            .checked_add(1)
+            .ok_or_else(|| "transaction id overflow".to_owned())?;
+        let revision = self.document.revision();
+        let change = self
+            .document
+            .apply(EditTransaction {
+                base_revision: revision,
+                id: self.next_transaction_id,
+                kind: TransactionKind::Programmatic,
+                edits: vec![Edit {
+                    byte_range: start..end,
+                    replacement: text.to_owned(),
+                }],
+            })
+            .map_err(|error| error.to_string())?;
+        self.schedule_changed_revision(change.after, now_ms);
+        Ok(change.after)
+    }
+
+    /// Smart paste: converts clipboard HTML to markdown via the bounded core
+    /// converter, then inserts it over `selection`. On any converter rejection
+    /// the caller falls back to plain-text paste.
+    pub fn paste_html(
+        &mut self,
+        selection: Selection,
+        html: &str,
+        now_ms: u64,
+    ) -> Result<Revision, String> {
+        let markdown = html_to_markdown(html).map_err(|error| error.to_string())?;
+        self.insert_text(selection, &markdown, now_ms)
+    }
+
+    // --- find / replace -----------------------------------------------------
+
+    pub fn start_find(&mut self, query: FindQuery, direction: FindDirection, wrap: bool) {
+        self.app.start_find(query, direction, wrap);
+    }
+
+    pub fn end_find(&mut self) {
+        self.app.end_find();
+    }
+
+    pub fn find_session(&self) -> Option<&FindSession> {
+        self.app.find_session()
+    }
+
+    pub fn find_next(
+        &mut self,
+        from_byte: usize,
+    ) -> Result<Option<std::ops::Range<usize>>, String> {
+        self.app
+            .find_next(&self.document, from_byte)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn find_prev(
+        &mut self,
+        from_byte: usize,
+    ) -> Result<Option<std::ops::Range<usize>>, String> {
+        self.app
+            .find_prev(&self.document, from_byte)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn replace_current_match(
+        &mut self,
+        replacement: String,
+        now_ms: u64,
+    ) -> Result<ReplaceApplied, String> {
+        let applied = self
+            .app
+            .replace_current(&mut self.document, replacement)
+            .map_err(|error| error.to_string())?;
+        self.schedule_effects(&applied.effects, now_ms);
+        Ok(applied)
+    }
+
+    pub fn replace_all_matches(
+        &mut self,
+        replacement: String,
+        now_ms: u64,
+    ) -> Result<ReplaceApplied, String> {
+        let applied = self
+            .app
+            .replace_all(&mut self.document, replacement)
+            .map_err(|error| error.to_string())?;
+        self.schedule_effects(&applied.effects, now_ms);
+        Ok(applied)
+    }
+
+    // --- export -------------------------------------------------------------
+
+    /// Produces a validated, self-contained export page for Save-as-HTML and
+    /// Copy-as-HTML.
+    pub fn export_html(&self, title: Option<String>) -> Result<ExportOutput, String> {
+        self.app
+            .export_html(&self.document, title)
+            .map_err(|error| error.to_string())
+    }
+
+    /// Writes the export page to `path` for the Save-as-HTML gesture.
+    pub fn save_html(&self, path: &Path, title: Option<String>) -> Result<(), String> {
+        let output = self.export_html(title)?;
+        std::fs::write(path, output.html).map_err(|error| error.to_string())
+    }
+
+    // --- counts -------------------------------------------------------------
+
+    pub fn counts(&self) -> Counts {
+        self.app.counts(&self.document)
+    }
+
+    // --- autosave / recovery / session --------------------------------------
+
+    pub fn bind_autosave(&mut self, store: AutosaveStore) -> Result<(), String> {
+        self.app
+            .bind_autosave(store)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn autosave_tick(
+        &mut self,
+        captured_at_unix_ms: u64,
+    ) -> Result<Option<AutosaveEntryV1>, String> {
+        self.app
+            .autosave_tick(&self.document, captured_at_unix_ms)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn recover(&self) -> Result<Option<RecoveredDocument>, String> {
+        self.app.recover().map_err(|error| error.to_string())
+    }
+
+    /// Adopts a recovered document (crash-recovery accept) as the live buffer.
+    ///
+    /// The recovered snapshot is reconstructed at revision 0, so rather than swap
+    /// it in (which the reducer would treat as stale) the content is inserted as
+    /// a programmatic edit off a fresh untitled document: the buffer ends dirty
+    /// (unsaved work) with the app revision and document revision aligned.
+    pub fn adopt_recovered(
+        &mut self,
+        recovered: RecoveredDocument,
+        now_ms: u64,
+    ) -> Result<(), String> {
+        let text = recovered.document.snapshot().to_string();
+        self.document = Document::new("").map_err(|error| error.to_string())?;
+        self.closed = false;
+        for effect in self.app.reduce(AppMessage::NewDocument) {
+            if let AppEffect::ScheduleRender { revision } = effect {
+                self.scheduler
+                    .submit(RenderRequest::new(revision, Arc::from("")), now_ms);
+            }
+        }
+        self.insert_text(Selection::collapsed(0), &text, now_ms)?;
+        Ok(())
+    }
+
+    pub fn capture_session_state(
+        &self,
+        saved_at_unix_ms: u64,
+        selection: Option<Selection>,
+        top_visible_byte: Option<usize>,
+        window: Option<SessionWindowV1>,
+    ) -> SessionStateV1 {
+        self.app
+            .capture_session_state(saved_at_unix_ms, selection, top_visible_byte, window)
+    }
+
+    pub fn save_session_state(&self, state: &SessionStateV1) -> Result<(), String> {
+        self.app
+            .save_session_state(state)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn load_session_state(&self) -> Result<Option<SessionStateV1>, String> {
+        self.app
+            .load_session_state()
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn restore_session(&self, state: &SessionStateV1) -> SessionRestore {
+        self.app.restore_session(state)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum NativeRenderOutcome {
     Navigate { revision: Revision, url: String },
@@ -1556,8 +1849,89 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
     preview_container.set_can_focus(true);
     paned.pack1(&source_scroll, true, false);
     paned.pack2(&preview_container, true, false);
-    window.add(&paned);
+
+    // Specimen-case visuals (DESIGN-SYSTEM app-chrome): gold needle caret + warm
+    // gold selection (CSS) and quiet gold syntax staining on a smoky ground
+    // (GtkSourceView style scheme + markdown language). Best-effort; the
+    // light-mode oatmeal ground flip is deferred to Wave 3.
+    install_app_css();
+    stain_source(&source_buffer);
+    source_view.set_monospace(false);
+    source_view.style_context().add_class("feathermark-source");
+
+    // Shared format dispatch: native input (menu + toolbar + accelerators)
+    // routes every FormatCommand through the Wave-2S action surface, then
+    // resyncs the native mirror and reinstalls the decided selection.
+    let format_action: Rc<dyn Fn(FormatCommand)> = {
+        let session = Rc::clone(&session);
+        let editor_adapter = Rc::clone(&editor_adapter);
+        let window = window.clone();
+        Rc::new(move |command: FormatCommand| {
+            let selection = match editor_adapter.borrow().selection() {
+                Ok(selection) => selection,
+                Err(error) => {
+                    window.set_title(&status_title(&format!("format failed: {error}")));
+                    return;
+                }
+            };
+            let applied =
+                match session
+                    .borrow_mut()
+                    .apply_format(selection, command, elapsed_ms(started))
+                {
+                    Ok(applied) => applied,
+                    Err(error) => {
+                        window.set_title(&status_title(&format!("format rejected: {error}")));
+                        return;
+                    }
+                };
+            let snapshot = session.borrow().snapshot();
+            if let Err(error) = editor_adapter.borrow_mut().install_open_snapshot(&snapshot) {
+                window.set_title(&status_title(&format!("format mirror failed: {error}")));
+                return;
+            }
+            let _ = editor_adapter
+                .borrow()
+                .set_selection(applied.selection_after);
+        })
+    };
+
+    // Formatting toolbar — text-only, borderless, DEFAULT OFF behind a View
+    // toggle (DESIGN-SYSTEM: toolbar default-off, no icons in chrome).
+    let toolbar = build_format_toolbar(&format_action);
+    // Find/replace bar — hidden until Ctrl+F / Edit ▸ Find.
+    let find_bar = FindBar::new(&session, &editor_adapter, &window, started);
+    // Live-counts status bar.
+    let status_bar = gtk::Label::new(Some(""));
+    status_bar.set_xalign(0.0);
+    status_bar.set_margin_start(8);
+    status_bar.set_margin_end(8);
+    status_bar.set_margin_top(2);
+    status_bar.set_margin_bottom(2);
+    status_bar
+        .style_context()
+        .add_class("feathermark-statusbar");
+
+    let menubar = build_menu_bar(
+        &window,
+        &format_action,
+        &toolbar,
+        &find_bar.container,
+        &session,
+    );
+
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    root.pack_start(&menubar, false, false, 0);
+    root.pack_start(&toolbar, false, false, 0);
+    root.pack_start(&find_bar.container, false, false, 0);
+    root.pack_start(&paned, true, true, 0);
+    root.pack_start(&status_bar, false, false, 0);
+    window.add(&root);
     window.show_all();
+    // Default-off chrome: hide after the initial show_all so the first frame
+    // never flashes them.
+    toolbar.hide();
+    find_bar.container.hide();
     #[cfg(feature = "test-control")]
     trace("window-shown");
 
@@ -1768,6 +2142,148 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
         });
     }
 
+    // Format accelerators + smart Enter + find toggle. A second handler so the
+    // existing edit/scroll handler is untouched: it returns Proceed for these
+    // keys, then this handler claims them.
+    {
+        let session = Rc::clone(&session);
+        let editor_adapter = Rc::clone(&editor_adapter);
+        let format_action = Rc::clone(&format_action);
+        let find_container = find_bar.container.clone();
+        let find_search = find_bar.search.clone();
+        source_view.connect_key_press_event(move |_view, event| {
+            let key = event.keyval();
+            let ctrl = event.state().contains(gtk::gdk::ModifierType::CONTROL_MASK);
+            let shift = event.state().contains(gtk::gdk::ModifierType::SHIFT_MASK);
+
+            // Smart Enter (no Ctrl): continue/exit lists, quotes, checklists.
+            // Deferred while an IME composition is active so a CJK commit-on-
+            // Enter is never stolen from the input method.
+            if !ctrl
+                && (key == keys::Return || key == keys::KP_Enter)
+                && !editor_adapter.borrow().is_composing()
+            {
+                let selection = match editor_adapter.borrow().selection() {
+                    Ok(selection) => selection,
+                    Err(_) => return gtk::glib::Propagation::Proceed,
+                };
+                let applied = match session
+                    .borrow_mut()
+                    .smart_enter(selection, elapsed_ms(started))
+                {
+                    Ok(applied) => applied,
+                    Err(_) => return gtk::glib::Propagation::Proceed,
+                };
+                let snapshot = session.borrow().snapshot();
+                if editor_adapter
+                    .borrow_mut()
+                    .install_open_snapshot(&snapshot)
+                    .is_ok()
+                {
+                    let _ = editor_adapter
+                        .borrow()
+                        .set_selection(applied.selection_after);
+                }
+                return gtk::glib::Propagation::Stop;
+            }
+
+            if !ctrl {
+                return gtk::glib::Propagation::Proceed;
+            }
+
+            // Ctrl+F reveals the find/replace bar.
+            if !shift && key == keys::f {
+                find_container.show_all();
+                find_search.grab_focus();
+                return gtk::glib::Propagation::Stop;
+            }
+
+            let command = if !shift {
+                if key == keys::b {
+                    Some(FormatCommand::ToggleBold)
+                } else if key == keys::i {
+                    Some(FormatCommand::ToggleItalic)
+                } else if key == keys::k {
+                    Some(FormatCommand::InsertLink { url: None })
+                } else if key == keys::e {
+                    Some(FormatCommand::ToggleCodeSpan)
+                } else {
+                    None
+                }
+            } else if key == keys::c || key == keys::C {
+                Some(FormatCommand::ToggleCodeBlock)
+            } else if key == keys::h || key == keys::H {
+                Some(FormatCommand::CycleHeading)
+            } else if key == keys::q || key == keys::Q {
+                Some(FormatCommand::ToggleQuote)
+            } else if key == keys::u || key == keys::U {
+                Some(FormatCommand::ToggleBulletList)
+            } else if key == keys::o || key == keys::O {
+                Some(FormatCommand::ToggleOrderedList)
+            } else if key == keys::l || key == keys::L {
+                Some(FormatCommand::ToggleChecklist)
+            } else {
+                None
+            };
+
+            if let Some(command) = command {
+                format_action(command);
+                return gtk::glib::Propagation::Stop;
+            }
+            gtk::glib::Propagation::Proceed
+        });
+    }
+
+    // Smart paste: convert clipboard HTML → markdown via the bounded core
+    // converter before insertion; fall back to the native plain-text paste when
+    // there is no HTML flavour or the converter rejects the input.
+    {
+        let session = Rc::clone(&session);
+        let editor_adapter = Rc::clone(&editor_adapter);
+        let window = window.clone();
+        source_view.connect_paste_clipboard(move |view| {
+            let clipboard = gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD);
+            let Some(data) = clipboard.wait_for_contents(&gtk::gdk::Atom::intern("text/html"))
+            else {
+                return;
+            };
+            let bytes = data.data();
+            if bytes.is_empty() {
+                return;
+            }
+            let html = String::from_utf8_lossy(&bytes).into_owned();
+            let markdown = match feathermark_core::html_to_markdown(&html) {
+                Ok(markdown) => markdown,
+                Err(_) => return,
+            };
+            let selection = match editor_adapter.borrow().selection() {
+                Ok(selection) => selection,
+                Err(_) => return,
+            };
+            // Claim the paste only once we can honour it.
+            view.stop_signal_emission_by_name("paste-clipboard");
+            let start = selection.anchor.min(selection.head);
+            if let Err(error) =
+                session
+                    .borrow_mut()
+                    .insert_text(selection, &markdown, elapsed_ms(started))
+            {
+                window.set_title(&status_title(&format!("smart paste failed: {error}")));
+                return;
+            }
+            let snapshot = session.borrow().snapshot();
+            if editor_adapter
+                .borrow_mut()
+                .install_open_snapshot(&snapshot)
+                .is_ok()
+            {
+                let _ = editor_adapter
+                    .borrow()
+                    .set_selection(Selection::collapsed(start + markdown.len()));
+            }
+        });
+    }
+
     {
         let native_web = Rc::clone(&native_web);
         let window = window.clone();
@@ -1853,6 +2369,8 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
         let frame_seq = Rc::new(RefCell::new(0_u64));
         let last_external_poll_ms = Rc::new(Cell::new(0_u64));
         let window = window.clone();
+        let status_bar = status_bar.clone();
+        let last_counts_revision = Cell::new(u64::MAX);
         gtk::glib::timeout_add_local(Duration::from_millis(RENDER_POLL_MS), move || {
             if session.borrow().is_closed() {
                 return gtk::glib::ControlFlow::Break;
@@ -1987,6 +2505,19 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
                 PRODUCT_NAME.to_owned()
             };
             window.set_title(&title);
+
+            // Live counts in the status bar, recomputed only when the document
+            // revision changes (never per 10 ms tick).
+            let revision = session.borrow().revision();
+            if last_counts_revision.get() != revision {
+                last_counts_revision.set(revision);
+                let counts = session.borrow().counts();
+                let minutes = counts.reading_time_seconds().div_ceil(60);
+                status_bar.set_text(&format!(
+                    "{} words   {} characters   {} min read",
+                    counts.words, counts.chars, minutes
+                ));
+            }
             gtk::glib::ControlFlow::Continue
         });
     }
@@ -1994,6 +2525,7 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
     {
         let session = Rc::clone(&session);
         let native_web = Rc::clone(&native_web);
+        let editor_adapter = Rc::clone(&editor_adapter);
         window.connect_delete_event(move |window, _event| {
             #[cfg(feature = "test-control")]
             let automated_close = std::env::var_os("FEATHERMARK_SMOKE_AUTOCLOSE_MS").is_some()
@@ -2022,6 +2554,25 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
                     }
                 }
             }
+            // Persist session-restore state (last file, selection, window
+            // frame). A no-op unless an autosave store is bound — i.e. only in
+            // the real user session, never under the automated harness.
+            let selection = editor_adapter.borrow().selection().ok();
+            let (x, y) = window.position();
+            let (width, height) = window.size();
+            let state = session.borrow().capture_session_state(
+                unix_millis(),
+                selection,
+                None,
+                Some(SessionWindowV1 {
+                    x,
+                    y,
+                    width: width.max(0) as u32,
+                    height: height.max(0) as u32,
+                }),
+            );
+            let _ = session.borrow().save_session_state(&state);
+
             session.borrow_mut().close();
             native_web.borrow_mut().close();
             #[cfg(feature = "test-control")]
@@ -2044,6 +2595,75 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
     }
 
     source_view.grab_focus();
+
+    // Wave 2L QoL: autosave journal, crash recovery, and session restore. The
+    // whole block is skipped under the automated lifecycle/functional harness so
+    // the modal recovery prompt never blocks a headless cycle.
+    #[cfg(feature = "test-control")]
+    let automated_qol = std::env::var_os("FEATHERMARK_SMOKE_AUTOCLOSE_MS").is_some()
+        || std::env::var_os("FEATHERMARK_PRODUCT_FUNCTIONAL_PATH").is_some();
+    #[cfg(not(feature = "test-control"))]
+    let automated_qol = false;
+    if !automated_qol {
+        let mut recovered_adopted = false;
+        if let Some(dir) = autosave_dir()
+            && std::fs::create_dir_all(&dir).is_ok()
+        {
+            if let Err(error) = session.borrow_mut().bind_autosave(AutosaveStore::new(dir)) {
+                window.set_title(&status_title(&format!("autosave disabled: {error}")));
+            }
+            // Crash recovery: offer the highest verifiable autosave.
+            let recovered = session.borrow().recover();
+            if let Ok(Some(recovered)) = recovered
+                && prompt_recover(&window)
+                && session
+                    .borrow_mut()
+                    .adopt_recovered(recovered, elapsed_ms(started))
+                    .is_ok()
+            {
+                let snapshot = session.borrow().snapshot();
+                let _ = editor_adapter.borrow_mut().install_open_snapshot(&snapshot);
+                recovered_adopted = true;
+            }
+        }
+
+        // Session restore: window frame always; last file + selection only when
+        // we did not just adopt a recovered buffer.
+        if let Ok(Some(state)) = session.borrow().load_session_state() {
+            let restore = session.borrow().restore_session(&state);
+            if let Some(frame) = restore.window {
+                window.move_(frame.x, frame.y);
+                window.resize(frame.width.max(1) as i32, frame.height.max(1) as i32);
+            }
+            if !recovered_adopted
+                && let Some(path) = restore.last_file.as_ref()
+                && session.borrow_mut().open(path, elapsed_ms(started)).is_ok()
+            {
+                let snapshot = session.borrow().snapshot();
+                if editor_adapter
+                    .borrow_mut()
+                    .install_open_snapshot(&snapshot)
+                    .is_ok()
+                    && let Some(selection) = restore.selection
+                {
+                    let _ = editor_adapter.borrow().set_selection(selection);
+                }
+            }
+        }
+
+        // Autosave timer: journal the dirty buffer on a quiet cadence.
+        let autosave_session = Rc::clone(&session);
+        gtk::glib::timeout_add_local(Duration::from_secs(4), move || {
+            if autosave_session.borrow().is_closed() {
+                return gtk::glib::ControlFlow::Break;
+            }
+            if autosave_session.borrow().dirty() {
+                let _ = autosave_session.borrow_mut().autosave_tick(unix_millis());
+            }
+            gtk::glib::ControlFlow::Continue
+        });
+    }
+
     #[cfg(feature = "test-control")]
     if let Ok(path) = std::env::var("FEATHERMARK_PRODUCT_FUNCTIONAL_PATH") {
         const EXPECTED: &str = "# FeatherMark Linux\n\nNative edit, save, and reopen.\n";
@@ -2280,4 +2900,399 @@ fn random_nonce() -> Result<[u8; 16], String> {
 
 fn elapsed_ms(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+fn unix_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
+}
+
+/// `$XDG_DATA_HOME/feathermark/autosave` (or `~/.local/share/...`) — the
+/// per-user journal + session-state directory.
+fn autosave_dir() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share"))
+        })?;
+    Some(base.join("feathermark").join("autosave"))
+}
+
+/// Cache directory for the runtime-materialised GtkSourceView style scheme.
+fn scheme_cache_dir() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))?;
+    Some(base.join("feathermark").join("styles"))
+}
+
+/// Gold needle caret + warm gold selection, applied screen-wide (DESIGN-SYSTEM
+/// app-chrome fire budget). The style scheme also sets these; the CSS is the
+/// belt-and-braces path for themes that ignore scheme cursor colours.
+fn install_app_css() {
+    const CSS: &[u8] = b"textview { caret-color: #C9921E; }\n\
+                         textview text selection { background-color: rgba(201,146,30,0.28); }\n";
+    let provider = gtk::CssProvider::new();
+    if provider.load_from_data(CSS).is_ok()
+        && let Some(screen) = gtk::gdk::Screen::default()
+    {
+        gtk::StyleContext::add_provider_for_screen(
+            &screen,
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+    }
+}
+
+/// Materialises the bundled "quartz" style scheme into the user cache dir and
+/// resolves it through the manager (the 0.5 binding has no from-string loader).
+fn source_style_scheme() -> Option<sourceview4::StyleScheme> {
+    const SCHEME_XML: &[u8] = include_bytes!("../../assets/feathermark-quartz.xml");
+    const SCHEME_ID: &str = "feathermark-quartz";
+    let dir = scheme_cache_dir()?;
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join("feathermark-quartz.xml");
+    if std::fs::read(&path).ok().as_deref() != Some(SCHEME_XML) {
+        std::fs::write(&path, SCHEME_XML).ok()?;
+    }
+    let manager = sourceview4::StyleSchemeManager::default()?;
+    manager.append_search_path(dir.to_str()?);
+    manager.scheme(SCHEME_ID)
+}
+
+/// Quiet gold syntax staining: markdown language (when installed) + the quartz
+/// scheme. When either is absent the buffer simply stays unstained.
+fn stain_source(buffer: &sourceview4::Buffer) {
+    if let Some(language) =
+        sourceview4::LanguageManager::default().and_then(|manager| manager.language("markdown"))
+    {
+        buffer.set_language(Some(&language));
+        buffer.set_highlight_syntax(true);
+    }
+    if let Some(scheme) = source_style_scheme() {
+        buffer.set_style_scheme(Some(&scheme));
+    }
+}
+
+fn prompt_recover(parent: &gtk::ApplicationWindow) -> bool {
+    let dialog = gtk::MessageDialog::new(
+        Some(parent),
+        gtk::DialogFlags::MODAL,
+        gtk::MessageType::Question,
+        gtk::ButtonsType::None,
+        "Recover unsaved changes from the last session?",
+    );
+    dialog.add_button("Discard", gtk::ResponseType::No);
+    dialog.add_button("Recover", gtk::ResponseType::Yes);
+    dialog.set_default_response(gtk::ResponseType::Yes);
+    let response = dialog.run();
+    dialog.close();
+    response == gtk::ResponseType::Yes
+}
+
+/// Text-only, borderless, no-icon formatting toolbar (DESIGN-SYSTEM: default-off
+/// chrome). Each button routes through the shared format action.
+fn build_format_toolbar(format_action: &Rc<dyn Fn(FormatCommand)>) -> gtk::Box {
+    let toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+    toolbar.style_context().add_class("feathermark-toolbar");
+    let specs: [(&str, FormatCommand); 8] = [
+        ("Bold", FormatCommand::ToggleBold),
+        ("Italic", FormatCommand::ToggleItalic),
+        ("Link", FormatCommand::InsertLink { url: None }),
+        ("Code", FormatCommand::ToggleCodeSpan),
+        ("Heading", FormatCommand::CycleHeading),
+        ("Quote", FormatCommand::ToggleQuote),
+        ("List", FormatCommand::ToggleBulletList),
+        ("Check", FormatCommand::ToggleChecklist),
+    ];
+    for (label, command) in specs {
+        let button = gtk::Button::with_label(label);
+        button.set_relief(gtk::ReliefStyle::None);
+        button.set_can_focus(false);
+        let action = Rc::clone(format_action);
+        button.connect_clicked(move |_| action(command.clone()));
+        toolbar.pack_start(&button, false, false, 0);
+    }
+    toolbar
+}
+
+/// The menu bar: File (HTML export), Edit (find), Format (all commands), View
+/// (toolbar toggle). Accelerators are handled by the key handler; the labels
+/// carry the shortcut hint for discoverability.
+fn build_menu_bar(
+    window: &gtk::ApplicationWindow,
+    format_action: &Rc<dyn Fn(FormatCommand)>,
+    toolbar: &gtk::Box,
+    find_container: &gtk::Box,
+    session: &Rc<RefCell<LinuxProductSession>>,
+) -> gtk::MenuBar {
+    let menubar = gtk::MenuBar::new();
+
+    let file_menu = gtk::Menu::new();
+    let file_root = gtk::MenuItem::with_label("File");
+    file_root.set_submenu(Some(&file_menu));
+    {
+        let item = gtk::MenuItem::with_label("Save as HTML…");
+        let session = Rc::clone(session);
+        let window = window.clone();
+        item.connect_activate(move |_| {
+            if let Some(path) = prompt_save_path(Some(&window), Some("export.html"))
+                && let Err(error) = session.borrow().save_html(&path, None)
+            {
+                window.set_title(&status_title(&format!("HTML export failed: {error}")));
+            }
+        });
+        file_menu.append(&item);
+    }
+    {
+        let item = gtk::MenuItem::with_label("Copy as HTML");
+        let session = Rc::clone(session);
+        let window = window.clone();
+        item.connect_activate(move |_| match session.borrow().export_html(None) {
+            Ok(output) => {
+                gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD).set_text(&output.html);
+            }
+            Err(error) => {
+                window.set_title(&status_title(&format!("HTML copy failed: {error}")));
+            }
+        });
+        file_menu.append(&item);
+    }
+    menubar.append(&file_root);
+
+    let edit_menu = gtk::Menu::new();
+    let edit_root = gtk::MenuItem::with_label("Edit");
+    edit_root.set_submenu(Some(&edit_menu));
+    {
+        let item = gtk::MenuItem::with_label("Find / Replace   Ctrl+F");
+        let find_container = find_container.clone();
+        item.connect_activate(move |_| find_container.show_all());
+        edit_menu.append(&item);
+    }
+    menubar.append(&edit_root);
+
+    let format_menu = gtk::Menu::new();
+    let format_root = gtk::MenuItem::with_label("Format");
+    format_root.set_submenu(Some(&format_menu));
+    let format_items: [(&str, FormatCommand); 11] = [
+        ("Bold   Ctrl+B", FormatCommand::ToggleBold),
+        ("Italic   Ctrl+I", FormatCommand::ToggleItalic),
+        ("Link   Ctrl+K", FormatCommand::InsertLink { url: None }),
+        ("Inline Code   Ctrl+E", FormatCommand::ToggleCodeSpan),
+        ("Code Block   Ctrl+Shift+C", FormatCommand::ToggleCodeBlock),
+        ("Cycle Heading   Ctrl+Shift+H", FormatCommand::CycleHeading),
+        ("Quote   Ctrl+Shift+Q", FormatCommand::ToggleQuote),
+        (
+            "Bullet List   Ctrl+Shift+U",
+            FormatCommand::ToggleBulletList,
+        ),
+        (
+            "Numbered List   Ctrl+Shift+O",
+            FormatCommand::ToggleOrderedList,
+        ),
+        ("Checklist   Ctrl+Shift+L", FormatCommand::ToggleChecklist),
+        ("Smart New Line   Enter", FormatCommand::SmartEnter),
+    ];
+    for (label, command) in format_items {
+        let item = gtk::MenuItem::with_label(label);
+        let action = Rc::clone(format_action);
+        item.connect_activate(move |_| action(command.clone()));
+        format_menu.append(&item);
+    }
+    menubar.append(&format_root);
+
+    let view_menu = gtk::Menu::new();
+    let view_root = gtk::MenuItem::with_label("View");
+    view_root.set_submenu(Some(&view_menu));
+    {
+        let item = gtk::CheckMenuItem::with_label("Formatting Toolbar");
+        item.set_active(false);
+        let toolbar = toolbar.clone();
+        item.connect_toggled(move |item| {
+            if item.is_active() {
+                toolbar.show_all();
+            } else {
+                toolbar.hide();
+            }
+        });
+        view_menu.append(&item);
+    }
+    menubar.append(&view_root);
+
+    menubar
+}
+
+/// Find/replace bar. Owns its widgets and routes every gesture to the Wave-2S
+/// find/replace actions on the session, resyncing the native mirror after any
+/// mutation.
+struct FindBar {
+    container: gtk::Box,
+    search: gtk::Entry,
+}
+
+impl FindBar {
+    fn new(
+        session: &Rc<RefCell<LinuxProductSession>>,
+        adapter: &Rc<RefCell<GtkSourceEditorAdapter>>,
+        window: &gtk::ApplicationWindow,
+        started: Instant,
+    ) -> Self {
+        let container = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        container.style_context().add_class("feathermark-findbar");
+        let search = gtk::Entry::new();
+        search.set_placeholder_text(Some("Find"));
+        let replace = gtk::Entry::new();
+        replace.set_placeholder_text(Some("Replace with"));
+        let prev = gtk::Button::with_label("Prev");
+        let next = gtk::Button::with_label("Next");
+        let replace_one = gtk::Button::with_label("Replace");
+        let replace_all = gtk::Button::with_label("All");
+        let close = gtk::Button::with_label("Close");
+        container.pack_start(&search, true, true, 0);
+        container.pack_start(&prev, false, false, 0);
+        container.pack_start(&next, false, false, 0);
+        container.pack_start(&replace, true, true, 0);
+        container.pack_start(&replace_one, false, false, 0);
+        container.pack_start(&replace_all, false, false, 0);
+        container.pack_end(&close, false, false, 0);
+
+        // Start (or restart) the session for the current pattern and select the
+        // located match, if any.
+        let locate: Rc<dyn Fn(bool)> = {
+            let session = Rc::clone(session);
+            let adapter = Rc::clone(adapter);
+            let window = window.clone();
+            let search = search.clone();
+            Rc::new(move |forward: bool| {
+                let pattern = search.text().to_string();
+                if pattern.is_empty() {
+                    return;
+                }
+                let query = match FindQuery::new(pattern, MatchMode::Plain, false) {
+                    Ok(query) => query,
+                    Err(error) => {
+                        window.set_title(&status_title(&format!("find rejected: {error}")));
+                        return;
+                    }
+                };
+                session
+                    .borrow_mut()
+                    .start_find(query, FindDirection::Forward, true);
+                let from = adapter
+                    .borrow()
+                    .selection()
+                    .map(|selection| selection.head)
+                    .unwrap_or(0);
+                let result = if forward {
+                    session.borrow_mut().find_next(from)
+                } else {
+                    session.borrow_mut().find_prev(from)
+                };
+                match result {
+                    Ok(Some(range)) => {
+                        let _ = adapter.borrow().set_selection(Selection {
+                            anchor: range.start,
+                            head: range.end,
+                        });
+                    }
+                    Ok(None) => window.set_title(&status_title("No matches")),
+                    Err(error) => {
+                        window.set_title(&status_title(&format!("find failed: {error}")));
+                    }
+                }
+            })
+        };
+
+        {
+            let locate = Rc::clone(&locate);
+            next.connect_clicked(move |_| locate(true));
+        }
+        {
+            let locate = Rc::clone(&locate);
+            prev.connect_clicked(move |_| locate(false));
+        }
+        {
+            let locate = Rc::clone(&locate);
+            search.connect_activate(move |_| locate(true));
+        }
+        {
+            let session = Rc::clone(session);
+            let adapter = Rc::clone(adapter);
+            let window = window.clone();
+            let replace = replace.clone();
+            let locate = Rc::clone(&locate);
+            replace_one.connect_clicked(move |_| {
+                locate(true);
+                let replacement = replace.text().to_string();
+                let applied = match session
+                    .borrow_mut()
+                    .replace_current_match(replacement, elapsed_ms(started))
+                {
+                    Ok(applied) => applied,
+                    Err(error) => {
+                        window.set_title(&status_title(&format!("replace failed: {error}")));
+                        return;
+                    }
+                };
+                let snapshot = session.borrow().snapshot();
+                if adapter
+                    .borrow_mut()
+                    .install_open_snapshot(&snapshot)
+                    .is_ok()
+                    && let Some(selection) = applied.selection_after
+                {
+                    let _ = adapter.borrow().set_selection(selection);
+                }
+            });
+        }
+        {
+            let session = Rc::clone(session);
+            let adapter = Rc::clone(adapter);
+            let window = window.clone();
+            let search = search.clone();
+            let replace = replace.clone();
+            replace_all.connect_clicked(move |_| {
+                let pattern = search.text().to_string();
+                if pattern.is_empty() {
+                    return;
+                }
+                let query = match FindQuery::new(pattern, MatchMode::Plain, false) {
+                    Ok(query) => query,
+                    Err(error) => {
+                        window.set_title(&status_title(&format!("find rejected: {error}")));
+                        return;
+                    }
+                };
+                session
+                    .borrow_mut()
+                    .start_find(query, FindDirection::Forward, true);
+                let replacement = replace.text().to_string();
+                let applied = match session
+                    .borrow_mut()
+                    .replace_all_matches(replacement, elapsed_ms(started))
+                {
+                    Ok(applied) => applied,
+                    Err(error) => {
+                        window.set_title(&status_title(&format!("replace all failed: {error}")));
+                        return;
+                    }
+                };
+                let snapshot = session.borrow().snapshot();
+                let _ = adapter.borrow_mut().install_open_snapshot(&snapshot);
+                window.set_title(&status_title(&format!("Replaced {}", applied.replaced)));
+            });
+        }
+        {
+            let session = Rc::clone(session);
+            let container = container.clone();
+            close.connect_clicked(move |_| {
+                session.borrow_mut().end_find();
+                container.hide();
+            });
+        }
+
+        Self { container, search }
+    }
 }
