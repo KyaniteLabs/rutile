@@ -1,17 +1,21 @@
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 
 use feathermark_core::{
-    AdapterCommitId, ChangeSet, DiskVersion, Document, EditorEvent, FileError, FileService,
-    LocalFileService, MAX_DOCUMENT_BYTES, ScrollAnchorView, ScrollClock, ScrollGeometry, ScrollMap,
-    ScrollOutcome, ScrollPosition, ScrollSynchronizer, ScrollTarget, apply_editor_commit,
+    AdapterCommitId, AutosaveEntryV1, AutosaveStore, ChangeSet, Counts, DiskVersion, Document,
+    Edit, EditTransaction, EditorEvent, FileError, FileService, FindDirection, FindQuery,
+    FormatCommand, LocalFileService, MAX_DOCUMENT_BYTES, RecoveredDocument, ScrollAnchorView,
+    ScrollClock, ScrollGeometry, ScrollMap, ScrollOutcome, ScrollPosition, ScrollSynchronizer,
+    ScrollTarget, Selection, SessionStateV1, SessionWindowV1, TransactionKind, apply_editor_commit,
 };
 use feathermark_protocol::{PreviewHostCommand, RenderUrl};
 use feathermark_types::{InteractionId, Revision};
 use thiserror::Error;
 
 use super::PlatformAdapter;
+use crate::actions::{ExportOutput, FindSession, FormatApplied, ReplaceApplied, SessionRestore};
 use crate::app::{AppMessage, AppState, CloseDecision, CloseOutcome};
 use crate::preview_host::{HostError, PreviewHost};
 use crate::render_scheduler::{Completion, RenderRequest, RenderScheduler};
@@ -390,6 +394,7 @@ pub struct ProductSession {
     preview_host: Arc<Mutex<PreviewHost>>,
     scroll: Option<MacScrollController>,
     next_scroll_interaction_id: InteractionId,
+    recovered_path: Option<PathBuf>,
 }
 
 impl ProductSession {
@@ -427,6 +432,7 @@ impl ProductSession {
             preview_host: Arc::new(Mutex::new(PreviewHost::new())),
             scroll: None,
             next_scroll_interaction_id: 1,
+            recovered_path: None,
         };
         session.queue_current();
         Ok(session)
@@ -640,6 +646,213 @@ impl ProductSession {
         });
         self.queue_current();
         Ok(())
+    }
+
+    // --- Wave 2M: native input → shared Wave-2S action surface --------------
+
+    /// Applies a [`FormatCommand`] at `selection` through the shared
+    /// [`AppState::apply_format_command`](crate::app::AppState::apply_format_command),
+    /// then re-queues a render. The caller re-synchronizes its editor mirror to
+    /// [`FormatApplied::selection_after`] via `IcedEditorAdapter::resync_to`.
+    pub fn apply_format(
+        &mut self,
+        selection: Selection,
+        command: FormatCommand,
+    ) -> Result<FormatApplied, MacError> {
+        let applied = self
+            .app
+            .apply_format_command(&mut self.document, selection, command)
+            .map_err(|error| MacError::Core(error.to_string()))?;
+        self.queue_current();
+        Ok(applied)
+    }
+
+    /// Routes an Enter keystroke to [`AppState::smart_enter`](crate::app::AppState::smart_enter).
+    pub fn smart_enter(&mut self, selection: Selection) -> Result<FormatApplied, MacError> {
+        let applied = self
+            .app
+            .smart_enter(&mut self.document, selection)
+            .map_err(|error| MacError::Core(error.to_string()))?;
+        self.queue_current();
+        Ok(applied)
+    }
+
+    /// Opens (or replaces) the find session bound to this document.
+    pub fn start_find(&mut self, query: FindQuery, direction: FindDirection, wrap: bool) {
+        self.app.start_find(query, direction, wrap);
+    }
+
+    /// Closes the active find session.
+    pub fn end_find(&mut self) {
+        self.app.end_find();
+    }
+
+    /// Borrows the active find session, if any.
+    pub fn find_session(&self) -> Option<&FindSession> {
+        self.app.find_session()
+    }
+
+    /// Locates the next match from `from_byte`, recording it on the session.
+    pub fn find_next(&mut self, from_byte: usize) -> Result<Option<Range<usize>>, MacError> {
+        self.app
+            .find_next(&self.document, from_byte)
+            .map_err(|error| MacError::Core(error.to_string()))
+    }
+
+    /// Locates the previous match from `from_byte`, recording it on the session.
+    pub fn find_prev(&mut self, from_byte: usize) -> Result<Option<Range<usize>>, MacError> {
+        self.app
+            .find_prev(&self.document, from_byte)
+            .map_err(|error| MacError::Core(error.to_string()))
+    }
+
+    /// Replaces the session's current match, re-queuing a render when it edited.
+    pub fn replace_current(&mut self, replacement: String) -> Result<ReplaceApplied, MacError> {
+        let applied = self
+            .app
+            .replace_current(&mut self.document, replacement)
+            .map_err(|error| MacError::Core(error.to_string()))?;
+        if applied.replaced > 0 {
+            self.queue_current();
+        }
+        Ok(applied)
+    }
+
+    /// Replaces every match of the session's query, re-queuing a render when it
+    /// edited.
+    pub fn replace_all(&mut self, replacement: String) -> Result<ReplaceApplied, MacError> {
+        let applied = self
+            .app
+            .replace_all(&mut self.document, replacement)
+            .map_err(|error| MacError::Core(error.to_string()))?;
+        if applied.replaced > 0 {
+            self.queue_current();
+        }
+        Ok(applied)
+    }
+
+    /// Produces the validated, self-contained export page plus a suggested file
+    /// name (save-as-HTML and copy-as-HTML share this).
+    pub fn export_html(&self) -> Result<ExportOutput, MacError> {
+        self.app
+            .export_html(&self.document, None)
+            .map_err(|error| MacError::Core(error.to_string()))
+    }
+
+    /// Writes the self-contained export page to `path`.
+    pub fn save_html_as(&self, path: &Path) -> Result<(), MacError> {
+        let output = self.export_html()?;
+        std::fs::write(path, output.html).map_err(|error| MacError::Native(error.to_string()))
+    }
+
+    /// Live word/character/reading-time counts for the status bar.
+    pub fn counts(&self) -> Counts {
+        self.app.counts(&self.document)
+    }
+
+    /// Binds the autosave/session store rooted at `dir` (which must exist).
+    pub fn bind_autosave(&mut self, dir: PathBuf) -> Result<(), MacError> {
+        self.app
+            .bind_autosave(AutosaveStore::new(dir))
+            .map_err(|error| MacError::Core(error.to_string()))
+    }
+
+    /// Writes one autosave entry for the current snapshot. `Ok(None)` when no
+    /// store is bound.
+    pub fn autosave_tick(
+        &mut self,
+        captured_at_unix_ms: u64,
+    ) -> Result<Option<AutosaveEntryV1>, MacError> {
+        self.app
+            .autosave_tick(&self.document, captured_at_unix_ms)
+            .map_err(|error| MacError::Core(error.to_string()))
+    }
+
+    /// Recovery-on-startup: the highest verifiable autosaved document, if any.
+    pub fn recover(&self) -> Result<Option<RecoveredDocument>, MacError> {
+        self.app
+            .recover()
+            .map_err(|error| MacError::Core(error.to_string()))
+    }
+
+    /// The original path of the last adopted recovered document, if it had one
+    /// (a save-panel default hint after recovery).
+    pub fn recovered_path(&self) -> Option<&Path> {
+        self.recovered_path.as_deref()
+    }
+
+    /// Adopts a crash-recovered document as the working buffer. The recovered
+    /// text — newer than any on-disk copy — becomes the current, *dirty* buffer
+    /// (installed via one programmatic edit so the reducer marks it modified);
+    /// its former path is remembered as a save hint. Any bound autosave store is
+    /// preserved so continued autosaves keep monotonic sequences.
+    pub fn adopt_recovered(&mut self, recovered: RecoveredDocument) -> Result<(), MacError> {
+        let hint = recovered.entry.document_path.clone().map(PathBuf::from);
+        let text = recovered.document.snapshot().to_string();
+        let store = self.app.autosave_store().cloned();
+
+        let mut document = Document::new("").map_err(|error| MacError::Core(error.to_string()))?;
+        document
+            .apply(EditTransaction {
+                base_revision: document.revision(),
+                id: 0,
+                kind: TransactionKind::Programmatic,
+                edits: vec![Edit {
+                    byte_range: 0..0,
+                    replacement: text,
+                }],
+            })
+            .map_err(|error| MacError::Core(error.to_string()))?;
+
+        let mut app = AppState::new();
+        app.reduce(AppMessage::NewDocument);
+        app.reduce(AppMessage::DocumentEdited {
+            revision: document.revision(),
+        });
+        if let Some(store) = store {
+            app.bind_autosave(store)
+                .map_err(|error| MacError::Core(error.to_string()))?;
+        }
+
+        self.document = document;
+        self.app = app;
+        self.scheduler = RenderScheduler::new();
+        self.scroll = None;
+        self.recovered_path = hint;
+        self.queue_current();
+        Ok(())
+    }
+
+    /// Captures session-restore state from the current path plus the platform's
+    /// selection, viewport, and window frame.
+    pub fn capture_session_state(
+        &self,
+        saved_at_unix_ms: u64,
+        selection: Option<Selection>,
+        top_visible_byte: Option<usize>,
+        window: Option<SessionWindowV1>,
+    ) -> SessionStateV1 {
+        self.app
+            .capture_session_state(saved_at_unix_ms, selection, top_visible_byte, window)
+    }
+
+    /// Persists session-restore `state`.
+    pub fn save_session_state(&self, state: &SessionStateV1) -> Result<(), MacError> {
+        self.app
+            .save_session_state(state)
+            .map_err(|error| MacError::Core(error.to_string()))
+    }
+
+    /// Loads persisted session state, if any.
+    pub fn load_session_state(&self) -> Result<Option<SessionStateV1>, MacError> {
+        self.app
+            .load_session_state()
+            .map_err(|error| MacError::Core(error.to_string()))
+    }
+
+    /// Lowers persisted state into the platform-actionable restore parts.
+    pub fn restore_session(&self, state: &SessionStateV1) -> SessionRestore {
+        self.app.restore_session(state)
     }
 
     fn queue_current(&mut self) {
