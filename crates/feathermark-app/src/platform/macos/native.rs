@@ -8,9 +8,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use feathermark_core::{
-    CompositionCancelReason, Counts, EditorAdapter, EditorEvent, FindDirection, FindQuery,
-    FormatCommand, MatchMode, RecoveredDocument, ScrollClock, Selection, SessionWindowV1,
-    html_to_markdown,
+    ChangeSet, CompositionCancelReason, Counts, EditorAdapter, EditorEvent, FindDirection,
+    FindQuery, FormatCommand, MatchMode, RecoveredDocument, ScrollClock, Selection,
+    SessionWindowV1, html_to_markdown,
 };
 use feathermark_protocol::{PreviewEventV1, ProtocolError};
 use iced_widget::text_editor;
@@ -365,13 +365,19 @@ impl ProductRunner {
     /// Re-synchronizes the editor mirror, status counts, and preview after a
     /// shared (AppState-driven) document mutation — format, smart Enter, or a
     /// find/replace — installing `selection_after`.
-    fn after_shared_edit(&mut self, event_loop: &ActiveEventLoop, selection: Selection) {
-        let snapshot = self.session.snapshot();
-        if let Err(error) = self
-            .source_pane
-            .editor_mut()
-            .resync_to(&snapshot, selection)
-        {
+    ///
+    /// Follows the mutation incrementally by replaying its `changes` through the
+    /// adapter's `apply_external_change` path (the same path external edits and
+    /// undo/redo use), which preserves the viewport. A full `resync_to` is kept
+    /// only as a correctness fallback for a `ChangeSet` that cannot be applied
+    /// incrementally.
+    fn after_shared_edit(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        changes: &[ChangeSet],
+        selection: Selection,
+    ) {
+        if let Err(error) = self.apply_shared_changes(changes, selection) {
             self.fail(event_loop, error.to_string());
             return;
         }
@@ -381,6 +387,40 @@ impl ProductRunner {
             return;
         }
         self.source_pane.request_redraw();
+    }
+
+    /// Replays the shared mutation's `changes` incrementally, then installs
+    /// `selection`. Returns `Ok` when the incremental path (or its full-resync
+    /// fallback) succeeds. The fallback recomputes the minimal diff between the
+    /// current mirror and the authoritative snapshot, so it recovers correctly
+    /// even from a partially-applied change sequence.
+    fn apply_shared_changes(
+        &mut self,
+        changes: &[ChangeSet],
+        selection: Selection,
+    ) -> Result<(), MacError> {
+        let applied_incrementally = !changes.is_empty() && {
+            let editor = self.source_pane.editor_mut();
+            let mut ok = true;
+            for change in changes {
+                if editor.apply_external_change(change).is_err() {
+                    ok = false;
+                    break;
+                }
+            }
+            if let (true, Some(last)) = (ok, changes.last()) {
+                ok = editor.set_selection(last.after, selection).is_ok();
+            }
+            ok
+        };
+        if applied_incrementally {
+            return Ok(());
+        }
+        let snapshot = self.session.snapshot();
+        self.source_pane
+            .editor_mut()
+            .resync_to(&snapshot, selection)
+            .map_err(|error| MacError::Core(error.to_string()))
     }
 
     /// Routes a [`FormatCommand`] (key binding or toolbar button) through
@@ -395,7 +435,9 @@ impl ProductRunner {
             }
         };
         match self.session.apply_format(selection, command) {
-            Ok(applied) => self.after_shared_edit(event_loop, applied.selection_after),
+            Ok(applied) => {
+                self.after_shared_edit(event_loop, &applied.changes, applied.selection_after)
+            }
             Err(error) => self.surface_error(error.to_string()),
         }
     }
@@ -410,7 +452,9 @@ impl ProductRunner {
             }
         };
         match self.session.smart_enter(selection) {
-            Ok(applied) => self.after_shared_edit(event_loop, applied.selection_after),
+            Ok(applied) => {
+                self.after_shared_edit(event_loop, &applied.changes, applied.selection_after)
+            }
             Err(error) => self.surface_error(error.to_string()),
         }
     }
@@ -667,7 +711,7 @@ impl ProductRunner {
         match self.session.replace_current(replacement) {
             Ok(applied) => {
                 if let Some(selection) = applied.selection_after {
-                    self.after_shared_edit(event_loop, selection);
+                    self.after_shared_edit(event_loop, &applied.changes, selection);
                 }
                 self.find_move(FindDirection::Forward);
             }
@@ -686,7 +730,7 @@ impl ProductRunner {
         match self.session.replace_all(replacement) {
             Ok(applied) => {
                 if let Some(selection) = applied.selection_after {
-                    self.after_shared_edit(event_loop, selection);
+                    self.after_shared_edit(event_loop, &applied.changes, selection);
                 }
                 self.set_find_status(format!("Replaced {} match(es)", applied.replaced));
             }
