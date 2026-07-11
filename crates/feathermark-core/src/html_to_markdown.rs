@@ -605,6 +605,12 @@ impl Serializer {
     ) -> Result<String, HtmlToMarkdownError> {
         let mut lines: Vec<String> = Vec::new();
         let mut ordinal = ordered_start.unwrap_or(1);
+        // Track the joined output length incrementally: re-joining the whole
+        // accumulated list on every item to size-check it is O(n²) and turns a
+        // ~2 MiB paste of many list items into a multi-minute UI hang (the same
+        // hostile-clipboard DoS class as the round-1 `skip_raw_text` fix). Sum
+        // the running length instead and join exactly once at the end.
+        let mut joined_len = 0usize;
         for child in &list.children {
             let Node::Element(item) = child else {
                 continue;
@@ -624,8 +630,15 @@ impl Serializer {
             };
             let indent = " ".repeat(marker.len());
             let item_text = indent_continuation(content, &marker, &indent);
+            // Account for the "\n" separator between items (not before the first).
+            let separator = usize::from(!lines.is_empty());
+            joined_len = joined_len
+                .saturating_add(separator)
+                .saturating_add(item_text.len());
+            if joined_len > MAX_OUTPUT_BYTES {
+                return Err(HtmlToMarkdownError::OutputTooLarge);
+            }
             lines.push(item_text);
-            self.guard(&lines.join("\n"))?;
         }
         Ok(lines.join("\n"))
     }
