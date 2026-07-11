@@ -23,9 +23,9 @@ pub use files::{
     FileService, LoadedDocument, LocalFileService, SaveFault,
 };
 pub use render::{
-    MAX_GENERATED_BODY_BYTES, MAX_RENDERED_PAGE_BYTES, MAX_SOURCE_BLOCK_BYTES, RenderError,
-    RenderLimits, RenderedPage, SourceBlock, SourceBlockKind, build_source_blocks, render_markdown,
-    render_markdown_with_limits, validate_source_blocks,
+    MAX_GENERATED_BODY_BYTES, MAX_RENDER_NESTING_DEPTH, MAX_RENDERED_PAGE_BYTES,
+    MAX_SOURCE_BLOCK_BYTES, RenderError, RenderLimits, RenderedPage, SourceBlock, SourceBlockKind,
+    build_source_blocks, render_markdown, render_markdown_with_limits, validate_source_blocks,
 };
 pub use scroll::{
     InteractionLease, Pane, ScrollAnchorView, ScrollClock, ScrollCommand, ScrollError,
