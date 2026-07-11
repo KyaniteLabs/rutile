@@ -10,6 +10,8 @@ blake3.workspace = true
 feathermark-types = { path = "../feathermark-types", version = "=0.1.1" }
 pulldown-cmark.workspace = true
 ropey.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 
 [[bench]]
