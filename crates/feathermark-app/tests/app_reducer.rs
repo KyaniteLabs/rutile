@@ -1,5 +1,9 @@
+use feathermark_app::actions::ActionError;
 use feathermark_app::app::{AppEffect, AppMessage, AppState, PreviewState};
-use feathermark_core::{Document, ExternalResolution, FileService, LocalFileService};
+use feathermark_core::{
+    AutosaveStore, Document, EditPlanError, ExternalResolution, FileService, FindDirection,
+    FindQuery, FormatCommand, LocalFileService, MatchMode, Selection, SmartEnterAction,
+};
 use feathermark_protocol::PreviewEventV1;
 use feathermark_types::SafeLinkTarget;
 
@@ -240,4 +244,252 @@ fn failed_save_keeps_dirty_and_conflict_state_open() {
 
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_file(external_path);
+}
+
+// --- Wave 2S: shared shell-integration actions -----------------------------
+
+fn plain_query(pattern: &str) -> FindQuery {
+    FindQuery::new(pattern.to_owned(), MatchMode::Plain, true).unwrap()
+}
+
+struct ScratchDir(std::path::PathBuf);
+
+impl ScratchDir {
+    fn new(name: &str) -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "feathermark-wave2s-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&path).unwrap();
+        Self(path)
+    }
+}
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn format_command_applies_the_plan_through_the_edit_path() {
+    let mut state = AppState::new();
+    let mut document = Document::new("bold me").unwrap();
+
+    let applied = state
+        .apply_format_command(
+            &mut document,
+            Selection { anchor: 0, head: 4 },
+            FormatCommand::ToggleBold,
+        )
+        .unwrap();
+
+    assert_eq!(document.snapshot().to_string(), "**bold** me");
+    assert_eq!(applied.selection_after, Selection { anchor: 2, head: 6 });
+    assert_eq!(applied.action, None);
+    assert_eq!(applied.revision, 1);
+    assert_eq!(
+        applied.effects,
+        vec![AppEffect::ScheduleRender { revision: 1 }]
+    );
+    assert!(state.dirty());
+    assert_eq!(state.revision(), 1);
+}
+
+#[test]
+fn smart_enter_continues_a_list_and_reports_the_action() {
+    let mut state = AppState::new();
+    let mut document = Document::new("- item").unwrap();
+
+    let applied = state
+        .smart_enter(&mut document, Selection::collapsed(6))
+        .unwrap();
+
+    assert_eq!(document.snapshot().to_string(), "- item\n- ");
+    assert_eq!(
+        applied.action,
+        Some(SmartEnterAction::ContinueBullet {
+            marker: feathermark_core::ListMarker::Dash
+        })
+    );
+    assert!(state.dirty());
+}
+
+#[test]
+fn empty_format_plan_is_a_clean_noop() {
+    let mut state = AppState::new();
+    let mut document = Document::new("   ").unwrap();
+
+    // A bullet toggle over a whitespace-only line yields no edits: the engine
+    // rejects the empty plan and the document/reducer are left untouched.
+    let result = state.apply_format_command(
+        &mut document,
+        Selection { anchor: 0, head: 3 },
+        FormatCommand::ToggleBulletList,
+    );
+
+    assert!(matches!(
+        result,
+        Err(ActionError::Plan(EditPlanError::Empty))
+    ));
+    assert_eq!(document.snapshot().to_string(), "   ");
+    assert!(!state.dirty());
+    assert_eq!(state.revision(), 0);
+}
+
+#[test]
+fn find_next_and_prev_locate_matches_and_record_current() {
+    let mut state = AppState::new();
+    let document = Document::new("abc abc abc").unwrap();
+    state.start_find(plain_query("abc"), FindDirection::Forward, false);
+
+    assert_eq!(state.find_next(&document, 0).unwrap(), Some(0..3));
+    assert_eq!(state.find_session().unwrap().current, Some(0..3));
+    assert_eq!(state.find_next(&document, 1).unwrap(), Some(4..7));
+    // find_prev inverts the session direction.
+    assert_eq!(state.find_prev(&document, 11).unwrap(), Some(8..11));
+}
+
+#[test]
+fn find_without_a_session_is_a_typed_rejection() {
+    let mut state = AppState::new();
+    let document = Document::new("abc").unwrap();
+    assert!(matches!(
+        state.find_next(&document, 0),
+        Err(ActionError::NoFindSession)
+    ));
+}
+
+#[test]
+fn replace_current_replaces_the_highlighted_match() {
+    let mut state = AppState::new();
+    let mut document = Document::new("hello world").unwrap();
+    state.start_find(plain_query("world"), FindDirection::Forward, false);
+    assert_eq!(state.find_next(&document, 0).unwrap(), Some(6..11));
+
+    let applied = state
+        .replace_current(&mut document, "there".to_owned())
+        .unwrap();
+
+    assert_eq!(document.snapshot().to_string(), "hello there");
+    assert_eq!(applied.replaced, 1);
+    assert!(applied.selection_after.is_some());
+    assert!(state.dirty());
+    // The stale highlighted range is cleared after the buffer mutates.
+    assert_eq!(state.find_session().unwrap().current, None);
+}
+
+#[test]
+fn replace_all_over_multiple_plans_applies_fully() {
+    // 5000 matches exceeds MAX_PLAN_EDITS (4096), forcing the engine to chunk
+    // into more than one plan; every plan must still commit.
+    let count = 5000;
+    let mut state = AppState::new();
+    let mut document = Document::new(&"x ".repeat(count)).unwrap();
+    state.start_find(plain_query("x"), FindDirection::Forward, false);
+
+    let applied = state.replace_all(&mut document, "yy".to_owned()).unwrap();
+
+    assert_eq!(applied.replaced, count);
+    assert_eq!(document.snapshot().to_string(), "yy ".repeat(count));
+    // More than one plan applied means the revision advanced by more than one.
+    assert!(document.revision() >= 2, "expected chunked application");
+    assert!(!applied.effects.is_empty());
+    assert!(state.dirty());
+}
+
+#[test]
+fn replace_all_with_no_matches_is_a_noop() {
+    let mut state = AppState::new();
+    let mut document = Document::new("nothing here").unwrap();
+    state.start_find(plain_query("zzz"), FindDirection::Forward, false);
+
+    let applied = state.replace_all(&mut document, "!".to_owned()).unwrap();
+
+    assert_eq!(applied.replaced, 0);
+    assert_eq!(applied.selection_after, None);
+    assert!(applied.effects.is_empty());
+    assert_eq!(document.snapshot().to_string(), "nothing here");
+    assert!(!state.dirty());
+}
+
+#[test]
+fn export_html_is_inert_and_suggests_a_name() {
+    let state = AppState::new();
+    let document = Document::new("# Title\n\nBody text.").unwrap();
+
+    let export = state.export_html(&document, None).unwrap();
+
+    assert!(export.html.starts_with("<!doctype html>"));
+    assert!(!export.html.contains("<script"));
+    assert!(export.html.contains("Body text."));
+    assert_eq!(export.suggested_file_name, "untitled.html");
+}
+
+#[test]
+fn counts_track_the_current_document() {
+    let mut state = AppState::new();
+    let mut document = Document::new("the quick brown fox").unwrap();
+
+    let before = state.counts(&document);
+    assert_eq!(before.words, 4);
+    assert_eq!(before.chars, 19);
+
+    state
+        .apply_format_command(
+            &mut document,
+            Selection { anchor: 0, head: 3 },
+            FormatCommand::ToggleBold,
+        )
+        .unwrap();
+
+    let after = state.counts(&document);
+    assert_eq!(after.words, 4);
+    assert!(after.chars > before.chars, "bold markers add characters");
+}
+
+#[test]
+fn autosave_tick_then_recover_round_trips() {
+    let dir = ScratchDir::new("autosave");
+    let document = Document::new("recover me \u{1fab6}").unwrap();
+
+    let mut state = AppState::new();
+    state
+        .bind_autosave(AutosaveStore::new(dir.0.clone()))
+        .unwrap();
+    let entry = state.autosave_tick(&document, 1).unwrap().unwrap();
+    assert_eq!(entry.sequence, 0);
+
+    // A fresh state bound to the same directory recovers the snapshot.
+    let mut restarted = AppState::new();
+    restarted
+        .bind_autosave(AutosaveStore::new(dir.0.clone()))
+        .unwrap();
+    let recovered = restarted.recover().unwrap().expect("something to recover");
+    assert_eq!(
+        recovered.document.snapshot().to_string(),
+        "recover me \u{1fab6}"
+    );
+    // The next tick continues the sequence past what was recovered.
+    let next = restarted.autosave_tick(&document, 2).unwrap().unwrap();
+    assert_eq!(next.sequence, 1);
+}
+
+#[test]
+fn session_state_capture_and_restore_round_trip() {
+    let state = AppState::new();
+    let selection = Selection { anchor: 1, head: 3 };
+
+    let captured = state.capture_session_state(42, Some(selection), Some(5), None);
+    assert_eq!(captured.saved_at_unix_ms, 42);
+    assert_eq!(captured.last_file, None);
+
+    let restore = state.restore_session(&captured);
+    assert_eq!(restore.selection, Some(selection));
+    assert_eq!(restore.top_visible_byte, Some(5));
+    assert_eq!(restore.last_file, None);
 }
