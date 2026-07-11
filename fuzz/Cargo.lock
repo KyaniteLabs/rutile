@@ -76,7 +76,7 @@ dependencies = [
 
 [[package]]
 name = "feathermark-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "blake3",
  "feathermark-types",
@@ -98,7 +98,7 @@ dependencies = [
 
 [[package]]
 name = "feathermark-protocol"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "feathermark-types",
  "serde",
@@ -108,7 +108,7 @@ dependencies = [
 
 [[package]]
 name = "feathermark-types"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "html-escape",
  "thiserror",

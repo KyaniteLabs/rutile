@@ -55,7 +55,7 @@ fn assembles_deterministic_arm64_app_bound_to_candidate_hash() {
         build_input_sha256: sha256(&bytes),
         source_commit: valid_source_commit(),
         output_root: output.clone(),
-        version: "0.1.0".into(),
+        version: "0.1.1".into(),
     })
     .unwrap();
 
@@ -111,7 +111,7 @@ fn assembles_deterministic_arm64_app_bound_to_candidate_hash() {
     assert_eq!(metadata["schema"], "feathermark-local-package-v1");
     assert_eq!(metadata["build_input_sha256"], sha256(&mach_o_arm64()));
     assert_eq!(metadata["source_commit"], valid_source_commit());
-    assert_eq!(metadata["version"], "0.1.0");
+    assert_eq!(metadata["version"], "0.1.1");
     assert_eq!(metadata["notarized"], false);
 }
 
@@ -162,7 +162,7 @@ fn macos_plans_are_argument_vectors_and_dmg_manifest_hashes_existing_artifact() 
         &sha256(b"candidate"),
         &sha256(b"signed"),
         &valid_source_commit(),
-        "0.1.0",
+        "0.1.1",
     )
     .unwrap();
     assert_eq!(zip_manifest.label, MACOS_PACKAGE_LABEL);
@@ -179,14 +179,14 @@ fn macos_plans_are_argument_vectors_and_dmg_manifest_hashes_existing_artifact() 
         &sha256(b"candidate"),
         &sha256(b"signed"),
         &valid_source_commit(),
-        "0.1.0",
+        "0.1.1",
     )
     .unwrap();
     assert_eq!(manifest.label, MACOS_PACKAGE_LABEL);
     assert_eq!(manifest.artifact, std::path::PathBuf::from("existing.dmg"));
     assert_eq!(manifest.artifact_sha256, sha256(b"test-only dmg bytes"));
     assert_eq!(manifest.source_commit, valid_source_commit());
-    assert_eq!(manifest.version, "0.1.0");
+    assert_eq!(manifest.version, "0.1.1");
     assert!(!manifest.notarized);
 }
 
@@ -205,7 +205,7 @@ fn prepares_linux_layout_with_locked_gtk3_webkitgtk41_dependencies() {
         build_input_sha256: sha256(&bytes),
         source_commit: valid_source_commit(),
         output_root: output.clone(),
-        version: "0.1.0".into(),
+        version: "0.1.1".into(),
     })
     .unwrap();
 
@@ -293,7 +293,7 @@ fn prepares_debian_staging_with_locked_dependencies() {
         build_input_sha256: sha256(&bytes),
         source_commit: valid_source_commit(),
         output_root: output.clone(),
-        version: "0.1.0".into(),
+        version: "0.1.1".into(),
     })
     .unwrap();
 
@@ -330,13 +330,13 @@ fn prepares_rpm_staging_with_locked_requirements() {
         build_input_sha256: sha256(&bytes),
         source_commit: valid_source_commit(),
         output_root: output.clone(),
-        version: "0.1.0".into(),
+        version: "0.1.1".into(),
     })
     .unwrap();
 
     let spec = fs::read_to_string(receipt.output.join("SPECS/feathermark.spec")).unwrap();
     assert!(spec.contains("Name:           feathermark"));
-    assert!(spec.contains("Version:        0.1.0"));
+    assert!(spec.contains("Version:        0.1.1"));
     assert!(spec.contains("BuildArch:      x86_64"));
     assert!(spec.contains("Requires:       gtk3, gtksourceview4, webkit2gtk4.1"));
     assert!(spec.contains("Summary:        Rutile — A local-first writing studio by Kyanite."));
@@ -385,7 +385,7 @@ fn linux_archive_plan_is_deterministic_and_manifest_hashes_existing_tar_zst() {
         &sha256(b"candidate"),
         &sha256(b"candidate"),
         &valid_source_commit(),
-        "0.1.0",
+        "0.1.1",
     )
     .unwrap();
     assert_eq!(manifest.label, LINUX_PACKAGE_LABEL);
@@ -415,7 +415,7 @@ fn rejects_candidate_hash_mismatch_and_symlink_inputs() {
         build_input_sha256: "00".repeat(32),
         source_commit: valid_source_commit(),
         output_root: output.join("mismatch-output"),
-        version: "0.1.0".into(),
+        version: "0.1.1".into(),
     })
     .unwrap_err();
     assert!(
@@ -429,7 +429,7 @@ fn rejects_candidate_hash_mismatch_and_symlink_inputs() {
         build_input_sha256: sha256(b"candidate"),
         source_commit: valid_source_commit(),
         output_root: output.join("linked-output"),
-        version: "0.1.0".into(),
+        version: "0.1.1".into(),
     })
     .unwrap_err();
     assert!(linked.to_string().contains("symlink"));
@@ -442,7 +442,7 @@ fn rejects_relative_and_parent_traversal_paths_before_io() {
         build_input_sha256: "00".repeat(32),
         source_commit: valid_source_commit(),
         output_root: "relative/output".into(),
-        version: "0.1.0".into(),
+        version: "0.1.1".into(),
     };
     let error = assemble_macos_app(&request).unwrap_err();
     assert!(error.to_string().contains("absolute normalized path"));
@@ -463,7 +463,7 @@ fn rejects_candidates_whose_binary_architecture_conflicts_with_package_label() {
         build_input_sha256: sha256(&bytes),
         source_commit: valid_source_commit(),
         output_root: output.join("macos-output"),
-        version: "0.1.0".into(),
+        version: "0.1.1".into(),
     })
     .unwrap_err();
 
@@ -476,7 +476,7 @@ fn rejects_candidates_whose_binary_architecture_conflicts_with_package_label() {
         build_input_sha256: sha256(&bytes),
         source_commit: valid_source_commit(),
         output_root: output.join("linux-output"),
-        version: "0.1.0".into(),
+        version: "0.1.1".into(),
     })
     .unwrap_err();
     assert!(error.to_string().contains("ELF x86_64"));
@@ -542,7 +542,7 @@ fn executable_size_gate_rejects_oversize_candidates() {
         build_input_sha256: sha256(&bytes),
         source_commit: valid_source_commit(),
         output_root: output.join("macos-output"),
-        version: "0.1.0".into(),
+        version: "0.1.1".into(),
     })
     .unwrap_err();
     assert!(err.to_string().contains("executable exceeds maximum size"));
@@ -561,7 +561,7 @@ fn artifact_size_gate_rejects_oversize_artifacts() {
         &sha256(b"candidate"),
         &sha256(b"signed"),
         &valid_source_commit(),
-        "0.1.0",
+        "0.1.1",
     )
     .unwrap_err();
     assert!(err.to_string().contains("artifact exceeds maximum size"));
@@ -630,7 +630,7 @@ fn create_dummy_output_if_needed(plan: &xtask::local_package::CommandPlan) {
                     let def = pair[1].to_string_lossy();
                     def.strip_prefix("_topdir ").map(|topdir| {
                         std::path::PathBuf::from(topdir)
-                            .join("RPMS/x86_64/feathermark-0.1.0-1.x86_64.rpm")
+                            .join("RPMS/x86_64/feathermark-0.1.1-1.x86_64.rpm")
                     })
                 })
         }
@@ -701,18 +701,18 @@ fn run_local_package_macos_produces_manifests_and_cleans_staging() {
         build_input_sha256: sha256(&bytes),
         source_commit: valid_source_commit(),
         output_root: output.clone(),
-        version: "0.1.0".into(),
+        version: "0.1.1".into(),
     });
 
     let manifests = run_local_package(request, &executor).unwrap();
     assert_eq!(manifests.len(), 2);
     assert_eq!(
         manifests[0].artifact.as_os_str().to_string_lossy(),
-        "Rutile-0.1.0-macos-arm64.app.zip"
+        "Rutile-0.1.1-macos-arm64.app.zip"
     );
     assert_eq!(
         manifests[1].artifact.as_os_str().to_string_lossy(),
-        "Rutile-0.1.0-macos-arm64.dmg"
+        "Rutile-0.1.1-macos-arm64.dmg"
     );
     assert_eq!(manifests[0].build_input_sha256, sha256(&bytes));
     assert_eq!(manifests[0].packaged_executable_sha256, sha256(&bytes));
@@ -741,14 +741,14 @@ fn run_local_package_linux_produces_manifests_and_cleans_staging() {
         build_input_sha256: sha256(&bytes),
         source_commit: valid_source_commit(),
         output_root: output.clone(),
-        version: "0.1.0".into(),
+        version: "0.1.1".into(),
     });
 
     let manifests = run_local_package(request, &executor).unwrap();
     assert_eq!(manifests.len(), 3);
     assert_eq!(
         manifests[0].artifact.as_os_str().to_string_lossy(),
-        "Rutile-0.1.0-linux-x86_64.tar.zst"
+        "Rutile-0.1.1-linux-x86_64.tar.zst"
     );
     assert_eq!(manifests[0].build_input_sha256, sha256(&bytes));
     assert_eq!(manifests[0].packaged_executable_sha256, sha256(&bytes));
@@ -780,7 +780,7 @@ fn run_local_package_retains_staging_on_failure() {
         build_input_sha256: sha256(&bytes),
         source_commit: valid_source_commit(),
         output_root: output.clone(),
-        version: "0.1.0".into(),
+        version: "0.1.1".into(),
     });
 
     assert!(run_local_package(request, &executor).is_err());
@@ -802,7 +802,7 @@ fn no_overwrite_of_existing_output_root_or_artifacts() {
         build_input_sha256: sha256(&bytes),
         source_commit: valid_source_commit(),
         output_root: output.clone(),
-        version: "0.1.0".into(),
+        version: "0.1.1".into(),
     });
 
     let err = run_local_package(request, &RecordingExecutor::default()).unwrap_err();
@@ -828,7 +828,7 @@ fn clap_parses_local_macos_command() {
         "--output-root",
         "/out/macos",
         "--version",
-        "0.1.0",
+        "0.1.1",
     ];
     let cli = Cli::parse_from(args);
     match cli.command {
@@ -846,7 +846,7 @@ fn clap_parses_local_macos_command() {
                 assert_eq!(build_input_sha256, hash);
                 assert_eq!(source_commit, commit);
                 assert_eq!(output_root, PathBuf::from("/out/macos"));
-                assert_eq!(version, "0.1.0");
+                assert_eq!(version, "0.1.1");
             }
             _ => panic!("expected macos subcommand"),
         },
@@ -873,7 +873,7 @@ fn clap_parses_local_linux_command() {
         "--output-root",
         "/out/linux",
         "--version",
-        "0.1.0",
+        "0.1.1",
     ];
     let cli = Cli::parse_from(args);
     match cli.command {
@@ -891,7 +891,7 @@ fn clap_parses_local_linux_command() {
                 assert_eq!(build_input_sha256, hash);
                 assert_eq!(source_commit, commit);
                 assert_eq!(output_root, PathBuf::from("/out/linux"));
-                assert_eq!(version, "0.1.0");
+                assert_eq!(version, "0.1.1");
             }
             _ => panic!("expected linux subcommand"),
         },
@@ -913,7 +913,7 @@ fn process_executor_rejects_nonzero_status() {
 fn artifact_manifest_contains_exact_locked_fields() {
     let temporary = tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();
-    let artifact = root.join("FeatherMark-0.1.0-macos-arm64.dmg");
+    let artifact = root.join("FeatherMark-0.1.1-macos-arm64.dmg");
     fs::write(&artifact, b"x").unwrap();
 
     let manifest = finalize_macos_dmg_manifest(
@@ -921,7 +921,7 @@ fn artifact_manifest_contains_exact_locked_fields() {
         &"a".repeat(64),
         &"b".repeat(64),
         &valid_source_commit(),
-        "0.1.0",
+        "0.1.1",
     )
     .unwrap();
 
@@ -961,14 +961,14 @@ fn json_receipt_hashes_bind_to_artifact_bytes() {
         build_input_sha256: sha256(&bytes),
         source_commit: valid_source_commit(),
         output_root: output.clone(),
-        version: "0.1.0".into(),
+        version: "0.1.1".into(),
     });
 
     let manifests = run_local_package(request, &executor).unwrap();
     let json = serde_json::to_string_pretty(&manifests).unwrap();
     assert!(json.contains(&sha256(&bytes)));
     assert!(json.contains(&valid_source_commit()));
-    assert!(json.contains("0.1.0"));
+    assert!(json.contains("0.1.1"));
 }
 
 use xtask::cli::{Cli, Command, LocalPackageCommand, PackageCommand};

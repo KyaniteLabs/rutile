@@ -1,6 +1,6 @@
 [package]
 name = "feathermark-app"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -16,9 +16,9 @@ macos-shell = ["dep:iced_renderer", "dep:iced_widget", "dep:iced_winit", "dep:ob
 test-control = []
 
 [dependencies]
-feathermark-core = { path = "../feathermark-core", version = "=0.1.0" }
-feathermark-protocol = { path = "../feathermark-protocol", version = "=0.1.0" }
-feathermark-types = { path = "../feathermark-types", version = "=0.1.0" }
+feathermark-core = { path = "../feathermark-core", version = "=0.1.1" }
+feathermark-protocol = { path = "../feathermark-protocol", version = "=0.1.1" }
+feathermark-types = { path = "../feathermark-types", version = "=0.1.1" }
 getrandom = "=0.3.3"
 serde_json = "=1.0.140"
 thiserror = "=2.0.12"
