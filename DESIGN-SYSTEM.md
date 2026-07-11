@@ -147,6 +147,12 @@ pulled forward.
   untouched OS surfaces.
 - **Chrome refusals:** no custom titlebars on Linux, no window tinting, no animated
   chrome, no badges/dots, nothing competing with the caret.
+- **SURFACE_ lineage (Simon, 2026-07-10; see `docs/research/surface-design-notes.md`):**
+  (1) chrome inversion — the case chrome stays smoky-dark in BOTH document modes, only
+  the writing/preview field flips; (2) dot-grid "glyph field" texture on empty states
+  ONLY (welcome, empty preview, recovery), never on working surfaces; (3) toolbar/
+  status chips use SURFACE_'s mono-caps outlined-rectangle grammar at needle weight.
+  Not adopted: full-field dotting, second signal color, cockpit density.
 
 ## Build order
 
