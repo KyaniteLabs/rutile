@@ -1,0 +1,93 @@
+{
+  "schema": "feathermark-local-beta-evidence-v1",
+  "version": "0.2.0",
+  "source_commit": "119c02cdb27db01f328224143a8ed7c917a41815",
+  "created_at": "2026-07-11T18:41:46Z",
+  "delta_over_0_1_1": {
+    "summary": "0.2.0 = 0.1.1 + the 0.2 feature waves (auto-format engine §6, recipient-grade self-contained HTML export §7, QoL set §9) merged to main via PRs #12-#23, rebuilt/retested/repackaged on both platforms with the locked xtask driver. The release commit itself is the version bump only.",
+    "feature_wave_merges": [
+      { "pr": 12, "merge": "3e94cfc", "title": "Wave 0 contract freeze (format/export/find/session)" },
+      { "pr": 13, "merge": "a735a79", "title": "Wave 1F format engine" },
+      { "pr": 14, "merge": "ac757a2", "title": "Wave 1Q find/replace, counts, autosave+recovery" },
+      { "pr": 15, "merge": "14073e2", "title": "Wave 1E themed self-contained HTML export + allowlist sanitizer" },
+      { "pr": 16, "merge": "3fd28be", "title": "Wave 1P html_to_markdown smart-paste converter" },
+      { "pr": 17, "merge": "14e08f5", "title": "Wave 2S shared reducer plumbing for shell integration" },
+      { "pr": 18, "merge": "f8f262a", "title": "Wave 2M macOS shell integration" },
+      { "pr": 19, "merge": "f323334", "title": "Wave 2L Linux GTK shell integration" },
+      { "pr": 20, "merge": "8994068", "title": "Wave 3V tastecheck design pass on HTML export template" },
+      { "pr": 21, "merge": "79b4e8f", "title": "Wave 3B ChangeSet return + incremental shell apply" },
+      { "pr": 22, "merge": "227a9f0", "title": "UltraQA round 2 — O(n^2) list-paste hang + format-engine boundary panic" },
+      { "pr": 23, "merge": "0496df6", "title": "Wave 4 code-review findings (HIGH replace-all cursor + 3 MEDIUM)" }
+    ],
+    "code_surface": "34 files changed under crates/, xtask/src/, vendor/ between 0.1.1 release commit 8b0aae6 and 0.2.0 release commit 119c02c: +11196 / -52",
+    "release_branch_change": "commit 119c02c is the version bump only (crate manifests + internal =version pins, root/xtask/spikes/fuzz manifests, Cargo.lock + fuzz/Cargo.lock regenerated via cargo, xtask local_package consts LOCAL_BETA_VERSION + five artifact-name constants, and their tests) — mirrors the 0.1.0->0.1.1 bump 8b0aae6; no validation weakened",
+    "vendored_patch_ships": "workspace Cargo.lock resolves pulldown-cmark 0.13.4 with no source field, i.e. to the vendored patched copy under vendor/pulldown-cmark (the fm1 render-DoS fix is in the shipped binaries)"
+  },
+  "artifacts": [
+    {
+      "target": "macos-arm64",
+      "label": "local-unnotarized-macos-arm64",
+      "artifact": "Rutile-0.2.0-macos-arm64.app.zip",
+      "bytes": 1945283,
+      "artifact_sha256": "952124f6ae6948727f06f92e2fbfd8e4d495d01987fd1bcf7c371eb4fb7b666f",
+      "manifest_sha256": "3885ba78e41e16a215d2d0d174e830fd740ba03fe3572c69cd890e40e49b0cf7",
+      "build_input_sha256": "948befb4217a31ce6f94642008dc1236fa6f1890a1a58ff5bc284d7566df6539",
+      "packaged_executable_sha256": "a2d1740b368e75b4eb11361575814edfb5e8dcb9fc834ab72fccb8dc19f0944c",
+      "package_smoke": "verified: DMG re-mounted with hdiutil; codesign --verify --strict passed and satisfies its Designated Requirement; embedded executable SHA-256 matches both manifests",
+      "signed": false,
+      "notarized": false
+    },
+    {
+      "target": "macos-arm64",
+      "label": "local-unnotarized-macos-arm64",
+      "artifact": "Rutile-0.2.0-macos-arm64.dmg",
+      "bytes": 2425213,
+      "artifact_sha256": "2d7b34b074852d744e833dcddddd8ac3f37644a77ff1f80979555a5ce876e18a",
+      "manifest_sha256": "f1a54de369cbf34e8ca48ce52dcb37c70bfc18256d50532797830334993a9d83",
+      "build_input_sha256": "948befb4217a31ce6f94642008dc1236fa6f1890a1a58ff5bc284d7566df6539",
+      "packaged_executable_sha256": "a2d1740b368e75b4eb11361575814edfb5e8dcb9fc834ab72fccb8dc19f0944c",
+      "package_smoke": "verified: DMG manifest references the same packaged executable SHA-256 as the app.zip and the mounted app",
+      "signed": false,
+      "notarized": false
+    },
+    {
+      "target": "linux-x86_64",
+      "label": "linux-x86_64-unverified-wayland",
+      "artifact": "Rutile-0.2.0-linux-x86_64.tar.zst",
+      "bytes": 766158,
+      "artifact_sha256": "8e50e66c69fb0a3edcf99843b9d6d45953e1480f273d59294e0bff7136a9941d",
+      "manifest_sha256": "49bf931b6a63b8adc6255fc331b7944b289bc9a808ac257bf67a295c3f5adad8",
+      "build_input_sha256": "ed9e387f1cc2b41095058e278d95874d9520a7244dc76e2bdbcdd58b3e7ed734",
+      "packaged_executable_sha256": "ed9e387f1cc2b41095058e278d95874d9520a7244dc76e2bdbcdd58b3e7ed734",
+      "package_smoke": "verified: archive manifest SHA-256 matches build input; the same build-input binary passed the 50-cycle WebKitGTK lifecycle gate (ready=50 closed=50 failures=0) under Xvfb on Niko (Ubuntu x86_64)",
+      "signed": false,
+      "notarized": false
+    },
+    {
+      "target": "linux-x86_64",
+      "label": "linux-x86_64-unverified-wayland",
+      "artifact": "feathermark_0.2.0_amd64.deb",
+      "bytes": 767172,
+      "artifact_sha256": "6f42d2bc68ffa31f86779a93c7f38af288a77779b652dbe98963348e8ced887a",
+      "manifest_sha256": "a2b63fbd6b46121573dbdd6dee3048289205c973f696f2b83b6bddbaf9b00b53",
+      "build_input_sha256": "ed9e387f1cc2b41095058e278d95874d9520a7244dc76e2bdbcdd58b3e7ed734",
+      "packaged_executable_sha256": "ed9e387f1cc2b41095058e278d95874d9520a7244dc76e2bdbcdd58b3e7ed734",
+      "package_smoke": "verified: dpkg -i succeeded on Niko; installed /usr/bin/feathermark SHA-256 matches the packaged executable; dpkg reports Version 0.2.0; rootless dpkg-deb -x extract corroborated the same binary hash",
+      "signed": false,
+      "notarized": false
+    },
+    {
+      "target": "linux-x86_64",
+      "label": "linux-x86_64-unverified-wayland",
+      "artifact": "feathermark-0.2.0-1.x86_64.rpm",
+      "bytes": 922783,
+      "artifact_sha256": "2b8fbf0405e8e87abb323d9be7ee47aaee12dc2ceaf7aa403e89d3901c8eca11",
+      "manifest_sha256": "ba9eaac2a194f46d348869e424602404243cc057eff03d6f2fc5a1924dbaf1e0",
+      "build_input_sha256": "ed9e387f1cc2b41095058e278d95874d9520a7244dc76e2bdbcdd58b3e7ed734",
+      "packaged_executable_sha256": "ed9e387f1cc2b41095058e278d95874d9520a7244dc76e2bdbcdd58b3e7ed734",
+      "package_smoke": "partial: built via rpmbuild on Niko and manifest SHA-256 matches build input; not install-verified (no RPM-based host available — unchanged 0.1.x debt)",
+      "signed": false,
+      "notarized": false
+    }
+  ]
+}
