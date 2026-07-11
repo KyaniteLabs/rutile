@@ -106,6 +106,21 @@ fn unsupported_versions_are_rejected() {
 }
 
 #[test]
+fn future_version_with_new_fields_reports_unsupported_version_not_malformed() {
+    // A V2 record will legitimately carry fields a V1 reader doesn't know. The
+    // version envelope must be read before the strict parse, so the reader
+    // reports UnsupportedVersion rather than InvalidJson (unknown field).
+    let wire = String::from_utf8(encode_session_state(&state()).unwrap())
+        .unwrap()
+        .replace("\"v\":1", "\"v\":2,\"a_v2_field\":true")
+        .into_bytes();
+    assert!(matches!(
+        decode_session_state(&wire),
+        Err(SessionError::UnsupportedVersion)
+    ));
+}
+
+#[test]
 fn wrong_schema_tags_are_rejected() {
     let mislabelled = AutosaveEntryV1 {
         schema: SESSION_SCHEMA_V1.into(),

@@ -26,7 +26,12 @@ pub const SESSION_SCHEMA_V1: &str = "feathermark.session.v1";
 /// Maximum bytes for one encoded autosave journal entry.
 pub const MAX_AUTOSAVE_ENTRY_BYTES: usize = 4 * 1024;
 /// Maximum bytes for the encoded session-restore record.
-pub const MAX_SESSION_STATE_BYTES: usize = 16 * 1024;
+///
+/// Chosen so the per-field caps are jointly satisfiable: a state carrying the
+/// maximum `recent_files` ([`MAX_RECENT_FILES`]) plus `last_file`, each up to
+/// [`MAX_SESSION_PATH_BYTES`], plus JSON overhead, still encodes within this
+/// budget rather than passing field validation and then failing `encode`.
+pub const MAX_SESSION_STATE_BYTES: usize = 64 * 1024;
 /// Maximum entries in the session recent-files list (SPEC §9).
 pub const MAX_RECENT_FILES: usize = 10;
 /// Maximum bytes for any file path stored in these records.
@@ -124,7 +129,7 @@ pub fn encode_autosave_entry(entry: &AutosaveEntryV1) -> Result<Vec<u8>, Session
 }
 
 pub fn decode_autosave_entry(bytes: &[u8]) -> Result<AutosaveEntryV1, SessionError> {
-    let entry: AutosaveEntryV1 = decode_ndjson(bytes, MAX_AUTOSAVE_ENTRY_BYTES)?;
+    let entry: AutosaveEntryV1 = decode_ndjson(bytes, MAX_AUTOSAVE_ENTRY_BYTES, 1)?;
     validate_autosave_entry(&entry)?;
     Ok(entry)
 }
@@ -135,7 +140,7 @@ pub fn encode_session_state(state: &SessionStateV1) -> Result<Vec<u8>, SessionEr
 }
 
 pub fn decode_session_state(bytes: &[u8]) -> Result<SessionStateV1, SessionError> {
-    let state: SessionStateV1 = decode_ndjson(bytes, MAX_SESSION_STATE_BYTES)?;
+    let state: SessionStateV1 = decode_ndjson(bytes, MAX_SESSION_STATE_BYTES, 1)?;
     validate_session_state(&state)?;
     Ok(state)
 }
@@ -240,7 +245,21 @@ fn is_lower_hex(value: &str, length: usize) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-fn decode_ndjson<T: DeserializeOwned>(bytes: &[u8], maximum: usize) -> Result<T, SessionError> {
+/// Permissive two-field peek used to detect the record version *before* the
+/// strict (`deny_unknown_fields`) parse. Without this, a future record whose
+/// body carries new fields fails as `InvalidJson` (unknown field) instead of
+/// the intended `UnsupportedVersion`.
+#[derive(Deserialize)]
+struct VersionEnvelope {
+    #[serde(default)]
+    v: Option<u8>,
+}
+
+fn decode_ndjson<T: DeserializeOwned>(
+    bytes: &[u8],
+    maximum: usize,
+    expected_version: u8,
+) -> Result<T, SessionError> {
     if bytes.len() > maximum {
         return Err(SessionError::TooLarge { maximum });
     }
@@ -249,6 +268,12 @@ fn decode_ndjson<T: DeserializeOwned>(bytes: &[u8], maximum: usize) -> Result<T,
     };
     if record.is_empty() || record.contains(&b'\n') || record.contains(&b'\r') {
         return Err(SessionError::InvalidFraming);
+    }
+    let envelope: VersionEnvelope = serde_json::from_slice(record)?;
+    if let Some(v) = envelope.v
+        && v != expected_version
+    {
+        return Err(SessionError::UnsupportedVersion);
     }
     Ok(serde_json::from_slice(record)?)
 }

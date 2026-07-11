@@ -58,7 +58,13 @@ impl ExportRequest {
 /// The export template is trusted output (the renderer escapes document
 /// text), so this inspection is a belt-and-suspenders gate over generated
 /// markup, not a sanitizer for hostile input.
-#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
+///
+/// `#[non_exhaustive]` and the absence of `Copy` are deliberate: the Wave-1/3
+/// sanitizer will grow this enum (e.g. inline event handlers, relative
+/// references) and some variants will carry owned data, so downstream matches
+/// keep a wildcard arm and the shape never has to be reopened after the freeze.
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum ExportViolation {
     #[error("export page contains a <script> element")]
     Script,

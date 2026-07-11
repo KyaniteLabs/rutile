@@ -36,10 +36,18 @@ fn export_page_accepts_a_clean_self_contained_page() {
 
 #[test]
 fn export_page_rejects_scripts() {
+    // `ExportViolation` is `#[non_exhaustive]` (it grows in Wave 1/3), so tests
+    // match variants rather than constructing them.
     let html = CLEAN_PAGE.replace("<h1>", "<script>alert(1)</script><h1>");
-    assert_eq!(ExportPage::from_html(html), Err(ExportViolation::Script));
+    assert!(matches!(
+        ExportPage::from_html(html),
+        Err(ExportViolation::Script)
+    ));
     let sneaky = CLEAN_PAGE.replace("<h1>", "<SCRIPT src=x><h1>");
-    assert_eq!(ExportPage::from_html(sneaky), Err(ExportViolation::Script));
+    assert!(matches!(
+        ExportPage::from_html(sneaky),
+        Err(ExportViolation::Script)
+    ));
 }
 
 #[test]
@@ -48,10 +56,10 @@ fn export_page_rejects_external_stylesheets_and_links() {
         "<style>",
         "<link rel=\"stylesheet\" href=\"https://cdn.example/x.css\"><style>",
     );
-    assert_eq!(
+    assert!(matches!(
         ExportPage::from_html(html),
         Err(ExportViolation::LinkElement)
-    );
+    ));
 }
 
 #[test]
@@ -62,9 +70,11 @@ fn export_page_rejects_frames_and_embedded_objects() {
         "<embed src=\"x\">",
     ] {
         let html = CLEAN_PAGE.replace("<h1>", &format!("{tag}<h1>"));
-        assert_eq!(
-            ExportPage::from_html(html),
-            Err(ExportViolation::FrameOrObject),
+        assert!(
+            matches!(
+                ExportPage::from_html(html),
+                Err(ExportViolation::FrameOrObject)
+            ),
             "tag {tag} must be rejected"
         );
     }
@@ -78,9 +88,11 @@ fn export_page_rejects_external_url_references() {
         "<img srcset=\"https://example.com/x.png 1x\">",
     ] {
         let html = CLEAN_PAGE.replace("<h1>", &format!("{fragment}<h1>"));
-        assert_eq!(
-            ExportPage::from_html(html),
-            Err(ExportViolation::ExternalReference),
+        assert!(
+            matches!(
+                ExportPage::from_html(html),
+                Err(ExportViolation::ExternalReference)
+            ),
             "fragment {fragment} must be rejected"
         );
     }
@@ -90,9 +102,11 @@ fn export_page_rejects_external_url_references() {
         "background:url(//x/y.png);",
     ] {
         let html = CLEAN_PAGE.replace(":root{color-scheme:light dark}", css);
-        assert_eq!(
-            ExportPage::from_html(html),
-            Err(ExportViolation::ExternalReference),
+        assert!(
+            matches!(
+                ExportPage::from_html(html),
+                Err(ExportViolation::ExternalReference)
+            ),
             "css {css} must be rejected"
         );
     }
@@ -101,10 +115,10 @@ fn export_page_rejects_external_url_references() {
 #[test]
 fn export_page_rejects_javascript_urls() {
     let html = CLEAN_PAGE.replace("https://example.com", "javascript:alert(1)");
-    assert_eq!(
+    assert!(matches!(
         ExportPage::from_html(html),
         Err(ExportViolation::JavascriptUrl)
-    );
+    ));
 }
 
 #[test]
@@ -123,12 +137,12 @@ fn export_page_rejects_oversized_pages() {
     html.push_str("<!doctype html>\n<html><head><title>x</title></head><body><!--");
     html.push_str(&"y".repeat(MAX_EXPORT_PAGE_BYTES));
     html.push_str("--></body></html>");
-    assert_eq!(
+    assert!(matches!(
         ExportPage::from_html(html),
         Err(ExportViolation::TooLarge {
             max: MAX_EXPORT_PAGE_BYTES,
         })
-    );
+    ));
 }
 
 #[test]
@@ -138,7 +152,11 @@ fn export_error_wraps_render_errors_and_violations() {
         from_render,
         ExportError::Render(RenderError::PreviewTooLarge)
     ));
-    let from_violation: ExportError = ExportViolation::Script.into();
+    // Route through a library-produced violation: `ExportViolation` is
+    // `#[non_exhaustive]`, so the test crate can't construct a variant directly.
+    let violation = ExportPage::from_html(CLEAN_PAGE.replace("<h1>", "<script></script><h1>"))
+        .expect_err("script must be rejected");
+    let from_violation: ExportError = violation.into();
     assert!(matches!(
         from_violation,
         ExportError::Violation(ExportViolation::Script)
