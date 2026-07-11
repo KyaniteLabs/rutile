@@ -890,7 +890,7 @@ checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 
 [[package]]
 name = "feathermark-app"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "feathermark-core",
  "feathermark-protocol",
@@ -912,7 +912,7 @@ dependencies = [
 
 [[package]]
 name = "feathermark-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "blake3",
  "feathermark-types",
@@ -926,7 +926,7 @@ dependencies = [
 
 [[package]]
 name = "feathermark-protocol"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "feathermark-types",
  "serde",
@@ -936,7 +936,7 @@ dependencies = [
 
 [[package]]
 name = "feathermark-spike-support"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "feathermark-protocol",
  "feathermark-types",
@@ -944,7 +944,7 @@ dependencies = [
 
 [[package]]
 name = "feathermark-types"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "html-escape",
  "thiserror 2.0.12",
@@ -1952,7 +1952,7 @@ checksum = "d4a5ff6bcca6c4867b1c4fd4ef63e4db7436ef363e0ad7531d1558856bae64f4"
 
 [[package]]
 name = "linux-gtk-wry-spike"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "feathermark-protocol",
  "feathermark-spike-support",
@@ -1996,7 +1996,7 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "macos-iced-wry-spike"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "feathermark-protocol",
  "feathermark-spike-support",
@@ -4662,7 +4662,7 @@ checksum = "b9cc00251562a284751c9973bace760d86c0276c471b4be569fe6b068ee97a56"
 
 [[package]]
 name = "xtask"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "clap",
  "ed25519-dalek",
