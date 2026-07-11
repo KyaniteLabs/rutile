@@ -2,10 +2,14 @@
 
 mod document;
 mod editor_contract;
+mod export_contract;
 mod files;
+mod find_contract;
+mod format_contract;
 mod render;
 mod scroll;
 mod security;
+mod session_contract;
 
 pub use document::{
     ChangeSet, Document, DocumentError, DocumentSnapshot, Edit, EditError, EditTransaction,
@@ -17,10 +21,23 @@ pub use editor_contract::{
     EditorCommit, EditorError, EditorEvent, EditorEventSink, ImeCommit, LocalCommitRejection,
     StaleRevision, ViewportState, apply_editor_commit,
 };
+pub use export_contract::{
+    ExportError, ExportPage, ExportRequest, ExportViolation, MAX_EXPORT_PAGE_BYTES,
+    MAX_EXPORT_TITLE_BYTES,
+};
 pub use feathermark_types::{InteractionId, Revision};
 pub use files::{
     DiskVersion, ExternalChange, ExternalChangeDebouncer, ExternalResolution, FileError,
     FileService, LoadedDocument, LocalFileService, SaveFault,
+};
+pub use find_contract::{
+    FindDirection, FindError, FindQuery, FindReplaceOp, MAX_FIND_PATTERN_BYTES,
+    MAX_FIND_REPLACEMENT_BYTES, MatchMode, ReplaceSpec,
+};
+pub use format_contract::{
+    EditPlan, EditPlanError, FormatCommand, ListMarker, MAX_LINK_URL_BYTES, MAX_PLAN_EDITS,
+    MAX_PLAN_TOTAL_BYTES, MAX_PLANNED_REPLACEMENT_BYTES, MAX_PLANNED_SPAN_BYTES, OrderedDelimiter,
+    SmartEnterAction,
 };
 pub use render::{
     MAX_GENERATED_BODY_BYTES, MAX_RENDER_NESTING_DEPTH, MAX_RENDERED_PAGE_BYTES,
@@ -33,3 +50,9 @@ pub use scroll::{
     SuppressionReason, preview_samples, source_samples,
 };
 pub use security::{SafeNode, SourceAttributes};
+pub use session_contract::{
+    AUTOSAVE_SCHEMA_V1, AutosaveEntryV1, MAX_AUTOSAVE_ENTRY_BYTES, MAX_RECENT_FILES,
+    MAX_SESSION_PATH_BYTES, MAX_SESSION_STATE_BYTES, SESSION_SCHEMA_V1, SessionError,
+    SessionSelectionV1, SessionStateV1, SessionWindowV1, decode_autosave_entry,
+    decode_session_state, encode_autosave_entry, encode_session_state,
+};
