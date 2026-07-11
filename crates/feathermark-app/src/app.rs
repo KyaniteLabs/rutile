@@ -2,17 +2,18 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use feathermark_core::{
-    AutosaveEntryV1, AutosaveError, AutosaveStore, ChangeSet, Counts, DiskVersion, Document,
-    EditError, EditPlan, ExportError, ExportRequest, ExternalResolution, FindDirection, FindQuery,
-    FormatCommand, RecoveredDocument, RenderError, ReplaceSpec, SESSION_SCHEMA_V1, Selection,
-    SessionSelectionV1, SessionStateV1, SessionWindowV1, apply_format, render_export_page,
-    smart_enter,
+    AutosaveEntryV1, AutosaveError, AutosaveStore, ChangeSet, Counts, DiskVersion, Document, Edit,
+    EditError, EditPlan, EditTransaction, ExportError, ExportRequest, ExternalResolution,
+    FindDirection, FindQuery, FormatCommand, RecoveredDocument, RenderError, ReplaceSpec,
+    SESSION_SCHEMA_V1, Selection, SessionSelectionV1, SessionStateV1, SessionWindowV1,
+    TransactionKind, apply_format, render_export_page, smart_enter,
 };
 use feathermark_protocol::PreviewEventV1;
 use feathermark_types::{InteractionId, Revision, SafeLinkTarget};
 
 use crate::actions::{
-    ActionError, ExportOutput, FindSession, FormatApplied, ReplaceApplied, SessionRestore,
+    ActionError, ExportOutput, FindSession, FormatApplied, InsertApplied, ReplaceApplied,
+    SessionRestore,
 };
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -489,6 +490,52 @@ impl AppState {
         })
     }
 
+    // --- programmatic insert / paste ---------------------------------------
+
+    /// Replaces `selection` with `text` as a single bounded programmatic edit,
+    /// advancing the reducer exactly as every other shared action does and
+    /// returning the [`ChangeSet`] so a shell can follow the mutation
+    /// incrementally (viewport-preserving) instead of reinstalling the buffer.
+    ///
+    /// This is the shared smart-paste primitive both shells route through: the
+    /// Linux and macOS lanes each convert clipboard HTML to markdown via the
+    /// bounded core `html_to_markdown` (which enforces its 2 MiB input bound) and
+    /// lower the result — or a plain-text fallback — through here. A single
+    /// paste can far exceed the per-edit *formatting* budget, so this
+    /// deliberately applies a raw [`EditTransaction`] rather than an
+    /// [`EditPlan`]; the 20 MiB document cap is still enforced by
+    /// [`Document::apply`], surfacing as [`EditError::TooLarge`].
+    pub fn insert_text(
+        &mut self,
+        document: &mut Document,
+        selection: Selection,
+        text: &str,
+    ) -> Result<InsertApplied, ActionError> {
+        let start = selection.anchor.min(selection.head);
+        let end = selection.anchor.max(selection.head);
+        let id = self.next_transaction_id;
+        self.next_transaction_id = self.next_transaction_id.saturating_add(1);
+        let change = document.apply(EditTransaction {
+            base_revision: document.revision(),
+            id,
+            kind: TransactionKind::Programmatic,
+            edits: vec![Edit {
+                byte_range: start..end,
+                replacement: text.to_owned(),
+            }],
+        })?;
+        let selection_after = Selection::collapsed(start.saturating_add(text.len()));
+        let effects = self.reduce(AppMessage::DocumentEdited {
+            revision: document.revision(),
+        });
+        Ok(InsertApplied {
+            selection_after,
+            revision: document.revision(),
+            changes: vec![change],
+            effects,
+        })
+    }
+
     // --- export -------------------------------------------------------------
 
     /// Produces a validated, self-contained export page for `document` plus a
@@ -703,6 +750,26 @@ impl AppState {
             !plans.is_empty(),
             "apply_edit_plans requires a non-empty batch"
         );
+        // All-or-nothing size guard. The plans are applied in sequence and each
+        // `Document::apply` rejects a post-edit document over the cap. If a
+        // *middle* plan failed that way, earlier plans would already be committed
+        // to the document while the reducer and adapter stayed behind — wedging
+        // every later edit with a StaleRevision until reload. Project the running
+        // document size across the whole batch up front and reject the entire
+        // batch (before mutating anything) if it would ever cross the cap, so a
+        // cap-crossing replace-all can't half-apply.
+        let mut projected = document.len_bytes() as isize;
+        let mut peak = projected;
+        for plan in &plans {
+            for edit in plan.edits() {
+                let span = (edit.byte_range.end - edit.byte_range.start) as isize;
+                projected += edit.replacement.len() as isize - span;
+            }
+            peak = peak.max(projected);
+        }
+        if peak > feathermark_core::MAX_DOCUMENT_BYTES as isize {
+            return Err(EditError::TooLarge);
+        }
         let mut selection_after = Selection::collapsed(0);
         let mut changes = Vec::with_capacity(plans.len());
         for plan in plans {

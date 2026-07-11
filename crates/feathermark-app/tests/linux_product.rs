@@ -91,9 +91,20 @@ fn export_html_is_self_contained_and_scriptless() {
     let lower = output.html.to_lowercase();
     assert!(lower.contains("<!doctype html>"));
     assert!(!lower.contains("<script"));
-    assert!(!lower.contains("http://"));
+    // The only permitted "http://" substring is the inert XML namespace URI on
+    // the decorative heading-underline SVG (a `data:` URI CSS mask, never
+    // fetched) — mirroring the core export self-containment contract
+    // (`export_contract.rs`). Every http:// occurrence must be that xmlns, and
+    // no live external reference of any kind is allowed.
+    let http_occurrences = lower.matches("http://").count();
+    let inert_xmlns = lower.matches("xmlns='http://www.w3.org/2000/svg'").count();
+    assert_eq!(
+        http_occurrences, inert_xmlns,
+        "every http:// substring must be the inert SVG xmlns, not a live external reference"
+    );
     assert!(!lower.contains("https://"));
     assert!(!lower.contains("src=\"http"));
+    assert!(!lower.contains("://cdn"));
 
     session.save_html(&path, Some("Recipe".to_owned())).unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), output.html);

@@ -15,7 +15,9 @@ use feathermark_types::{InteractionId, Revision};
 use thiserror::Error;
 
 use super::PlatformAdapter;
-use crate::actions::{ExportOutput, FindSession, FormatApplied, ReplaceApplied, SessionRestore};
+use crate::actions::{
+    ExportOutput, FindSession, FormatApplied, InsertApplied, ReplaceApplied, SessionRestore,
+};
 use crate::app::{AppMessage, AppState, CloseDecision, CloseOutcome};
 use crate::preview_host::{HostError, PreviewHost};
 use crate::render_scheduler::{Completion, RenderRequest, RenderScheduler};
@@ -728,6 +730,25 @@ impl ProductSession {
         if applied.replaced > 0 {
             self.queue_current();
         }
+        Ok(applied)
+    }
+
+    /// Inserts `text` over `selection` through the shared
+    /// [`AppState::insert_text`](crate::app::AppState::insert_text) primitive,
+    /// re-queuing a render. Smart paste (clipboard-HTML → markdown, or the
+    /// plain-text fallback) routes through here so both shells share one insert
+    /// path; the caller follows [`InsertApplied::changes`] incrementally via the
+    /// adapter, preserving the viewport.
+    pub fn insert_text(
+        &mut self,
+        selection: Selection,
+        text: &str,
+    ) -> Result<InsertApplied, MacError> {
+        let applied = self
+            .app
+            .insert_text(&mut self.document, selection, text)
+            .map_err(|error| MacError::Core(error.to_string()))?;
+        self.queue_current();
         Ok(applied)
     }
 

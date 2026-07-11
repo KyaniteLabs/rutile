@@ -1,9 +1,9 @@
 use feathermark_app::actions::ActionError;
 use feathermark_app::app::{AppEffect, AppMessage, AppState, PreviewState};
 use feathermark_core::{
-    AutosaveStore, ChangeSet, Document, EditPlanError, ExternalResolution, FileService,
-    FindDirection, FindQuery, FormatCommand, LocalFileService, MatchMode, Selection,
-    SmartEnterAction,
+    AutosaveStore, ChangeSet, Document, EditError, EditPlanError, ExternalResolution, FileService,
+    FindDirection, FindQuery, FormatCommand, LocalFileService, MAX_DOCUMENT_BYTES, MatchMode,
+    Selection, SmartEnterAction,
 };
 use feathermark_protocol::PreviewEventV1;
 use feathermark_types::SafeLinkTarget;
@@ -463,6 +463,87 @@ fn replace_all_with_no_matches_is_a_noop() {
     assert!(applied.changes.is_empty());
     assert_eq!(document.snapshot().to_string(), "nothing here");
     assert!(!state.dirty());
+}
+
+#[test]
+fn replace_all_crossing_the_cap_is_rejected_whole_and_leaves_no_partial() {
+    // A growing replace-all whose projected size crosses the 20 MiB document cap
+    // must be rejected in full *before* any plan mutates the document. Otherwise
+    // the earlier plans commit while the reducer stays behind, wedging every
+    // later edit with a StaleRevision until reload. Each match "a" grows to a
+    // ~2 KiB replacement; enough matches to overshoot the cap.
+    let replacement = "b".repeat(2000);
+    let count = (MAX_DOCUMENT_BYTES / replacement.len()) + 200; // sum of replacements > cap
+    let source = "a\n".repeat(count);
+    let mut state = AppState::new();
+    let mut document = Document::new(&source).unwrap();
+    state.start_find(plain_query("a"), FindDirection::Forward, false);
+
+    let result = state.replace_all(&mut document, replacement);
+
+    assert!(
+        matches!(result, Err(ActionError::Edit(EditError::TooLarge))),
+        "expected a whole-batch TooLarge rejection, got {result:?}"
+    );
+    // Nothing was applied: revision, contents, and dirty flag are untouched, so
+    // the next edit still lands (no StaleRevision wedge).
+    assert_eq!(document.revision(), 0);
+    assert_eq!(document.snapshot().to_string(), source);
+    assert!(!state.dirty());
+
+    // The buffer still accepts a normal edit afterward (proves it isn't wedged).
+    let mut small = Document::new("hi").unwrap();
+    let mut fresh = AppState::new();
+    fresh.start_find(plain_query("hi"), FindDirection::Forward, false);
+    let ok = fresh.replace_all(&mut small, "yo".to_owned()).unwrap();
+    assert_eq!(ok.replaced, 1);
+    assert_eq!(small.snapshot().to_string(), "yo");
+}
+
+#[test]
+fn insert_text_advances_the_reducer_and_returns_followable_changes() {
+    // The shared smart-paste primitive must advance the reducer (dirty/revision)
+    // exactly like every other shared edit and return a ChangeSet a shell can
+    // replay incrementally (viewport-preserving) instead of reinstalling the
+    // buffer — the divergence the Linux paste path had.
+    let mut state = AppState::new();
+    let mut document = Document::new("hello world").unwrap();
+
+    let applied = state
+        .insert_text(
+            &mut document,
+            Selection {
+                anchor: 6,
+                head: 11,
+            },
+            "there",
+        )
+        .unwrap();
+
+    assert_eq!(document.snapshot().to_string(), "hello there");
+    assert_eq!(state.revision(), 1);
+    assert!(state.dirty());
+    assert_eq!(applied.selection_after, Selection::collapsed(11));
+    assert_eq!(applied.revision, document.revision());
+    assert_eq!(applied.changes.len(), 1);
+    assert!(!applied.effects.is_empty());
+    // Replayed as a shell does, the returned change reconstructs the buffer.
+    assert_eq!(replay("hello world", &applied.changes), "hello there");
+    assert_chained(&applied.changes, 0, document.revision());
+}
+
+#[test]
+fn insert_text_over_a_collapsed_selection_inserts_without_replacing() {
+    let mut state = AppState::new();
+    let mut document = Document::new("ab").unwrap();
+
+    let applied = state
+        .insert_text(&mut document, Selection::collapsed(1), "XYZ")
+        .unwrap();
+
+    assert_eq!(document.snapshot().to_string(), "aXYZb");
+    assert_eq!(applied.selection_after, Selection::collapsed(4));
+    assert_eq!(replay("ab", &applied.changes), "aXYZb");
 }
 
 #[test]
