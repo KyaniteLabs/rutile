@@ -202,24 +202,60 @@ fn render_export_page_produces_a_self_contained_themed_document() {
         !html.contains("<link"),
         "export must carry no external stylesheet link"
     );
-    assert!(
-        !html.contains("http://") && !html.contains("://cdn"),
-        "no external hosts"
+    assert!(!html.contains("://cdn"), "no external hosts");
+    // The only permitted "http://" substring is the inert XML namespace URI
+    // inside the geniculated H1 underline's `data:` mask image — a static
+    // identifier every SVG root carries, never dereferenced over the network.
+    // Any other occurrence would be a real external reference.
+    let external_http_occurrences = html.matches("http://").count();
+    let inert_xmlns_occurrences = html.matches("xmlns='http://www.w3.org/2000/svg'").count();
+    assert_eq!(
+        external_http_occurrences, inert_xmlns_occurrences,
+        "every http:// substring must be the inert SVG xmlns, not a live external reference"
     );
-    assert!(!html.contains("url("), "no CSS url() fetches");
+    // Every CSS `url(...)` must be a `data:` reference (self-containment's own
+    // allowlist re-verified from the test side, not just trusted).
+    for (offset, _) in html.match_indices("url(") {
+        let after = &html[offset + 4..];
+        let end = after.find(')').expect("url(...) must be closed");
+        let argument = after[..end].trim().trim_matches(['"', '\'']);
+        assert!(
+            argument.starts_with("data:"),
+            "url() argument must be a data: URI, got {argument}"
+        );
+    }
     assert!(!html.contains("@import"), "no CSS @import fetches");
 
-    // Theme signatures: light + dark, print, gold hairline underline, sixling hr.
+    // Theme signatures: light + dark, forced-colors, print, gold underline,
+    // sixling hr.
     assert!(
         html.contains("prefers-color-scheme:dark"),
         "must theme dark mode"
+    );
+    assert!(
+        html.contains("forced-colors:active"),
+        "must carry a forced-colors (Windows High Contrast) pass"
     );
     assert!(
         html.contains("@media print"),
         "must carry a print stylesheet"
     );
     assert!(html.contains("h1{"), "must style the document title");
-    assert!(html.contains("border-bottom:var(--rule-needle) solid var(--accent)"));
+    // The geniculated (elbow-bent) signature: a plain gold hairline as the
+    // universal baseline, enhanced to a bent line via a self-contained `data:`
+    // SVG mask wherever CSS masking is supported.
+    assert!(
+        html.contains("border-block-end:var(--rule-needle) solid var(--accent)"),
+        "must carry the plain-hairline fallback under the title"
+    );
+    assert!(
+        html.contains("@supports (mask-image:none) or (-webkit-mask-image:none)"),
+        "must gate the geniculated mask behind a masking feature query"
+    );
+    assert!(
+        html.contains("h1::after") && html.contains("mask-image:url(\"data:image/svg+xml,"),
+        "must draw the geniculated bend via a self-contained data: SVG mask"
+    );
     assert!(
         html.contains("hr::before"),
         "must style the sixling divider"
@@ -227,6 +263,28 @@ fn render_export_page_produces_a_self_contained_themed_document() {
     assert!(
         html.contains("--measure:68ch"),
         "must cap the measure at 68ch"
+    );
+    assert!(
+        html.contains("clamp("),
+        "type scale must be fluid (web-typography)"
+    );
+    assert!(
+        html.contains("padding-inline-start")
+            && html.contains("border-inline-start")
+            && html.contains("text-align:start"),
+        "directional CSS must use logical properties (i18n-ready)"
+    );
+    assert!(
+        html.contains("table{display:block;overflow-x:auto"),
+        "wide tables must scroll in their own container, not the page"
+    );
+    assert!(
+        html.contains("overflow-wrap:break-word"),
+        "long unbroken tokens must wrap instead of forcing page scroll"
+    );
+    assert!(
+        html.contains("prefers-reduced-motion:reduce"),
+        "hover edge-break transitions must respect reduced motion"
     );
 
     // Plain links are preserved as real, click-to-open hyperlinks.
