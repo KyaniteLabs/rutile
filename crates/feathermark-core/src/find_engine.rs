@@ -250,7 +250,14 @@ fn flush_chunk(
     let last = shifted
         .last()
         .expect("flush_chunk is only called with a non-empty chunk");
-    let selection_after = Selection::collapsed(last.byte_range.start + last.replacement.len());
+    // The cursor lands at the fully-applied end of the last match: its shifted
+    // end (which already carries `committed_delta` from prior chunks) plus this
+    // chunk's net length delta. Every edit in the chunk precedes the last
+    // match's end, so the whole of `delta` shifts it. Deriving the cursor from
+    // the last replacement's end against `committed_delta` alone ignored the
+    // length change of earlier edits in the *same* chunk and overshot the final
+    // document length for a shrinking multi-match replace-all.
+    let selection_after = Selection::collapsed(last.byte_range.end.saturating_add_signed(delta));
     let revision = base_revision.saturating_add(revision_offset);
     plans.push(EditPlan::new(revision, shifted, selection_after)?);
     Ok((delta, 1))
@@ -588,6 +595,44 @@ mod tests {
         let plans = replace_all(0, text, &spec).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(apply_plans(text, &plans), "bb bb bb bb");
+    }
+
+    #[test]
+    fn replace_all_cursor_lands_at_end_of_last_match_when_shrinking() {
+        // Regression (macOS crash): a shrinking multi-match replace-all must not
+        // overshoot the final document length. "aa aa" / "aa"->"b" => "b b"
+        // (len 3); the cursor belongs at 3, not 4. Last match end 5 plus the
+        // chunk's net delta 2*(1-2) = -2 gives 3. The old code used the last
+        // replacement's end (3+1=4), ignoring the earlier same-chunk shrink, so
+        // set_selection landed out of bounds and quit the app.
+        let text = "aa aa";
+        let spec = ReplaceSpec::new(plain("aa"), "b".to_owned()).unwrap();
+        let plans = replace_all(0, text, &spec).unwrap();
+        assert_eq!(plans.len(), 1);
+        let result = apply_plans(text, &plans);
+        assert_eq!(result, "b b");
+        let cursor = plans.last().unwrap().selection_after();
+        assert_eq!(cursor, Selection::collapsed(3));
+        assert!(
+            cursor.head <= result.len() && cursor.anchor <= result.len(),
+            "cursor {cursor:?} overshoots final length {}",
+            result.len()
+        );
+    }
+
+    #[test]
+    fn replace_all_cursor_lands_at_end_of_last_match_when_growing() {
+        // The growing case must still land the cursor at the applied end of the
+        // last match: "aa aa" / "aa"->"bbb" => "bbb bbb" (len 7); cursor at 7.
+        let text = "aa aa";
+        let spec = ReplaceSpec::new(plain("aa"), "bbb".to_owned()).unwrap();
+        let plans = replace_all(0, text, &spec).unwrap();
+        assert_eq!(plans.len(), 1);
+        let result = apply_plans(text, &plans);
+        assert_eq!(result, "bbb bbb");
+        let cursor = plans.last().unwrap().selection_after();
+        assert_eq!(cursor, Selection::collapsed(7));
+        assert_eq!(cursor.head, result.len());
     }
 
     #[test]
