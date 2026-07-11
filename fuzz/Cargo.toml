@@ -35,6 +35,13 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "html_to_markdown"
+path = "fuzz_targets/html_to_markdown.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]
 members = []
 

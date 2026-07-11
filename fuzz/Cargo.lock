@@ -80,8 +80,11 @@ version = "0.1.1"
 dependencies = [
  "blake3",
  "feathermark-types",
+ "html-escape",
  "pulldown-cmark",
  "ropey",
+ "serde",
+ "serde_json",
  "thiserror",
 ]
 

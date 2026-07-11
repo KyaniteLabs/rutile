@@ -6,6 +6,7 @@ mod export_contract;
 mod files;
 mod find_contract;
 mod format_contract;
+mod html_to_markdown;
 mod render;
 mod scroll;
 mod security;
@@ -38,6 +39,10 @@ pub use format_contract::{
     EditPlan, EditPlanError, FormatCommand, ListMarker, MAX_LINK_URL_BYTES, MAX_PLAN_EDITS,
     MAX_PLAN_TOTAL_BYTES, MAX_PLANNED_REPLACEMENT_BYTES, MAX_PLANNED_SPAN_BYTES, OrderedDelimiter,
     SmartEnterAction,
+};
+pub use html_to_markdown::{
+    HtmlToMarkdownError, MAX_HTML_INPUT_BYTES, MAX_NESTING_DEPTH, MAX_OUTPUT_BYTES,
+    html_to_markdown,
 };
 pub use render::{
     MAX_GENERATED_BODY_BYTES, MAX_RENDER_NESTING_DEPTH, MAX_RENDERED_PAGE_BYTES,
