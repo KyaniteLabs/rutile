@@ -76,6 +76,14 @@ pub enum ExportViolation {
     ExternalReference,
     #[error("export page contains a javascript: URL")]
     JavascriptUrl,
+    #[error("export page contains an inline event handler ({attr}=)")]
+    EventHandler { attr: String },
+    #[error("export page contains a relative or root-relative reference ({reference})")]
+    RelativeReference { reference: String },
+    #[error("export page contains a data:text/html URL")]
+    DataHtmlUrl,
+    #[error("export page contains a CSS expression()")]
+    CssExpression,
     #[error("export page exceeds {max} bytes")]
     TooLarge { max: usize },
 }
@@ -124,42 +132,216 @@ impl ExportPage {
 /// Rejects markup that would execute code or trigger a network request when
 /// the exported file is opened. Plain `href` hyperlinks are allowed: they
 /// fetch nothing until the recipient deliberately follows them.
+///
+/// This is an **allowlist** inspection, not a substring denylist. The generated
+/// export escapes every byte of document text, so a literal `<` only ever begins
+/// a real element and a literal `>` only ever ends one (values are entity-escaped
+/// and never carry either). That invariant lets the inspector walk the markup as
+/// a stream of tags, `<style>` blocks, comments, and inert text — and apply its
+/// checks *only inside real element tags and stylesheet blocks*. Escaped document
+/// text (e.g. a note that literally contains `<img onerror=…>` or `url(http…)`)
+/// is left alone, so hostile-but-renderable documents export without either
+/// injecting anything or being falsely rejected.
+///
+/// Inside a real tag the rules are: forbidden elements (`script`, `link`,
+/// frames/objects) are rejected by name; `on*=` attributes, `javascript:` and
+/// `data:text/html` URLs, and `srcset` are rejected; `src`/`poster` and CSS
+/// `url()` are allowlisted to `data:` only (anything else is an external or
+/// relative reference); `@import` and `expression()` are rejected. `href` keeps
+/// http/https/mailto/relative anchors — they fetch nothing on open.
 fn inspect(html: &str) -> Result<(), ExportViolation> {
-    let lowered = html.to_ascii_lowercase();
-    if lowered.contains("<script") {
-        return Err(ExportViolation::Script);
+    let lower = html.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'<' {
+            index += 1;
+            continue;
+        }
+        // HTML comment: inert, skip to the terminator.
+        if lower[index..].starts_with("<!--") {
+            index = match lower[index + 4..].find("-->") {
+                Some(offset) => index + 4 + offset + 3,
+                None => bytes.len(),
+            };
+            continue;
+        }
+        // Declaration such as `<!doctype html>`: no attributes of concern.
+        if bytes.get(index + 1) == Some(&b'!') {
+            index = match lower[index..].find('>') {
+                Some(offset) => index + offset + 1,
+                None => bytes.len(),
+            };
+            continue;
+        }
+        // Real element: the tag body runs from `<` to the next `>`.
+        let (inner, after) = match lower[index..].find('>') {
+            Some(offset) => (&lower[index + 1..index + offset], index + offset + 1),
+            None => (&lower[index + 1..], bytes.len()),
+        };
+        let closing = inner.starts_with('/');
+        let name = tag_name(inner);
+        match name {
+            "script" => return Err(ExportViolation::Script),
+            "link" => return Err(ExportViolation::LinkElement),
+            "iframe" | "frame" | "object" | "embed" | "applet" => {
+                return Err(ExportViolation::FrameOrObject);
+            }
+            _ => {}
+        }
+        if !closing {
+            inspect_attributes(inner)?;
+        }
+        index = after;
+        // A `<style>` element's content is trusted CSS, but the allowlist still
+        // proves it carries no external or executable reference.
+        if !closing && name == "style" {
+            let css_end = match lower[index..].find("</style>") {
+                Some(offset) => index + offset,
+                None => bytes.len(),
+            };
+            inspect_css(&lower[index..css_end])?;
+            index = css_end;
+        }
     }
-    if lowered.contains("<link") {
-        return Err(ExportViolation::LinkElement);
+    Ok(())
+}
+
+/// The element name from a tag body (`inner` is the slice between `<` and `>`).
+fn tag_name(inner: &str) -> &str {
+    inner
+        .strip_prefix('/')
+        .unwrap_or(inner)
+        .split(|character: char| character.is_ascii_whitespace() || character == '/')
+        .next()
+        .unwrap_or("")
+}
+
+/// Walks the attributes of an opening tag and applies the allowlist to each.
+fn inspect_attributes(inner: &str) -> Result<(), ExportViolation> {
+    let bytes = inner.as_bytes();
+    let mut index = 0;
+    // Skip the tag name.
+    while index < bytes.len() && !bytes[index].is_ascii_whitespace() {
+        index += 1;
     }
-    if ["<iframe", "<frame", "<object", "<embed", "<applet"]
-        .iter()
-        .any(|tag| lowered.contains(tag))
+    while index < bytes.len() {
+        while index < bytes.len() && (bytes[index].is_ascii_whitespace() || bytes[index] == b'/') {
+            index += 1;
+        }
+        if index >= bytes.len() {
+            break;
+        }
+        let name_start = index;
+        while index < bytes.len()
+            && bytes[index] != b'='
+            && bytes[index] != b'/'
+            && !bytes[index].is_ascii_whitespace()
+        {
+            index += 1;
+        }
+        let name = &inner[name_start..index];
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        let mut value = "";
+        if index < bytes.len() && bytes[index] == b'=' {
+            index += 1;
+            while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+                index += 1;
+            }
+            if index < bytes.len() && (bytes[index] == b'"' || bytes[index] == b'\'') {
+                let quote = bytes[index];
+                index += 1;
+                let value_start = index;
+                while index < bytes.len() && bytes[index] != quote {
+                    index += 1;
+                }
+                value = &inner[value_start..index];
+                if index < bytes.len() {
+                    index += 1;
+                }
+            } else {
+                let value_start = index;
+                while index < bytes.len() && !bytes[index].is_ascii_whitespace() {
+                    index += 1;
+                }
+                value = &inner[value_start..index];
+            }
+        }
+        inspect_attribute(name, value)?;
+    }
+    Ok(())
+}
+
+/// Applies the allowlist to a single `name="value"` attribute pair.
+fn inspect_attribute(name: &str, value: &str) -> Result<(), ExportViolation> {
+    let name_bytes = name.as_bytes();
+    if name_bytes.len() > 2
+        && name_bytes[0] == b'o'
+        && name_bytes[1] == b'n'
+        && name_bytes[2..]
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
     {
-        return Err(ExportViolation::FrameOrObject);
+        return Err(ExportViolation::EventHandler {
+            attr: name.to_owned(),
+        });
     }
-    if lowered.contains("javascript:") {
+    if value.contains("javascript:") {
         return Err(ExportViolation::JavascriptUrl);
     }
-    let external_fetch_markers = [
-        "src=\"http",
-        "src='http",
-        "src=\"//",
-        "src='//",
-        "srcset=",
-        "@import",
-        "url(http",
-        "url(//",
-        "url(\"http",
-        "url('http",
-        "url(\"//",
-        "url('//",
-    ];
-    if external_fetch_markers
-        .iter()
-        .any(|marker| lowered.contains(marker))
+    if value.contains("data:text/html") {
+        return Err(ExportViolation::DataHtmlUrl);
+    }
+    match name {
+        "src" | "poster" | "background" => classify_reference(value)?,
+        "srcset" => return Err(ExportViolation::ExternalReference),
+        "style" => inspect_css(value)?,
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Allowlists a resource reference: only `data:` URLs load nothing external and
+/// nothing relative to the recipient's filesystem, so everything else is barred.
+fn classify_reference(reference: &str) -> Result<(), ExportViolation> {
+    let reference = reference.trim();
+    if reference.is_empty() {
+        return Ok(());
+    }
+    if reference.contains("data:text/html") {
+        return Err(ExportViolation::DataHtmlUrl);
+    }
+    if reference.starts_with("data:") {
+        return Ok(());
+    }
+    if reference.starts_with("http:")
+        || reference.starts_with("https:")
+        || reference.starts_with("//")
     {
         return Err(ExportViolation::ExternalReference);
+    }
+    Err(ExportViolation::RelativeReference {
+        reference: reference.to_owned(),
+    })
+}
+
+/// Applies the allowlist to a CSS fragment (a `<style>` body or a `style="…"`).
+fn inspect_css(css: &str) -> Result<(), ExportViolation> {
+    if css.contains("@import") {
+        return Err(ExportViolation::ExternalReference);
+    }
+    if css.contains("expression(") {
+        return Err(ExportViolation::CssExpression);
+    }
+    let mut rest = css;
+    while let Some(offset) = rest.find("url(") {
+        let after = &rest[offset + 4..];
+        let end = after.find(')').unwrap_or(after.len());
+        let argument = after[..end].trim().trim_matches(['"', '\'']).trim();
+        classify_reference(argument)?;
+        rest = &after[end..];
     }
     Ok(())
 }
