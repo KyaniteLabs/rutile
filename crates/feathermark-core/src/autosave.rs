@@ -41,6 +41,13 @@ use crate::{Document, DocumentSnapshot, MAX_DOCUMENT_BYTES};
 
 /// File name of the append-only autosave journal within the store directory.
 pub const AUTOSAVE_JOURNAL_FILE: &str = "autosave.ndjson";
+/// How many autosave snapshots (and their journal entries) are retained on
+/// disk. After each successful [`record`](AutosaveStore::record) the store
+/// prunes down to the newest `AUTOSAVE_RETENTION` snapshots — deleting older
+/// snapshot files and compacting the journal — so autosave cannot grow the
+/// directory (or the journal that recovery/`next_sequence` re-read each
+/// startup) without bound. Sized to keep a few crash-recovery fallbacks.
+pub const AUTOSAVE_RETENTION: usize = 8;
 /// File name of the persisted session-restore state within the store directory.
 pub const SESSION_STATE_FILE: &str = "session.json";
 
@@ -118,7 +125,49 @@ impl AutosaveStore {
         };
         let record = encode_autosave_entry(&entry)?;
         append_bytes_durable(&self.dir, AUTOSAVE_JOURNAL_FILE, &record)?;
+        // Best-effort prune: the entry is already durably committed, so a prune
+        // failure must not fail the autosave. Recovery tolerates orphan
+        // snapshots and re-reads the (possibly un-compacted) journal safely.
+        let _ = self.prune();
         Ok(entry)
+    }
+
+    /// Retains only the newest [`AUTOSAVE_RETENTION`] snapshots: rewrites the
+    /// journal to the surviving entries and deletes the dropped snapshot files.
+    ///
+    /// Ordering is crash-safe: the compacted journal is written atomically
+    /// *before* any snapshot is removed, so a crash can only ever leave an
+    /// orphan snapshot (harmless) — never a journal entry pointing at a file we
+    /// already deleted. The rewritten journal keeps ascending sequence order,
+    /// and recovery still selects the highest verifiable sequence from it.
+    fn prune(&self) -> Result<(), AutosaveError> {
+        let journal_path = self.dir.join(AUTOSAVE_JOURNAL_FILE);
+        let journal = match fs::read(&journal_path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        let mut entries: Vec<AutosaveEntryV1> = complete_lines(&journal)
+            .filter_map(|line| decode_autosave_entry(line).ok())
+            .collect();
+        if entries.len() <= AUTOSAVE_RETENTION {
+            return Ok(());
+        }
+        // Newest first; keep the first `AUTOSAVE_RETENTION`, drop the rest.
+        entries.sort_by(|a, b| b.sequence.cmp(&a.sequence));
+        let dropped = entries.split_off(AUTOSAVE_RETENTION);
+        // Rewrite the journal in ascending sequence order before deleting.
+        entries.sort_by(|a, b| a.sequence.cmp(&b.sequence));
+        let mut compacted = Vec::new();
+        for entry in &entries {
+            compacted.extend_from_slice(&encode_autosave_entry(entry)?);
+        }
+        write_bytes_atomic(&self.dir, AUTOSAVE_JOURNAL_FILE, &compacted)?;
+        for entry in &dropped {
+            // `snapshot_file` is a validated bare name (decode enforced it).
+            let _ = fs::remove_file(self.dir.join(&entry.snapshot_file));
+        }
+        Ok(())
     }
 
     /// Reads the journal and returns the highest-sequence entry whose snapshot
@@ -241,6 +290,95 @@ mod tests {
 
     fn snapshot(text: &str) -> DocumentSnapshot {
         Document::new(text).unwrap().snapshot()
+    }
+
+    fn snapshot_files(dir: &Path) -> Vec<PathBuf> {
+        fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("autosave-") && name.ends_with(".md"))
+            })
+            .collect()
+    }
+
+    fn journal_entries(dir: &Path) -> Vec<AutosaveEntryV1> {
+        let journal = fs::read(dir.join(AUTOSAVE_JOURNAL_FILE)).unwrap();
+        complete_lines(&journal)
+            .filter_map(|line| decode_autosave_entry(line).ok())
+            .collect()
+    }
+
+    #[test]
+    fn prune_retains_only_the_newest_snapshots() {
+        let dir = TestDir::new("prune-retain");
+        let store = AutosaveStore::new(dir.0.clone());
+        let total = AUTOSAVE_RETENTION + 5;
+        for seq in 0..total as u64 {
+            store
+                .record(seq, &snapshot(&format!("v{seq}")), None, seq + 1)
+                .unwrap();
+        }
+
+        // Only the newest AUTOSAVE_RETENTION snapshot files survive on disk.
+        assert_eq!(snapshot_files(&dir.0).len(), AUTOSAVE_RETENTION);
+
+        // The compacted journal holds exactly the surviving entries, in order.
+        let sequences: Vec<u64> = journal_entries(&dir.0)
+            .iter()
+            .map(|entry| entry.sequence)
+            .collect();
+        let expected: Vec<u64> = ((total - AUTOSAVE_RETENTION) as u64..total as u64).collect();
+        assert_eq!(sequences, expected);
+    }
+
+    #[test]
+    fn recover_after_pruning_returns_the_latest() {
+        let dir = TestDir::new("prune-recover");
+        let store = AutosaveStore::new(dir.0.clone());
+        let total = AUTOSAVE_RETENTION + 3;
+        for seq in 0..total as u64 {
+            store
+                .record(seq, &snapshot(&format!("payload-{seq}")), None, seq + 1)
+                .unwrap();
+        }
+
+        let recovered = store.recover().unwrap().expect("something recoverable");
+        assert_eq!(recovered.entry.sequence, (total - 1) as u64);
+        assert_eq!(
+            recovered.document.snapshot().to_string(),
+            format!("payload-{}", total - 1)
+        );
+        // next_sequence keeps advancing past the highest surviving entry.
+        assert_eq!(store.next_sequence().unwrap(), total as u64);
+    }
+
+    #[test]
+    fn pruned_journal_preserves_survivors_and_highest_verifiable_wins() {
+        // Compaction preserves the surviving entries; the highest verifiable
+        // sequence still wins, falling back when the newest snapshot is torn.
+        let dir = TestDir::new("prune-fallback");
+        let store = AutosaveStore::new(dir.0.clone());
+        let total = AUTOSAVE_RETENTION + 2;
+        let mut latest_file = None;
+        for seq in 0..total as u64 {
+            let entry = store
+                .record(seq, &snapshot(&format!("s{seq}")), None, seq + 1)
+                .unwrap();
+            latest_file = Some(entry.snapshot_file);
+        }
+
+        // Corrupt the highest surviving snapshot; recovery falls back one step
+        // (both seqs remain among the survivors), proving compaction kept them.
+        fs::write(dir.0.join(latest_file.unwrap()), b"XXXX").unwrap();
+        let recovered = store.recover().unwrap().unwrap();
+        assert_eq!(recovered.entry.sequence, (total - 2) as u64);
+        assert_eq!(
+            recovered.document.snapshot().to_string(),
+            format!("s{}", total - 2)
+        );
     }
 
     #[test]

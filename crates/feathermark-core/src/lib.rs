@@ -18,7 +18,8 @@ mod security;
 mod session_contract;
 
 pub use autosave::{
-    AUTOSAVE_JOURNAL_FILE, AutosaveError, AutosaveStore, RecoveredDocument, SESSION_STATE_FILE,
+    AUTOSAVE_JOURNAL_FILE, AUTOSAVE_RETENTION, AutosaveError, AutosaveStore, RecoveredDocument,
+    SESSION_STATE_FILE,
 };
 pub use counts::{Counts, READING_WPM, char_count, counts, reading_time_seconds, word_count};
 pub use document::{
