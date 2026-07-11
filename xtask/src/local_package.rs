@@ -12,7 +12,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
 
-pub const LOCAL_BETA_VERSION: &str = "0.1.1";
+pub const LOCAL_BETA_VERSION: &str = "0.2.0";
 pub const MAX_EXECUTABLE_BYTES: u64 = 25 * 1024 * 1024;
 pub const MAX_ARTIFACT_BYTES: u64 = 20 * 1024 * 1024;
 
@@ -20,13 +20,13 @@ pub const MACOS_PACKAGE_LABEL: &str = "local-unnotarized-macos-arm64";
 pub const LINUX_PACKAGE_LABEL: &str = "linux-x86_64-unverified-wayland";
 
 pub const MACOS_APP_NAME: &str = "Rutile.app";
-pub const MACOS_ZIP_NAME: &str = "Rutile-0.1.1-macos-arm64.app.zip";
-pub const MACOS_DMG_NAME: &str = "Rutile-0.1.1-macos-arm64.dmg";
+pub const MACOS_ZIP_NAME: &str = "Rutile-0.2.0-macos-arm64.app.zip";
+pub const MACOS_DMG_NAME: &str = "Rutile-0.2.0-macos-arm64.dmg";
 
 pub const LINUX_ARCHIVE_DIR_NAME: &str = "Rutile-linux-x86_64";
-pub const LINUX_ARCHIVE_NAME: &str = "Rutile-0.1.1-linux-x86_64.tar.zst";
-pub const LINUX_DEB_NAME: &str = "feathermark_0.1.1_amd64.deb";
-pub const LINUX_RPM_NAME: &str = "feathermark-0.1.1-1.x86_64.rpm";
+pub const LINUX_ARCHIVE_NAME: &str = "Rutile-0.2.0-linux-x86_64.tar.zst";
+pub const LINUX_DEB_NAME: &str = "feathermark_0.2.0_amd64.deb";
+pub const LINUX_RPM_NAME: &str = "feathermark-0.2.0-1.x86_64.rpm";
 
 #[derive(Debug, Error)]
 pub enum LocalPackageError {

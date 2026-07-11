@@ -8,9 +8,9 @@ edition = "2024"
 cargo-fuzz = true
 
 [dependencies]
-feathermark-core = { path = "../crates/feathermark-core", version = "=0.1.1" }
-feathermark-protocol = { path = "../crates/feathermark-protocol", version = "=0.1.1" }
-feathermark-types = { path = "../crates/feathermark-types", version = "=0.1.1" }
+feathermark-core = { path = "../crates/feathermark-core", version = "=0.2.0" }
+feathermark-protocol = { path = "../crates/feathermark-protocol", version = "=0.2.0" }
+feathermark-types = { path = "../crates/feathermark-types", version = "=0.2.0" }
 html-escape = "=0.2.13"
 libfuzzer-sys = "=0.4.10"
 
