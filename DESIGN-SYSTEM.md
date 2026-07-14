@@ -110,8 +110,10 @@ AI may steer, within bounds: `--measure` (58–75ch), density scale step (0.85�
 line-height (1.5–1.8), heading weight (600–800), texture opacity (0–5%), section rhythm
 (compact/standard/airy), serif↔sans body stack toggle, dark/light default preference.
 AI may NEVER touch: the accent hue, the fire budget, contrast floors (WCAG AA), corner
-radius, self-containment, the refusals list. Chance (C8) draws from the same bounded
-surface with wider steps.
+radius, self-containment, the refusals list. Tasteroll (C8, per LD-8b) audits the note,
+fixes craft findings, generates fresh candidates from note context, then rolls between
+valid alternatives within the same bounded surface with wider steps. Locked dimensions
+persist across re-rolls; audit findings are non-negotiable regardless of seed.
 
 ## Tokens
 
@@ -160,3 +162,8 @@ this file → color-system + web-typography + theming + spacing-system →
 responsive-layout → component-states + empty-states → micro-motion → a11y-pass +
 cognitive-a11y + i18n-ready → deslop-ui + humanize-copy audit **against this spec** →
 `tastecheck-pass` gate (mandatory, LD-8a) before any core surface ships.
+
+**Per-note chance styling (C8):** the tasteroll skill (TasteCheck v1.4.1+) runs a
+7-phase pipeline producing a seeded, reproducible design variation per note. Relaxed
+gate per LD-8b (readable + WCAG AA + self-contained + inert). The dice button lives
+next to C7 in the export affordance.
