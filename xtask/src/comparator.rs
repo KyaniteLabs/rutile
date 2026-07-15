@@ -26,7 +26,7 @@ license = "MIT"
 
 [workspace.dependencies]
 html-escape = "=0.2.13"
-serde = { version = "=1.0.219", features = ["derive"] }
+serde = { version = "=1.0.220", features = ["derive"] }
 serde_json = "=1.0.140"
 thiserror = "=2.0.12"
 url = "=2.5.4"
@@ -82,7 +82,7 @@ getrandom = "=0.3.3"
 hex = "=0.4.3"
 jsonschema = "=0.29.1"
 libc = "=0.2.172"
-serde = { version = "=1.0.219", features = ["derive"] }
+serde = { version = "=1.0.220", features = ["derive"] }
 serde_json = "=1.0.140"
 sha2 = "=0.10.9"
 tempfile = "=3.20.0"
