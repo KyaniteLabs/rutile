@@ -175,8 +175,18 @@ if [ "$profile" = "release" ]; then
   bin_path="${TARGET_DIR}/release/feathermark"
 fi
 
-echo "=== linux-native-gate: cargo build (${build_profile}, linux-gtk) ==="
-cargo build --locked -p feathermark-app --features linux-gtk --bin feathermark
+# The smoke lifecycle path (FEATHERMARK_SMOKE_AUTOCLOSE_MS) is gated behind the
+# `test-control` cargo feature in feathermark-app (see linux_gtk.rs run_application).
+# This gate bin is a TEST ARTIFACT: it enables test-control so the lifecycle harness
+# emits its ready/closed receipts. The shipped production bin is built separately
+# WITHOUT test-control (the rutile.production-provenance schema forbids test-control
+# in production artifacts); this gate verifies the lifecycle code on a test build.
+echo "=== linux-native-gate: cargo build (${build_profile}, linux-gtk, test-control smoke artifact) ==="
+if [ "$profile" = "release" ]; then
+  cargo build --locked --release -p feathermark-app --features linux-gtk,test-control --bin feathermark
+else
+  cargo build --locked -p feathermark-app --features linux-gtk,test-control --bin feathermark
+fi
 
 if [ ! -x "$bin_path" ]; then
   echo "linux-native-gate: expected binary not found at ${bin_path}" >&2
