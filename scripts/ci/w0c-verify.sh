@@ -23,8 +23,8 @@ cargo fmt --all -- --check
 say 2/5 "cargo clippy --workspace --all-targets --locked -- -D warnings  (catches cross-crate + spike breakage the per-package portable gate misses)"
 cargo clippy --workspace --all-targets --locked -- -D warnings
 
-say 3/5 "cargo test -p xtask --all-targets --locked -- --test-threads=1  (serial: native_smoke git-provenance tests aren't parallel-safe under --all-targets; follow-up to isolate)"
-cargo test -p xtask --all-targets --locked -- --test-threads=1
+say 3/5 "cargo test -p xtask --all-targets --locked  (parallel: native_smoke git-provenance capture is hermetic, no shared GIT_* env)"
+cargo test -p xtask --all-targets --locked
 
 say 4/5 "git diff --check  (whitespace/conflict markers)"
 git diff --check

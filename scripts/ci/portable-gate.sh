@@ -20,7 +20,7 @@
 #
 # Stages:
 #   fmt   cargo fmt --all --check
-#   clippy  cargo clippy ... -- -D warnings  (core + protocol + types + app-portable + xtask)
+#   clippy  cargo clippy ... -- -D warnings  (--workspace: all crates incl. spikes)
 #   docs    cargo doc --no-deps              (core + protocol + types)
 #   test    cargo test                       (core + protocol + types)
 #   build   cargo build --release            (production, no test-control, target/prod root)
@@ -362,9 +362,7 @@ for stage in "${stage_list[@]}"; do
       run_stage fmt cargo fmt --all --check
       ;;
     clippy)
-      run_stage clippy cargo clippy --locked --all-targets \
-        -p feathermark-types -p feathermark-core -p feathermark-protocol \
-        -p feathermark-app -p xtask -- -D warnings
+      run_stage clippy cargo clippy --locked --workspace --all-targets -- -D warnings
       ;;
     docs)
       run_stage docs cargo doc --locked --no-deps \

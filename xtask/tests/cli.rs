@@ -57,6 +57,18 @@ fn comparator_cli_creates_and_verifies_the_locked_repository() {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, b"deterministic\n").unwrap();
     }
+    // Contract manifests are required now that `create_scaffold` resolves a
+    // Cargo.lock for the scaffolded xtask (xtask path-deps feathermark-protocol).
+    fs::write(
+        root.path().join("feathermark-types/Cargo.toml"),
+        "[package]\nname = \"feathermark-types\"\nversion = \"0.1.0\"\nedition.workspace = true\nrust-version.workspace = true\nlicense.workspace = true\n\n[dependencies]\nhtml-escape.workspace = true\nthiserror.workspace = true\nurl.workspace = true\n",
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("feathermark-protocol/Cargo.toml"),
+        "[package]\nname = \"feathermark-protocol\"\nversion = \"0.1.0\"\nedition.workspace = true\nrust-version.workspace = true\nlicense.workspace = true\n\n[dependencies]\nfeathermark-types = { path = \"../feathermark-types\" }\nserde.workspace = true\nserde_json.workspace = true\nthiserror.workspace = true\n",
+    )
+    .unwrap();
     let contracts = format!(
         "{},{}",
         root.path().join("feathermark-types").display(),

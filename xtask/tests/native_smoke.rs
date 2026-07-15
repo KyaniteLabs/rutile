@@ -391,6 +391,54 @@ fn native_smoke_receipt_keeps_the_prelaunch_hash_when_binary_changes() {
 }
 
 #[test]
+fn native_smoke_provenance_is_hermetic_against_inherited_git_env() {
+    // The git-provenance capture must strip inherited `GIT_*` overrides so an
+    // ambient `GIT_DIR` / `GIT_CONFIG_GLOBAL` (set by the runner, a parent
+    // shell, or a parallel test) cannot redirect or break provenance. The stub
+    // git fails loudly if any override survives into its environment, proving
+    // the gate scoped the subprocess. `PATH` is still inherited so the stub is
+    // resolved.
+    let root = tempfile::tempdir().unwrap();
+    let tools = root.path().join("bin");
+    fs::create_dir(&tools).unwrap();
+    write_executable(
+        &tools.join("git"),
+        "#!/bin/sh\n[ -n \"$GIT_DIR\" ] && { printf 'GIT_DIR leaked: %s' \"$GIT_DIR\" >&2; exit 99; }\n[ -n \"$GIT_WORK_TREE\" ] && { printf 'GIT_WORK_TREE leaked: %s' \"$GIT_WORK_TREE\" >&2; exit 99; }\nif [ -n \"$GIT_CONFIG_GLOBAL\" ] && [ \"$GIT_CONFIG_GLOBAL\" != \"/dev/null\" ]; then printf 'GIT_CONFIG_GLOBAL leaked: %s' \"$GIT_CONFIG_GLOBAL\" >&2; exit 99; fi\ncase \"$*\" in\n  'rev-parse HEAD') printf '%s\\n' '0123456789abcdef0123456789abcdef01234567' ;;\n  'rev-parse HEAD^{tree}') printf '%s\\n' '0123456789abcdef0123456789abcdef01234567' ;;\n  'status --porcelain --untracked-files=all') printf '%s' '' ;;\n  *) exit 47 ;;\nesac\n",
+    );
+    let binary = root.path().join("fake-feathermark");
+    write_executable(
+        &binary,
+        "#!/bin/sh\nprintf 'feathermark-native-smoke-ok\\n'\n",
+    );
+    let evidence = root.path().join("evidence");
+    let path = format!("{}:{}", tools.display(), std::env::var("PATH").unwrap());
+
+    let output = ProcessCommand::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(["native-smoke", "--binary"])
+        .arg(&binary)
+        .args(["--profile", "pr", "--evidence-dir"])
+        .arg(&evidence)
+        .env("PATH", &path)
+        .env("GIT_DIR", root.path().join("hostile-git-dir"))
+        .env("GIT_WORK_TREE", root.path().join("hostile-work-tree"))
+        .env("GIT_CONFIG_GLOBAL", root.path().join("hostile-config"))
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "git provenance captured a leaked GIT_* override (hermetic env broken)\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let report = gate_report(&evidence);
+    assert_eq!(
+        report["source"]["commit"],
+        "0123456789abcdef0123456789abcdef01234567"
+    );
+}
+
+#[test]
 fn native_smoke_captures_complete_git_provenance_before_the_first_child_launch() {
     let root = tempfile::tempdir().unwrap();
     let tools = root.path().join("bin");

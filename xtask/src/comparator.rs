@@ -128,6 +128,8 @@ pub enum ScaffoldError {
     InvalidContracts,
     #[error("git command failed: {command}: {stderr}")]
     Git { command: String, stderr: String },
+    #[error("cargo command failed: {command}: {stderr}")]
+    Cargo { command: String, stderr: String },
     #[error("scaffold repository is dirty")]
     Dirty,
     #[error("scaffold top-level path is not allowed: {0}")]
@@ -150,6 +152,7 @@ pub fn create_scaffold(request: &ScaffoldCreate) -> Result<ScaffoldLock, Scaffol
     fs::write(request.out.join("contracts/Cargo.toml"), CONTRACTS_MANIFEST)?;
     fs::write(request.out.join("xtask/Cargo.toml"), XTASK_MANIFEST)?;
     assert_allowlist_on_disk(&request.out)?;
+    generate_cargo_lock(&request.out)?;
 
     git(&request.out, &["init", "--quiet"])?;
     git(&request.out, &["config", "core.autocrlf", "false"])?;
@@ -276,6 +279,42 @@ fn git_commit(repo: &Path) -> Result<(), ScaffoldError> {
         ],
     )?;
     check_git(output, "git commit")?;
+    Ok(())
+}
+
+/// Generate and commit a `Cargo.lock` for the scaffolded xtask so the isolated
+/// compile is bound to an exact resolution instead of re-resolving against a
+/// registry that may have drifted. The manifest's exact pins keep the locked
+/// versions aligned with the workspace's cached sources, and the lock overrides
+/// any future registry drift for `cargo check --offline`.
+fn generate_cargo_lock(repo: &Path) -> Result<(), ScaffoldError> {
+    let manifest = repo.join("xtask").join("Cargo.toml");
+    let output = {
+        // The comparator scaffold is the explicit owner of this cargo invocation;
+        // it materialises a lockfile rather than launching an application.
+        #[allow(clippy::disallowed_methods)]
+        std::process::Command::new("cargo")
+            .args(["generate-lockfile", "--offline", "--manifest-path"])
+            .arg(&manifest)
+            .current_dir(repo)
+            .output()
+            .map_err(|error| ScaffoldError::Cargo {
+                command: "cargo generate-lockfile".into(),
+                stderr: error.to_string(),
+            })?
+    };
+    if !output.status.success() {
+        return Err(ScaffoldError::Cargo {
+            command: "cargo generate-lockfile".into(),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().into(),
+        });
+    }
+    if !repo.join("xtask").join("Cargo.lock").exists() {
+        return Err(ScaffoldError::Cargo {
+            command: "cargo generate-lockfile".into(),
+            stderr: "expected xtask/Cargo.lock was not produced".into(),
+        });
+    }
     Ok(())
 }
 

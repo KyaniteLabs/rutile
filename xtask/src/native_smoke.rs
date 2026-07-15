@@ -27,6 +27,31 @@ const POLL_INTERVAL: Duration = Duration::from_millis(2);
 const GIT_DEADLINE: Duration = Duration::from_secs(2);
 const GIT_CLEANUP_GRACE: Duration = Duration::from_secs(1);
 const SUCCESS_MARKER: &str = "feathermark-native-smoke-ok";
+
+/// Git environment overrides that can redirect or slow provenance capture
+/// (`GIT_DIR`, inherited config, alternate object stores, ...). Removed from
+/// the git subprocess so a caller's ambient environment cannot change which
+/// repository git binds to or force it to read a slow/broken config file.
+const GIT_HERMETIC_ENV_REMOVE: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_SYSTEM",
+    "GIT_ATTR_GLOBAL",
+    "GIT_ATTR_SYSTEM",
+    "GIT_COMMON_DIR",
+];
+
+/// Hermetic git config: ignore user/system config so local settings (e.g.
+/// `commit.gpgsign`, slow includes) cannot break deterministic provenance.
+const GIT_HERMETIC_ENV_SET: &[(&str, &str)] = &[
+    ("GIT_CONFIG_GLOBAL", "/dev/null"),
+    ("GIT_CONFIG_SYSTEM", "/dev/null"),
+];
 static EVIDENCE_RUN_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub const fn supervision_bound(deadline: Duration, cleanup_grace: Duration) -> Duration {
@@ -86,6 +111,10 @@ pub struct RepeatPolicyError {
 pub struct NativeSmokeCommand {
     program: String,
     arguments: Vec<String>,
+    /// When set, the spawned subprocess gets a hermetic git environment
+    /// (inherited `GIT_*` overrides removed, config pointed at `/dev/null`).
+    /// `PATH` is always inherited so test fixtures can inject a stub `git`.
+    git_hermetic: bool,
 }
 
 impl NativeSmokeCommand {
@@ -97,6 +126,7 @@ impl NativeSmokeCommand {
         Self {
             program: program.into(),
             arguments: arguments.into_iter().map(Into::into).collect(),
+            git_hermetic: false,
         }
     }
 }
@@ -315,6 +345,14 @@ fn supervise_with(
         .args(&command.arguments)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if command.git_hermetic {
+        for var in GIT_HERMETIC_ENV_REMOVE {
+            process.env_remove(var);
+        }
+        for (name, value) in GIT_HERMETIC_ENV_SET {
+            process.env(name, value);
+        }
+    }
     // SAFETY: the child has not executed application code. Giving it its own
     // group lets this parent signal every descendant without touching its own.
     unsafe {
@@ -1174,7 +1212,13 @@ fn validate_git_identity(
 }
 
 fn git_output(operation: &'static str, arguments: &[&str]) -> Result<String, NativeSmokeGateError> {
-    let command = NativeSmokeCommand::new("git", arguments.iter().copied());
+    let mut command = NativeSmokeCommand::new("git", arguments.iter().copied());
+    // Provenance capture must be hermetic: an inherited `GIT_DIR`,
+    // `GIT_CONFIG_GLOBAL`, or alternate object store from the ambient
+    // environment could redirect git to the wrong repository or force it to
+    // read a slow/broken config. `PATH` is still inherited so tests can
+    // inject a stub `git` ahead of the system executable.
+    command.git_hermetic = true;
     let receipt = supervise_with(
         command,
         GIT_DEADLINE,
