@@ -1583,11 +1583,13 @@ pub fn run_cli(path: Option<PathBuf>, smoke: bool) -> Result<(), MacError> {
     run_native(path, smoke)
 }
 
+mod accessibility;
 mod clipboard;
 mod editor;
 mod native;
 mod open_events;
 
+pub(crate) use accessibility::{AxUiState, MacAccessibilityState};
 pub use editor::{IcedAdapterStats, IcedEditorAdapter};
 use native::run_native;
 pub use open_events::{

@@ -35,9 +35,9 @@ use wry::http::{Response, StatusCode};
 use wry::{NewWindowResponse, Rect, WebContext, WebView, WebViewBuilder};
 
 use super::{
-    AppKitMainThread, EditorVisualReceipt, IcedEditorAdapter, MacError, MacExternalOutcome,
-    MacMenuCommand, MacSaveAction, MacScrollDispatch, MacUserEvent, PreviewIpcFatal,
-    PreviewIpcIngress, ProductSession, bind_open_proxy, forward_open_urls,
+    AppKitMainThread, AxUiState, EditorVisualReceipt, IcedEditorAdapter, MacError,
+    MacExternalOutcome, MacMenuCommand, MacSaveAction, MacScrollDispatch, MacUserEvent,
+    PreviewIpcFatal, PreviewIpcIngress, ProductSession, bind_open_proxy, forward_open_urls,
     install_file_menu_with_actions, preview_ipc_channel, split_panes,
 };
 use crate::actions::SessionRestore;
@@ -338,33 +338,79 @@ impl ProductRunner {
         }
     }
 
+    /// The active status/notice message that should be surfaced to the user
+    /// (both as the window-title suffix and as an NSAccessibility element).
+    /// `None` means the buffer is clean with no outstanding notice. This is
+    /// the single source of truth shared by [`Self::sync_window_title`] and
+    /// [`Self::publish_accessibility`] so the title bar and VoiceOver never
+    /// disagree.
+    fn active_status(&self) -> Option<String> {
+        if let Some(notice) = self
+            .session
+            .app_state()
+            .notices()
+            .iter()
+            .find(|notice| !notice.dismissed)
+        {
+            return Some(notice.message.clone());
+        }
+        if self.pending_close {
+            return Some("Unsaved changes: ⌘S Save · ⌘D Don’t Save · Esc Cancel".to_owned());
+        }
+        if self.pending_recovery.is_some() {
+            return Some("Recovered unsaved changes: ⌘Y Restore · Esc Dismiss".to_owned());
+        }
+        if self.session.has_external_conflict() {
+            return Some("External change detected: reload or save elsewhere".to_owned());
+        }
+        None
+    }
+
     fn sync_window_title(&mut self) {
         if let Some(window) = &self.window {
-            if let Some(notice) = self
-                .session
-                .app_state()
-                .notices()
-                .iter()
-                .find(|notice| !notice.dismissed)
-            {
-                window.set_title(&status_title(&notice.message));
-            } else if self.pending_close {
-                window.set_title(&status_title(
-                    "Unsaved changes: ⌘S Save · ⌘D Don’t Save · Esc Cancel",
-                ));
-            } else if self.pending_recovery.is_some() {
-                window.set_title(&status_title(
-                    "Recovered unsaved changes: ⌘Y Restore · Esc Dismiss",
-                ));
-            } else if self.session.has_external_conflict() {
-                window.set_title(&status_title(
-                    "External change detected: reload or save elsewhere",
-                ));
-            } else {
-                window.set_title(PRODUCT_NAME);
+            match self.active_status() {
+                Some(status) => window.set_title(&status_title(&status)),
+                None => window.set_title(PRODUCT_NAME),
             }
             window.request_redraw();
         }
+    }
+
+    /// Publish the NSAccessibility tree (CY-A11Y-001) onto the content NSView
+    /// so VoiceOver can announce the window, read the document text, speak the
+    /// toolbar button labels, and surface the active notice. Best-effort: any
+    /// wiring miss is silently dropped so an AX failure can never block the
+    /// editor or hang the app under VoiceOver (which calls AX callbacks on the
+    /// main thread).
+    fn publish_accessibility(&self) {
+        let Some(window) = self.window.as_deref() else {
+            return;
+        };
+        let toolbar_labels: Vec<&'static str> = if self.source_pane.state.toolbar_visible {
+            TOOLBAR_ITEMS.iter().map(|(label, _)| *label).collect()
+        } else {
+            Vec::new()
+        };
+        let ui = AxUiState {
+            editor_text: self.session.source(),
+            toolbar_labels,
+            active_status: self.active_status(),
+        };
+        let state = super::MacAccessibilityState::from_ui(&ui);
+        // SAFETY / defensive: every failure path returns Err and is discarded.
+        #[cfg(target_os = "macos")]
+        {
+            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            let raw = match window.window_handle() {
+                Ok(handle) => handle,
+                Err(_) => return,
+            };
+            let RawWindowHandle::AppKit(appkit) = raw.as_raw() else {
+                return;
+            };
+            let _ = super::accessibility::publish_to_window(&appkit, &state);
+        }
+        let _ = state;
     }
 
     fn maybe_poll_external_change(&mut self) {
@@ -1876,6 +1922,10 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
         self.maybe_autosave();
         self.maybe_poll_external_change();
         self.sync_window_title();
+        // Refresh the NSAccessibility tree (CY-A11Y-001) after the title/status
+        // is synced so VoiceOver reflects the current document, toolbar, and
+        // notice. Runs on the winit main thread, as AppKit requires.
+        self.publish_accessibility();
         if !self.smoke {
             event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + AUTOSAVE_INTERVAL));
         }
