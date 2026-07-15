@@ -92,7 +92,7 @@ pub fn run_local_package_with_inspector(
         LocalPackageCliRequest::Macos(request) => (&request.candidate, &request.output_root),
         LocalPackageCliRequest::Linux(request) => (&request.candidate, &request.output_root),
     };
-    enforce_inspection(inspector, candidate, InspectionMode::Candidate)?;
+    enforce_inspection(inspector, candidate, InspectionMode::Candidate, None)?;
     let output_root = output_root.clone();
     let manifests = match request {
         LocalPackageCliRequest::Macos(request) => run_macos(request, executor),
@@ -103,6 +103,7 @@ pub fn run_local_package_with_inspector(
             inspector,
             &output_root.join(&manifest.artifact),
             InspectionMode::Package,
+            None,
         )?;
     }
     Ok(manifests)
@@ -113,8 +114,9 @@ pub fn enforce_inspection(
     inspector: &ArtifactInspector,
     path: &Path,
     mode: InspectionMode,
+    provenance: Option<&Path>,
 ) -> Result<(), LocalPackageCliError> {
-    let report = inspector.inspect(path, mode);
+    let report = inspector.inspect(path, mode, provenance);
     if report.accepted && (mode == InspectionMode::Candidate || report.publication_authorized) {
         return Ok(());
     }

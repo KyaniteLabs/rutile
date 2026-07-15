@@ -48,7 +48,7 @@ impl NativeSmokeProfile {
         }
     }
 
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Pr => "pr",
             Self::Release => "release",
@@ -920,10 +920,10 @@ struct GateResult<'a> {
 }
 
 #[derive(Serialize)]
-struct SourceIdentity {
-    commit: String,
-    tree: String,
-    dirty: bool,
+pub struct SourceIdentity {
+    pub commit: String,
+    pub tree: String,
+    pub dirty: bool,
 }
 
 #[derive(Serialize)]
@@ -962,10 +962,10 @@ struct ArtifactHash {
 }
 
 #[derive(Serialize)]
-struct ArtifactIdentity {
-    device: u64,
-    inode: u64,
-    bytes: u64,
+pub struct ArtifactIdentity {
+    pub device: u64,
+    pub inode: u64,
+    pub bytes: u64,
 }
 
 #[derive(Serialize)]
@@ -1053,12 +1053,12 @@ fn write_file(path: &Path, contents: &[u8]) -> Result<(), NativeSmokeGateError> 
     Ok(())
 }
 
-struct CapturedArtifact {
-    sha256: String,
-    identity: ArtifactIdentity,
+pub struct CapturedArtifact {
+    pub sha256: String,
+    pub identity: ArtifactIdentity,
 }
 
-fn capture_artifact(path: &Path) -> Result<CapturedArtifact, NativeSmokeGateError> {
+pub fn capture_artifact(path: &Path) -> Result<CapturedArtifact, NativeSmokeGateError> {
     let metadata = fs::metadata(path).map_err(|source| NativeSmokeGateError::Artifact {
         path: path.to_owned(),
         detail: source.to_string(),
@@ -1118,18 +1118,18 @@ fn verify_artifact(path: &Path, expected: &CapturedArtifact) -> Result<(), Nativ
     Ok(())
 }
 
-fn sha256_bytes(contents: &[u8]) -> String {
+pub fn sha256_bytes(contents: &[u8]) -> String {
     hex::encode(Sha256::digest(contents))
 }
 
-fn unix_time_ms() -> u128 {
+pub fn unix_time_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis()
 }
 
-fn source_identity() -> Result<SourceIdentity, NativeSmokeGateError> {
+pub fn source_identity() -> Result<SourceIdentity, NativeSmokeGateError> {
     Ok(SourceIdentity {
         commit: git_identity("commit", &["rev-parse", "HEAD"])?,
         tree: git_identity("tree", &["rev-parse", "HEAD^{tree}"])?,
@@ -1189,7 +1189,7 @@ fn git_output(operation: &'static str, arguments: &[&str]) -> Result<String, Nat
     Ok(receipt.stdout().trim().to_owned())
 }
 
-fn runner_name() -> String {
+pub fn runner_name() -> String {
     ["FORGEJO_RUNNER_NAME", "RUNNER_NAME", "HOSTNAME"]
         .iter()
         .find_map(|name| std::env::var(name).ok().filter(|value| !value.is_empty()))

@@ -97,9 +97,10 @@ fn quarantined_hash_is_rejected_before_content_is_trusted() {
         &[(&sha256(b"opaque historical package"), "old-package.bin")],
     );
 
-    let report = ArtifactInspector::load(&paths)
-        .unwrap()
-        .inspect(&artifact, InspectionMode::Package);
+    let report =
+        ArtifactInspector::load(&paths)
+            .unwrap()
+            .inspect(&artifact, InspectionMode::Package, None);
 
     assert!(!report.accepted);
     assert_eq!(report.findings[0].code, FindingCode::QuarantinedHash);
@@ -116,9 +117,11 @@ fn binary_scan_reports_test_control_and_private_build_markers() {
     .unwrap();
     let paths = write_policy(root.path(), &[]);
 
-    let report = ArtifactInspector::load(&paths)
-        .unwrap()
-        .inspect(&artifact, InspectionMode::Candidate);
+    let report = ArtifactInspector::load(&paths).unwrap().inspect(
+        &artifact,
+        InspectionMode::Candidate,
+        None,
+    );
 
     assert!(!report.accepted);
     assert!(report.has(FindingCode::TestControlMarker));
@@ -137,9 +140,11 @@ fn binary_scan_rejects_email_and_common_token_shapes_without_echoing_them() {
     .unwrap();
     let paths = write_policy(root.path(), &[]);
 
-    let report = ArtifactInspector::load(&paths)
-        .unwrap()
-        .inspect(&artifact, InspectionMode::Candidate);
+    let report = ArtifactInspector::load(&paths).unwrap().inspect(
+        &artifact,
+        InspectionMode::Candidate,
+        None,
+    );
 
     assert!(!report.accepted);
     assert!(report.has(FindingCode::CredentialMarker));
@@ -155,16 +160,21 @@ fn binary_scan_ignores_short_token_prefixes_but_rejects_credential_length_tokens
     fs::write(&short, b"normal text containing sk- only").unwrap();
     let paths = write_policy(root.path(), &[]);
 
-    let short_report = ArtifactInspector::load(&paths)
-        .unwrap()
-        .inspect(&short, InspectionMode::Candidate);
+    let short_report =
+        ArtifactInspector::load(&paths)
+            .unwrap()
+            .inspect(&short, InspectionMode::Candidate, None);
+    // Scan is clean; provenance is missing (fail-closed finding, recorded but
+    // does not block scan acceptance — publication is gated separately).
     assert!(short_report.accepted);
+    assert!(short_report.has(FindingCode::ProvenanceMissing));
 
     let token = root.path().join("credential-shaped");
     fs::write(&token, b"sk-1234567890abcdefghijklmnopqrstuvwxyz").unwrap();
-    let token_report = ArtifactInspector::load(&paths)
-        .unwrap()
-        .inspect(&token, InspectionMode::Candidate);
+    let token_report =
+        ArtifactInspector::load(&paths)
+            .unwrap()
+            .inspect(&token, InspectionMode::Candidate, None);
     assert!(token_report.has(FindingCode::CredentialMarker));
 }
 
@@ -190,9 +200,10 @@ fn package_directory_requires_one_expected_executable_and_matching_metadata() {
     .unwrap();
     let paths = write_policy(root.path(), &[]);
 
-    let report = ArtifactInspector::load(&paths)
-        .unwrap()
-        .inspect(&package, InspectionMode::Package);
+    let report =
+        ArtifactInspector::load(&paths)
+            .unwrap()
+            .inspect(&package, InspectionMode::Package, None);
 
     assert!(!report.accepted);
     assert!(report.has(FindingCode::VersionMismatch));
@@ -210,11 +221,15 @@ fn packaging_boundary_rejects_clean_scan_without_publication_authorization() {
     }
     fs::write(package.join("bin/feathermark"), b"\x7fELF production").unwrap();
     fs::write(
-        package.join("share/applications/rutile.desktop"),
+        package.join("share/applications/feathermark.desktop"),
         b"desktop",
     )
     .unwrap();
-    fs::write(package.join("share/mime/packages/rutile.xml"), b"mime").unwrap();
+    fs::write(
+        package.join("share/mime/packages/feathermark-markdown.xml"),
+        b"mime",
+    )
+    .unwrap();
     fs::write(
         package.join("package-manifest-v1.json"),
         serde_json::to_vec(&serde_json::json!({
@@ -230,11 +245,49 @@ fn packaging_boundary_rejects_clean_scan_without_publication_authorization() {
     )
     .unwrap();
     let inspector = ArtifactInspector::load(&write_policy(root.path(), &[])).unwrap();
-    let report = inspector.inspect(&package, InspectionMode::Package);
+    // Provide a valid provenance file so the scan can be accepted.
+    let provenance = root.path().join("package.provenance.json");
+    fs::write(
+        &provenance,
+        serde_json::to_vec(&serde_json::json!({
+            "schema": "rutile.production-provenance.v1",
+            "version": 1,
+            "product": "feathermark",
+            "product_version": "0.2.0",
+            "source_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "source_tree_clean": true,
+            "toolchain": {
+                "rustc_version": "1.88.0",
+                "host_triple": "x86_64-unknown-linux-gnu",
+                "target_triple": "x86_64-unknown-linux-gnu"
+            },
+            "features": [],
+            "candidate_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "reproducibility": {
+                "source_date_epoch": 1720915200,
+                "remap_path_prefix": true,
+                "target_root": "target-prod"
+            },
+            "built_at": "2024-07-14T00:00:00Z"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let report = inspector.inspect(&package, InspectionMode::Package, Some(&provenance));
     assert!(report.accepted);
     assert!(!report.publication_authorized);
+    assert!(
+        report.production_provenance_sha256.is_some(),
+        "provenance SHA-256 must be bound when a valid provenance file is provided"
+    );
 
-    let error = enforce_inspection(&inspector, &package, InspectionMode::Package).unwrap_err();
+    let error = enforce_inspection(
+        &inspector,
+        &package,
+        InspectionMode::Package,
+        Some(&provenance),
+    )
+    .unwrap_err();
     assert!(error.to_string().contains("publication_not_authorized"));
 }
 
@@ -248,9 +301,10 @@ fn traversal_is_bounded_by_entry_count_and_total_bytes() {
     }
     let paths = write_policy(root.path(), &[]);
 
-    let report = ArtifactInspector::load(&paths)
-        .unwrap()
-        .inspect(&package, InspectionMode::Package);
+    let report =
+        ArtifactInspector::load(&paths)
+            .unwrap()
+            .inspect(&package, InspectionMode::Package, None);
 
     assert!(!report.accepted);
     assert!(report.has(FindingCode::EntryLimitExceeded));
@@ -271,9 +325,10 @@ fn traversal_reports_never_claim_more_bytes_than_the_policy_allowed_to_scan() {
     );
     fs::write(&paths.policy, policy).unwrap();
 
-    let report = ArtifactInspector::load(&paths)
-        .unwrap()
-        .inspect(&package, InspectionMode::Package);
+    let report =
+        ArtifactInspector::load(&paths)
+            .unwrap()
+            .inspect(&package, InspectionMode::Package, None);
 
     assert!(report.has(FindingCode::ByteLimitExceeded));
     assert_eq!(report.uncompressed_bytes_scanned, 8);
@@ -341,7 +396,7 @@ fn production_policy_classifies_native_smoke_argument_as_test_control() {
 
     let report = ArtifactInspector::load(&PolicyPaths::repository_defaults())
         .unwrap()
-        .inspect(&artifact, InspectionMode::Candidate);
+        .inspect(&artifact, InspectionMode::Candidate, None);
 
     assert!(report.has(FindingCode::TestControlMarker));
 }
@@ -365,4 +420,190 @@ fn malformed_or_duplicate_quarantine_entries_fail_closed() {
 
     let error = ArtifactInspector::load(&paths).unwrap_err();
     assert!(error.to_string().contains("duplicate quarantine SHA-256"));
+}
+
+#[test]
+fn provenance_missing_pushes_finding_when_not_provided() {
+    let root = tempdir().unwrap();
+    let artifact = root.path().join("candidate");
+    fs::write(&artifact, b"clean production binary").unwrap();
+    let paths = write_policy(root.path(), &[]);
+
+    let report = ArtifactInspector::load(&paths).unwrap().inspect(
+        &artifact,
+        InspectionMode::Candidate,
+        None,
+    );
+
+    // Scan is clean (accepted), but provenance is missing — the finding is
+    // recorded (fail-closed evidence) but does not block scan acceptance.
+    // Publication is gated separately by publication_authorized.
+    assert!(report.accepted);
+    assert!(report.has(FindingCode::ProvenanceMissing));
+    assert!(
+        report.production_provenance_sha256.is_none(),
+        "provenance SHA-256 must be None when no provenance is provided"
+    );
+}
+
+#[test]
+fn provenance_binds_when_valid_file_provided() {
+    let root = tempdir().unwrap();
+    let artifact = root.path().join("candidate");
+    fs::write(&artifact, b"clean production binary").unwrap();
+    let paths = write_policy(root.path(), &[]);
+
+    let provenance = root.path().join("candidate.provenance.json");
+    let provenance_json = serde_json::json!({
+        "schema": "rutile.production-provenance.v1",
+        "version": 1,
+        "product": "feathermark",
+        "product_version": "0.2.0",
+        "source_commit": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+        "source_tree_clean": true,
+        "toolchain": {
+            "rustc_version": "1.88.0",
+            "host_triple": "aarch64-apple-darwin",
+            "target_triple": "aarch64-apple-darwin"
+        },
+        "features": [],
+        "candidate_sha256": hex::encode(Sha256::digest(b"clean production binary")),
+        "reproducibility": {
+            "source_date_epoch": 1720915200,
+            "remap_path_prefix": true,
+            "target_root": "target-prod"
+        },
+        "built_at": "2024-07-14T00:00:00Z"
+    });
+    fs::write(
+        &provenance,
+        serde_json::to_vec_pretty(&provenance_json).unwrap(),
+    )
+    .unwrap();
+
+    let report = ArtifactInspector::load(&paths).unwrap().inspect(
+        &artifact,
+        InspectionMode::Candidate,
+        Some(&provenance),
+    );
+
+    assert!(
+        report.production_provenance_sha256.is_some(),
+        "provenance SHA-256 must be bound when a valid provenance file is provided"
+    );
+    let expected_sha = hex::encode(Sha256::digest(
+        serde_json::to_vec_pretty(&provenance_json).unwrap(),
+    ));
+    assert_eq!(
+        report.production_provenance_sha256.as_deref(),
+        Some(expected_sha.as_str()),
+        "provenance SHA-256 must match the hash of the provenance file bytes"
+    );
+    assert!(!report.has(FindingCode::ProvenanceMissing));
+    assert!(!report.has(FindingCode::ProvenanceInvalid));
+}
+
+#[test]
+fn provenance_invalid_pushes_finding_for_malformed_file() {
+    let root = tempdir().unwrap();
+    let artifact = root.path().join("candidate");
+    fs::write(&artifact, b"clean production binary").unwrap();
+    let paths = write_policy(root.path(), &[]);
+
+    let provenance = root.path().join("candidate.provenance.json");
+    fs::write(&provenance, b"not valid json at all {{{").unwrap();
+
+    let report = ArtifactInspector::load(&paths).unwrap().inspect(
+        &artifact,
+        InspectionMode::Candidate,
+        Some(&provenance),
+    );
+
+    // Scan is clean (accepted), but provenance is invalid — the finding is
+    // recorded (fail-closed evidence) but does not block scan acceptance.
+    assert!(report.accepted);
+    assert!(report.has(FindingCode::ProvenanceInvalid));
+    assert!(report.production_provenance_sha256.is_none());
+}
+
+#[test]
+fn provenance_invalid_pushes_finding_for_wrong_schema() {
+    let root = tempdir().unwrap();
+    let artifact = root.path().join("candidate");
+    fs::write(&artifact, b"clean production binary").unwrap();
+    let paths = write_policy(root.path(), &[]);
+
+    let provenance = root.path().join("candidate.provenance.json");
+    fs::write(
+        &provenance,
+        serde_json::to_vec(&serde_json::json!({
+            "schema": "some.other.schema.v2",
+            "version": 2
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let report = ArtifactInspector::load(&paths).unwrap().inspect(
+        &artifact,
+        InspectionMode::Candidate,
+        Some(&provenance),
+    );
+
+    // Scan is clean (accepted), but provenance has wrong schema — the finding
+    // is recorded (fail-closed evidence) but does not block scan acceptance.
+    assert!(report.accepted);
+    assert!(report.has(FindingCode::ProvenanceInvalid));
+    assert!(report.production_provenance_sha256.is_none());
+}
+
+#[test]
+fn provenance_sibling_file_is_discovered_when_not_explicitly_provided() {
+    let root = tempdir().unwrap();
+    let artifact = root.path().join("candidate");
+    fs::write(&artifact, b"clean production binary").unwrap();
+    let paths = write_policy(root.path(), &[]);
+
+    // Write a sibling provenance file following the naming convention.
+    let provenance = root.path().join("candidate.provenance.json");
+    fs::write(
+        &provenance,
+        serde_json::to_vec(&serde_json::json!({
+            "schema": "rutile.production-provenance.v1",
+            "version": 1,
+            "product": "feathermark",
+            "product_version": "0.2.0",
+            "source_commit": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+            "source_tree_clean": true,
+            "toolchain": {
+                "rustc_version": "1.88.0",
+                "host_triple": "aarch64-apple-darwin",
+                "target_triple": "aarch64-apple-darwin"
+            },
+            "features": [],
+            "candidate_sha256": "0".repeat(64),
+            "reproducibility": {
+                "source_date_epoch": 1720915200,
+                "remap_path_prefix": true,
+                "target_root": "target-prod"
+            },
+            "built_at": "2024-07-14T00:00:00Z"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let report = ArtifactInspector::load(&paths).unwrap().inspect(
+        &artifact,
+        InspectionMode::Candidate,
+        None,
+    );
+
+    // The sibling file is discovered and bound — no ProvenanceMissing finding.
+    assert!(
+        report.production_provenance_sha256.is_some(),
+        "sibling provenance file should be discovered and bound"
+    );
+    assert!(!report.has(FindingCode::ProvenanceMissing));
+    assert!(!report.has(FindingCode::ProvenanceInvalid));
 }

@@ -3,13 +3,15 @@ use std::fs;
 use clap::Parser;
 use xtask::artifact_inspector::{ArtifactInspector, InspectionMode, PolicyPaths};
 use xtask::cli::{
-    ArtifactCommand, ArtifactInspectionMode, Cli, Command, ComparatorCommand, FixtureCommand,
-    GuiCommand, LocalPackageCommand, MetricsCommand, PackageCommand, RunnerCommand,
+    ArtifactCommand, ArtifactInspectionMode, Cli, Command, ComparatorCommand, EvidenceCommand,
+    FixtureCommand, GuiCommand, LocalPackageCommand, MetricsCommand, PackageCommand, RunnerCommand,
     ScaffoldCommand,
 };
 use xtask::comparator::{ScaffoldCreate, create_scaffold, verify_scaffold};
 use xtask::fixtures::{generate_fixtures, verify_fixtures};
 use xtask::gui::validate_transcript;
+#[cfg(unix)]
+use xtask::linux_gate::{LinuxGateRequest, run_gate as run_linux_gate};
 use xtask::local_package::{LinuxPackageRequest, MacPackageRequest};
 use xtask::local_package_cli::{LocalPackageCliRequest, ProcessCommandExecutor, run_local_package};
 use xtask::metrics::{MetricAssertion, assert_metric_record};
@@ -17,6 +19,7 @@ use xtask::metrics::{MetricAssertion, assert_metric_record};
 use xtask::native_smoke::{NativeSmokeGateRequest, run_gate};
 use xtask::package::assert_file;
 use xtask::release_preflight::{load_and_validate, publish_create_only};
+use xtask::reproducible_build::{ReproducibleBuildRequest, run as run_reproducible_build};
 use xtask::runner::capture_verify_matrix;
 
 fn main() {
@@ -34,6 +37,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 quarantine,
                 policy,
                 mode,
+                provenance,
             } => {
                 let defaults = PolicyPaths::repository_defaults();
                 let inspector = ArtifactInspector::load(&PolicyPaths {
@@ -44,7 +48,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     ArtifactInspectionMode::Candidate => (InspectionMode::Candidate, false),
                     ArtifactInspectionMode::Package => (InspectionMode::Package, true),
                 };
-                let report = inspector.inspect(&artifact, mode);
+                let report = inspector.inspect(&artifact, mode, provenance.as_deref());
                 println!("{}", serde_json::to_string_pretty(&report)?);
                 if !report.accepted || (requires_authorization && !report.publication_authorized) {
                     return Err("artifact inspection rejected candidate".into());
@@ -84,6 +88,28 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     println!("{}", verified.commit_sha);
                 }
             },
+        },
+        Command::Evidence { command } => match command {
+            EvidenceCommand::Validate { input, schema } => {
+                match xtask::evidence::validate_kind(&input, &schema) {
+                    Ok(()) => {
+                        println!(
+                            "PASS: {} validates against rutile.{}.v1",
+                            input.display(),
+                            schema
+                        );
+                    }
+                    Err(error) => {
+                        eprintln!("FAIL: {error}");
+                        return Err(format!(
+                            "validation failed: {} does not validate against rutile.{}.v1",
+                            input.display(),
+                            schema
+                        )
+                        .into());
+                    }
+                }
+            }
         },
         Command::Gui { command } => match command {
             GuiCommand::ValidateTranscript { commands, events } => {
@@ -152,6 +178,46 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 .into());
             }
         }
+        #[cfg(unix)]
+        Command::LinuxGate {
+            binary,
+            profile,
+            cycles,
+            exit_code,
+            started_ms,
+            ended_ms,
+            stdout_log,
+            stderr_log,
+            evidence_dir,
+        } => {
+            let execution = run_linux_gate(LinuxGateRequest {
+                binary,
+                profile,
+                cycles: cycles.get(),
+                exit_code,
+                started_unix_ms: started_ms,
+                ended_unix_ms: ended_ms,
+                stdout_log,
+                stderr_log,
+                evidence_dir,
+            })?;
+            println!(
+                "linux-gate-result={} passed={}",
+                execution.report_path.display(),
+                execution.passed,
+            );
+            if !execution.passed {
+                return Err(std::io::Error::other(format!(
+                    "linux native gate failed; report retained at {}: {}",
+                    execution.report_path.display(),
+                    execution
+                        .failure
+                        .as_deref()
+                        .unwrap_or("required run did not pass")
+                ))
+                .into());
+            }
+        }
         Command::Package { command } => match command {
             PackageCommand::AssertFile {
                 path,
@@ -204,6 +270,22 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 println!("verified {} runners", summary.runners);
             }
         },
+        Command::ReproducibleBuild {
+            package,
+            bin,
+            features,
+        } => {
+            let result = run_reproducible_build(ReproducibleBuildRequest {
+                package,
+                bin,
+                features,
+            })?;
+            println!(
+                "reproducible-build binary={} source_date_epoch={}",
+                result.binary_path.display(),
+                result.source_date_epoch,
+            );
+        }
     }
     Ok(())
 }

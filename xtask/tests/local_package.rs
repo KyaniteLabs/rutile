@@ -61,7 +61,7 @@ test_control_environment = ["RUTILE_TEST_CONTROL"]
     .unwrap();
     let inspector = ArtifactInspector::load(&PolicyPaths { quarantine, policy }).unwrap();
 
-    let report = inspector.inspect(&candidate, InspectionMode::Candidate);
+    let report = inspector.inspect(&candidate, InspectionMode::Candidate, None);
 
     assert!(!report.accepted);
     assert!(
@@ -189,6 +189,11 @@ fn assembles_deterministic_arm64_app_bound_to_candidate_hash() {
     assert!(plist.contains("<key>CFBundleExecutable</key><string>FeatherMark</string>"));
     assert!(plist.contains("<string>com.kyanitelabs.feathermark</string>"));
     assert!(plist.contains("<key>CFBundleName</key><string>Rutile</string>"));
+    // Document-type fragment from release/assets/macos/document-types.plist
+    // must be merged in so the artifact-inspector gate passes.
+    assert!(plist.contains("CFBundleDocumentTypes"));
+    assert!(plist.contains("UTTypeConformsTo"));
+    assert!(plist.contains("net.feathermark.markdown"));
 
     let metadata: serde_json::Value = serde_json::from_slice(
         &fs::read(
@@ -431,11 +436,26 @@ fn prepares_rpm_staging_with_locked_requirements() {
     assert!(spec.contains("Name:           feathermark"));
     assert!(spec.contains("Version:        0.2.0"));
     assert!(spec.contains("BuildArch:      x86_64"));
+    assert!(spec.contains("License:        MIT"));
+    assert!(!spec.contains("License:        Proprietary"));
     assert!(spec.contains("Requires:       gtk3, gtksourceview4, webkit2gtk4.1"));
     assert!(spec.contains("Summary:        Rutile — A local-first writing studio by Kyanite."));
     assert!(spec.contains("%description\nRutile — A local-first writing studio by Kyanite."));
-    assert!(spec.contains(&format!("install -D -m 0755 {}", candidate.display())));
+    // The spec must install from %{_sourcedir} — never the builder's absolute
+    // candidate path.
+    assert!(spec.contains("install -D -m 0755 %{_sourcedir}/feathermark"));
+    assert!(!spec.contains(&candidate.display().to_string()));
+    assert!(spec.contains("feathermark.desktop"));
+    assert!(spec.contains("feathermark.appdata.xml"));
+    assert!(spec.contains("feathermark-markdown.xml"));
+    assert!(spec.contains("sbom.spdx.json"));
     assert!(!spec.contains("%post"));
+
+    // The candidate binary must be staged into SOURCES/ under a stable name.
+    assert_eq!(
+        fs::read(receipt.output.join("SOURCES/feathermark")).unwrap(),
+        bytes
+    );
 
     let plan = rpm_package_plan(
         &receipt.output,
@@ -1054,3 +1074,293 @@ fn json_receipt_hashes_bind_to_artifact_bytes() {
 }
 
 use xtask::cli::{Cli, Command, LocalPackageCommand, PackageCommand};
+
+/// Forbidden absolute-path prefixes that indicate builder/operator paths
+/// leaked into shipped package content. On macOS the tempdir resolves under
+/// `/private/var/folders/` (canonicalized to `/var/folders/`); on Linux under
+/// `/tmp/`. The operator home (`/Users/`, `/home/`) must never appear either.
+const FORBIDDEN_PATH_PREFIXES: &[&str] = &[
+    "/Users/",
+    "/home/",
+    "/var/folders/",
+    "/private/",
+    "/private/var/folders/",
+];
+
+/// Assert that no builder/operator absolute paths leaked into a piece of
+/// shipped package content (spec, plist, control, manifest, SBOM).
+fn assert_no_builder_paths(label: &str, content: &str) {
+    for prefix in FORBIDDEN_PATH_PREFIXES {
+        assert!(
+            !content.contains(prefix),
+            "{label} must not contain builder path prefix {prefix:?}"
+        );
+    }
+}
+
+#[test]
+fn rls005_rpm_spec_has_no_builder_paths() {
+    let temporary = tempdir().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    let candidate = root.join("feathermark");
+    let bytes = elf_x86_64();
+    fs::write(&candidate, &bytes).unwrap();
+    let output = root.join("rpm-no-leak");
+    fs::create_dir(&output).unwrap();
+
+    let receipt = prepare_rpm_staging(&LinuxPackageRequest {
+        candidate: candidate.clone(),
+        build_input_sha256: sha256(&bytes),
+        source_commit: valid_source_commit(),
+        output_root: output.clone(),
+        version: "0.2.0".into(),
+    })
+    .unwrap();
+
+    let spec = fs::read_to_string(receipt.output.join("SPECS/feathermark.spec")).unwrap();
+    assert_no_builder_paths("rpm spec", &spec);
+    // The candidate's absolute path must not appear anywhere in the spec.
+    assert!(!spec.contains(&candidate.display().to_string()));
+
+    let sbom = fs::read_to_string(receipt.output.join("SOURCES/sbom.spdx.json")).unwrap();
+    assert_no_builder_paths("rpm sbom", &sbom);
+    assert!(sbom.contains("SPDX-2.3"));
+    assert!(sbom.contains("\"MIT\""));
+}
+
+#[test]
+fn rls005_deb_staging_has_no_builder_paths() {
+    let temporary = tempdir().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    let candidate = root.join("feathermark");
+    let bytes = elf_x86_64();
+    fs::write(&candidate, &bytes).unwrap();
+    let output = root.join("deb-no-leak");
+    fs::create_dir(&output).unwrap();
+
+    let receipt = prepare_debian_staging(&LinuxPackageRequest {
+        candidate: candidate.clone(),
+        build_input_sha256: sha256(&bytes),
+        source_commit: valid_source_commit(),
+        output_root: output.clone(),
+        version: "0.2.0".into(),
+    })
+    .unwrap();
+
+    let control = fs::read_to_string(receipt.output.join("DEBIAN/control")).unwrap();
+    assert_no_builder_paths("deb control", &control);
+
+    let manifest = fs::read_to_string(
+        receipt
+            .output
+            .join("usr/share/doc/feathermark/package-manifest-v1.json"),
+    )
+    .unwrap();
+    assert_no_builder_paths("deb manifest", &manifest);
+    assert!(manifest.contains("\"license\": \"MIT\""));
+
+    let sbom = fs::read_to_string(
+        receipt
+            .output
+            .join("usr/share/doc/feathermark/sbom.spdx.json"),
+    )
+    .unwrap();
+    assert_no_builder_paths("deb sbom", &sbom);
+
+    // Platform assets must be installed to their freedesktop locations.
+    assert!(
+        receipt
+            .output
+            .join("usr/share/applications/feathermark.desktop")
+            .is_file()
+    );
+    assert!(
+        receipt
+            .output
+            .join("usr/share/metainfo/feathermark.appdata.xml")
+            .is_file()
+    );
+    assert!(
+        receipt
+            .output
+            .join("usr/share/mime/packages/feathermark-markdown.xml")
+            .is_file()
+    );
+}
+
+#[test]
+fn rls005_macos_info_plist_has_no_builder_paths() {
+    let temporary = tempdir().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    let candidate = root.join("candidate");
+    let bytes = mach_o_arm64();
+    fs::write(&candidate, &bytes).unwrap();
+    let output = root.join("macos-no-leak");
+    fs::create_dir(&output).unwrap();
+
+    let receipt = assemble_macos_app(&MacPackageRequest {
+        candidate: candidate.clone(),
+        build_input_sha256: sha256(&bytes),
+        source_commit: valid_source_commit(),
+        output_root: output.clone(),
+        version: "0.2.0".into(),
+    })
+    .unwrap();
+
+    let plist = fs::read_to_string(receipt.output.join("Contents/Info.plist")).unwrap();
+    assert_no_builder_paths("info.plist", &plist);
+
+    let manifest = fs::read_to_string(
+        receipt
+            .output
+            .join("Contents/Resources/package-manifest-v1.json"),
+    )
+    .unwrap();
+    assert_no_builder_paths("macos manifest", &manifest);
+    assert!(manifest.contains("\"license\": \"MIT\""));
+
+    let sbom =
+        fs::read_to_string(receipt.output.join("Contents/Resources/sbom.spdx.json")).unwrap();
+    assert_no_builder_paths("macos sbom", &sbom);
+    assert!(sbom.contains("SPDX-2.3"));
+}
+
+#[test]
+fn int002_rpm_plan_is_sane_install_open_uninstall() {
+    let temporary = tempdir().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    let candidate = root.join("feathermark");
+    let bytes = elf_x86_64();
+    fs::write(&candidate, &bytes).unwrap();
+    let output = root.join("rpm-plan");
+    fs::create_dir(&output).unwrap();
+
+    let receipt = prepare_rpm_staging(&LinuxPackageRequest {
+        candidate,
+        build_input_sha256: sha256(&bytes),
+        source_commit: valid_source_commit(),
+        output_root: output,
+        version: "0.2.0".into(),
+    })
+    .unwrap();
+
+    let spec_path = receipt.output.join("SPECS/feathermark.spec");
+    let spec = fs::read_to_string(&spec_path).unwrap();
+
+    // Install: the %install section must place the binary and all platform
+    // assets into the buildroot from %{_sourcedir}.
+    assert!(spec.contains("%install"));
+    assert!(spec.contains("%{buildroot}/usr/bin/feathermark"));
+    assert!(spec.contains("%{buildroot}/usr/share/applications/feathermark.desktop"));
+    // Open: the desktop entry + mime registration let launchers open .md files.
+    assert!(spec.contains("feathermark.desktop"));
+    assert!(spec.contains("feathermark-markdown.xml"));
+    // Uninstall: every installed file must be in %files so rpm -e removes it.
+    assert!(spec.contains("%files"));
+    assert!(spec.contains("/usr/bin/feathermark"));
+    assert!(spec.contains("/usr/share/applications/feathermark.desktop"));
+    assert!(spec.contains("/usr/share/mime/packages/feathermark-markdown.xml"));
+
+    // The CommandPlan must be a direct argument vector — never a shell.
+    let plan = rpm_package_plan(&receipt.output, &spec_path).unwrap();
+    assert_eq!(plan.program, "rpmbuild");
+    assert!(plan.args.iter().any(|arg| arg == "-bb"));
+    assert!(
+        !plan
+            .args
+            .iter()
+            .any(|arg| arg == "sh" || arg == "-c" || arg == "-x")
+    );
+}
+
+#[test]
+fn int002_deb_plan_is_sane_install_open_uninstall() {
+    let temporary = tempdir().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    let candidate = root.join("feathermark");
+    let bytes = elf_x86_64();
+    fs::write(&candidate, &bytes).unwrap();
+    let output = root.join("deb-plan");
+    fs::create_dir(&output).unwrap();
+
+    let receipt = prepare_debian_staging(&LinuxPackageRequest {
+        candidate,
+        build_input_sha256: sha256(&bytes),
+        source_commit: valid_source_commit(),
+        output_root: output,
+        version: "0.2.0".into(),
+    })
+    .unwrap();
+
+    // Install: binary + assets present in staging tree.
+    assert!(receipt.output.join("usr/bin/feathermark").is_file());
+    assert!(
+        receipt
+            .output
+            .join("usr/share/applications/feathermark.desktop")
+            .is_file()
+    );
+    // Open: mime + desktop registration.
+    assert!(
+        receipt
+            .output
+            .join("usr/share/mime/packages/feathermark-markdown.xml")
+            .is_file()
+    );
+    // The control file must declare the package for dpkg install/remove.
+    let control = fs::read_to_string(receipt.output.join("DEBIAN/control")).unwrap();
+    assert!(control.contains("Package: feathermark"));
+
+    // The CommandPlan must be a direct argument vector — never a shell.
+    let plan = debian_package_plan(&receipt.output, &root.join("out.deb")).unwrap();
+    assert_eq!(plan.program, "dpkg-deb");
+    assert!(plan.args.iter().any(|arg| arg == "--build"));
+    assert!(
+        !plan
+            .args
+            .iter()
+            .any(|arg| arg == "sh" || arg == "-c" || arg == "-x")
+    );
+}
+
+#[test]
+fn sbom_includes_license_and_dependency_inventory() {
+    let temporary = tempdir().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    let candidate = root.join("feathermark");
+    let bytes = elf_x86_64();
+    fs::write(&candidate, &bytes).unwrap();
+    let output = root.join("sbom-check");
+    fs::create_dir(&output).unwrap();
+
+    let receipt = prepare_debian_staging(&LinuxPackageRequest {
+        candidate,
+        build_input_sha256: sha256(&bytes),
+        source_commit: valid_source_commit(),
+        output_root: output,
+        version: "0.2.0".into(),
+    })
+    .unwrap();
+
+    let sbom: serde_json::Value = serde_json::from_slice(
+        &fs::read(
+            receipt
+                .output
+                .join("usr/share/doc/feathermark/sbom.spdx.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(sbom["spdx_version"], "SPDX-2.3");
+    assert_eq!(sbom["data_license"], "CC0-1.0");
+    assert_eq!(sbom["packages"][0]["license_declared"], "MIT");
+    assert_eq!(sbom["packages"][0]["license_concluded"], "MIT");
+    let workspace_crates = sbom["packages"][0]["feathermark_workspace_crates"]
+        .as_array()
+        .unwrap();
+    assert!(workspace_crates.iter().any(|c| c == "feathermark-app"));
+    let runtime_libs = sbom["packages"][0]["feathermark_runtime_libraries"]
+        .as_array()
+        .unwrap();
+    assert!(runtime_libs.iter().any(|l| l == "libgtk-3.so.0"));
+}

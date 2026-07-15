@@ -28,6 +28,48 @@ pub const LINUX_ARCHIVE_NAME: &str = "Rutile-0.2.0-linux-x86_64.tar.zst";
 pub const LINUX_DEB_NAME: &str = "feathermark_0.2.0_amd64.deb";
 pub const LINUX_RPM_NAME: &str = "feathermark-0.2.0-1.x86_64.rpm";
 
+/// License declared in every package manifest and SBOM. Derived from the
+/// xtask crate's `CARGO_PKG_LICENSE` (which inherits `MIT` from
+/// `[workspace.package]`) so it can never drift from the workspace setting;
+/// falls back to `MIT` to match the root LICENSE file if the env var is unset.
+pub const PACKAGE_LICENSE: &str = match option_env!("CARGO_PKG_LICENSE") {
+    Some(license) => license,
+    None => "MIT",
+};
+
+/// SBOM filename written into every assembled package.
+pub const SBOM_FILE_NAME: &str = "sbom.spdx.json";
+
+/// First-party workspace crates listed in the SBOM dependency inventory.
+const SBOM_WORKSPACE_CRATES: &[&str] = &[
+    "feathermark-types",
+    "feathermark-core",
+    "feathermark-protocol",
+    "feathermark-app",
+];
+
+// Platform assets are embedded at compile time via build.rs so the assembled
+// packages never depend on builder-relative filesystem layout. build.rs reads
+// them from release/assets/ and writes them to OUT_DIR/release-assets/.
+const MACOS_DOCUMENT_TYPES_PLIST: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/release-assets/document-types.plist"
+));
+const MACOS_APP_ICON: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/release-assets/AppIcon.icns"));
+const LINUX_DESKTOP_ENTRY: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/release-assets/feathermark.desktop"
+));
+const LINUX_APPDATA: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/release-assets/feathermark.appdata.xml"
+));
+const LINUX_MIME: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/release-assets/feathermark-markdown.xml"
+));
+
 #[derive(Debug, Error)]
 pub enum LocalPackageError {
     #[error("{field} must be an absolute normalized path: {path}")]
@@ -114,6 +156,7 @@ struct MacAppManifest<'a> {
     packaged_executable_sha256: &'a str,
     source_commit: &'a str,
     version: &'a str,
+    license: &'static str,
     signing: &'static str,
     notarized: bool,
 }
@@ -127,6 +170,7 @@ struct LinuxLayoutManifest<'a> {
     packaged_executable_sha256: &'a str,
     source_commit: &'a str,
     version: &'a str,
+    license: &'static str,
     wayland_verified: bool,
     rpm_runtime_verified: bool,
     runtime_dependencies: &'static [RuntimeDependency],
@@ -202,22 +246,29 @@ pub fn assemble_macos_app(
 
     let packaged_executable_sha256 = hex_sha256(&candidate);
 
-    let plist = format!(
+    // Build the Info.plist by splicing the document-type/UTI fragment from
+    // release/assets/macos/document-types.plist into the assembler-authored
+    // base keys. The fragment supplies CFBundleDocumentTypes and
+    // UTExportedTypeDeclarations so Finder can route .md files to Rutile.
+    let plist_head = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
 <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"https://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
 <plist version=\"1.0\"><dict>\n\
   <key>CFBundleDisplayName</key><string>Rutile</string>\n\
   <key>CFBundleExecutable</key><string>FeatherMark</string>\n\
+  <key>CFBundleIconFile</key><string>AppIcon</string>\n\
   <key>CFBundleIdentifier</key><string>com.kyanitelabs.feathermark</string>\n\
   <key>CFBundleName</key><string>Rutile</string>\n\
   <key>CFBundlePackageType</key><string>APPL</string>\n\
   <key>CFBundleShortVersionString</key><string>{}</string>\n\
   <key>CFBundleVersion</key><string>{}</string>\n\
-  <key>LSArchitecturePriority</key><array><string>arm64</string></array>\n\
-</dict></plist>\n",
+  <key>LSArchitecturePriority</key><array><string>arm64</string></array>\n",
         request.version, request.version
     );
+    let document_types = extract_plist_dict_inner(MACOS_DOCUMENT_TYPES_PLIST);
+    let plist = format!("{plist_head}{document_types}</dict></plist>\n");
     write_new_file(&contents.join("Info.plist"), plist.as_bytes())?;
+    fs::write(resources.join("AppIcon.icns"), MACOS_APP_ICON)?;
     write_json(
         &resources.join("package-manifest-v1.json"),
         &MacAppManifest {
@@ -228,9 +279,17 @@ pub fn assemble_macos_app(
             packaged_executable_sha256: &packaged_executable_sha256,
             source_commit: &request.source_commit,
             version: &request.version,
+            license: PACKAGE_LICENSE,
             signing: "ad-hoc-command-required",
             notarized: false,
         },
+    )?;
+    write_sbom(
+        &resources.join(SBOM_FILE_NAME),
+        &request.version,
+        &request.source_commit,
+        "aarch64-apple-darwin",
+        &[],
     )?;
 
     Ok(AssemblyReceipt {
@@ -270,10 +329,22 @@ pub fn prepare_linux_layout(
             packaged_executable_sha256: &request.build_input_sha256,
             source_commit: &request.source_commit,
             version: &request.version,
+            license: PACKAGE_LICENSE,
             wayland_verified: false,
             rpm_runtime_verified: false,
             runtime_dependencies: LINUX_RUNTIME_DEPENDENCIES,
         },
+    )?;
+    let runtime_sonames: Vec<&str> = LINUX_RUNTIME_DEPENDENCIES
+        .iter()
+        .map(|dep| dep.soname)
+        .collect();
+    write_sbom(
+        &layout.join(SBOM_FILE_NAME),
+        &request.version,
+        &request.source_commit,
+        "x86_64-unknown-linux-gnu",
+        &runtime_sonames,
     )?;
 
     Ok(AssemblyReceipt {
@@ -299,10 +370,31 @@ pub fn prepare_debian_staging(
     let binary = staging.join("usr/bin/feathermark");
     let doc_dir = staging.join("usr/share/doc/feathermark");
     let control_dir = staging.join("DEBIAN");
+    let applications_dir = staging.join("usr/share/applications");
+    let metainfo_dir = staging.join("usr/share/metainfo");
+    let mime_packages_dir = staging.join("usr/share/mime/packages");
     fs::create_dir_all(binary.parent().expect("binary has parent"))?;
     fs::create_dir_all(&doc_dir)?;
     fs::create_dir_all(&control_dir)?;
+    fs::create_dir_all(&applications_dir)?;
+    fs::create_dir_all(&metainfo_dir)?;
+    fs::create_dir_all(&mime_packages_dir)?;
     write_executable(&binary, &candidate)?;
+
+    // Install freedesktop platform assets so launchers and file managers can
+    // offer "Open with Rutile" and classify Markdown documents.
+    write_new_file(
+        &applications_dir.join("feathermark.desktop"),
+        LINUX_DESKTOP_ENTRY.as_bytes(),
+    )?;
+    write_new_file(
+        &metainfo_dir.join("feathermark.appdata.xml"),
+        LINUX_APPDATA.as_bytes(),
+    )?;
+    write_new_file(
+        &mime_packages_dir.join("feathermark-markdown.xml"),
+        LINUX_MIME.as_bytes(),
+    )?;
 
     let manifest = LinuxLayoutManifest {
         schema: "feathermark-local-package-v1",
@@ -312,11 +404,23 @@ pub fn prepare_debian_staging(
         packaged_executable_sha256: &request.build_input_sha256,
         source_commit: &request.source_commit,
         version: &request.version,
+        license: PACKAGE_LICENSE,
         wayland_verified: false,
         rpm_runtime_verified: false,
         runtime_dependencies: LINUX_RUNTIME_DEPENDENCIES,
     };
     write_json(&doc_dir.join("package-manifest-v1.json"), &manifest)?;
+    let runtime_sonames: Vec<&str> = LINUX_RUNTIME_DEPENDENCIES
+        .iter()
+        .map(|dep| dep.soname)
+        .collect();
+    write_sbom(
+        &doc_dir.join(SBOM_FILE_NAME),
+        &request.version,
+        &request.source_commit,
+        "x86_64-unknown-linux-gnu",
+        &runtime_sonames,
+    )?;
 
     let control = format!(
         "Package: feathermark\n\
@@ -371,13 +475,43 @@ pub fn prepare_rpm_staging(
     fs::create_dir_all(topdir.join("SPECS"))?;
     fs::create_dir_all(topdir.join("SRPMS"))?;
 
+    // Copy the candidate binary and platform assets into SOURCES/ under stable,
+    // reproducible names. The spec references them via %{_sourcedir} (which
+    // rpmbuild resolves to <topdir>/SOURCES at build time) so NO absolute
+    // builder path is ever interpolated into the spec file.
+    let sources = topdir.join("SOURCES");
+    write_new_file(&sources.join("feathermark"), &candidate)?;
+    write_new_file(
+        &sources.join("feathermark.desktop"),
+        LINUX_DESKTOP_ENTRY.as_bytes(),
+    )?;
+    write_new_file(
+        &sources.join("feathermark.appdata.xml"),
+        LINUX_APPDATA.as_bytes(),
+    )?;
+    write_new_file(
+        &sources.join("feathermark-markdown.xml"),
+        LINUX_MIME.as_bytes(),
+    )?;
+    let runtime_sonames: Vec<&str> = LINUX_RUNTIME_DEPENDENCIES
+        .iter()
+        .map(|dep| dep.soname)
+        .collect();
+    write_sbom(
+        &sources.join(SBOM_FILE_NAME),
+        &request.version,
+        &request.source_commit,
+        "x86_64-unknown-linux-gnu",
+        &runtime_sonames,
+    )?;
+
     let spec = topdir.join("SPECS/feathermark.spec");
     let spec_body = format!(
         "Name:           feathermark\n\
 Version:        {}\n\
 Release:        1%{{?dist}}\n\
 Summary:        Rutile — A local-first writing studio by Kyanite.\n\
-License:        Proprietary\n\
+License:        {}\n\
 URL:            https://kyanitelabs.ai\n\
 BuildArch:      x86_64\n\
 \n\
@@ -387,12 +521,21 @@ Requires:       gtk3, gtksourceview4, webkit2gtk4.1\n\
 Rutile — A local-first writing studio by Kyanite.\n\
 \n\
 %install\n\
-install -D -m 0755 {} %{{buildroot}}/usr/bin/feathermark\n\
+install -D -m 0755 %{{_sourcedir}}/feathermark %{{buildroot}}/usr/bin/feathermark\n\
+install -D -m 0644 %{{_sourcedir}}/feathermark.desktop %{{buildroot}}/usr/share/applications/feathermark.desktop\n\
+install -D -m 0644 %{{_sourcedir}}/feathermark.appdata.xml %{{buildroot}}/usr/share/metainfo/feathermark.appdata.xml\n\
+install -D -m 0644 %{{_sourcedir}}/feathermark-markdown.xml %{{buildroot}}/usr/share/mime/packages/feathermark-markdown.xml\n\
+install -D -m 0644 %{{_sourcedir}}/{sbom} %{{buildroot}}/usr/share/doc/feathermark/{sbom}\n\
 \n\
 %files\n\
-/usr/bin/feathermark\n",
+/usr/bin/feathermark\n\
+/usr/share/applications/feathermark.desktop\n\
+/usr/share/metainfo/feathermark.appdata.xml\n\
+/usr/share/mime/packages/feathermark-markdown.xml\n\
+/usr/share/doc/feathermark/{sbom}\n",
         request.version,
-        request.candidate.display()
+        PACKAGE_LICENSE,
+        sbom = SBOM_FILE_NAME
     );
     write_new_file(&spec, spec_body.as_bytes())?;
 
@@ -413,6 +556,13 @@ pub fn rpm_package_plan(topdir: &Path, spec: &Path) -> Result<CommandPlan, Local
             path: spec.to_owned(),
         });
     }
+    // `_topdir` is a build-time invocation argument passed on the rpmbuild
+    // command line. It is NOT interpolated into the spec file — the spec
+    // references all sources via %{_sourcedir} which rpmbuild resolves
+    // relative to _topdir. The topdir path therefore never leaks into the
+    // shipped RPM metadata; it is analogous to the staging path passed to
+    // dpkg-deb. It must be absolute because the CommandPlan carries no
+    // working-directory context.
     Ok(CommandPlan {
         program: "rpmbuild".into(),
         args: vec![
@@ -864,4 +1014,119 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<(), LocalPackageErr
 
 fn hex_sha256(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
+}
+
+/// Extract the inner key/value pairs from a plist fragment whose root is a
+/// `<dict>`. Returns everything between the outermost `<dict>` and its
+/// matching `</dict>`, so the caller can splice the keys into another
+/// `<dict>` without introducing a nested root element.
+fn extract_plist_dict_inner(fragment: &str) -> &str {
+    let plist_pos = fragment
+        .find("<plist")
+        .expect("document-types fragment contains <plist");
+    let after_plist = &fragment[plist_pos..];
+    let dict_open = after_plist
+        .find("<dict>")
+        .expect("document-types fragment contains <dict>");
+    let content_start = plist_pos + dict_open + "<dict>".len();
+    let plist_end = fragment
+        .rfind("</plist>")
+        .expect("document-types fragment contains </plist>");
+    let before_end = &fragment[..plist_end];
+    let dict_close = before_end
+        .rfind("</dict>")
+        .expect("document-types fragment contains </dict>");
+    &fragment[content_start..dict_close]
+}
+
+#[derive(Serialize)]
+struct SpdxDocument {
+    spdx_version: &'static str,
+    data_license: &'static str,
+    spdx_id: &'static str,
+    name: &'static str,
+    document_namespace: String,
+    creation_info: SpdxCreationInfo,
+    packages: Vec<SpdxPackage>,
+    relationships: Vec<SpdxRelationship>,
+}
+
+#[derive(Serialize)]
+struct SpdxCreationInfo {
+    creators: &'static [&'static str],
+    created: &'static str,
+}
+
+#[derive(Serialize)]
+struct SpdxPackage {
+    name: &'static str,
+    spdx_id: &'static str,
+    version_info: String,
+    license_concluded: &'static str,
+    license_declared: &'static str,
+    download_location: &'static str,
+    files_analyzed: bool,
+    copyright_text: &'static str,
+    supplier: &'static str,
+    feathermark_workspace_crates: &'static [&'static str],
+    feathermark_runtime_libraries: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct SpdxRelationship {
+    spdx_element_id: &'static str,
+    relationship_type: &'static str,
+    related_spdx_element: &'static str,
+}
+
+/// Write a minimal SPDX 2.3 JSON SBOM into the package. The document declares
+/// the MIT license and inventories the first-party workspace crates plus the
+/// runtime shared libraries the package depends on. The `created` timestamp is
+/// fixed to the Unix epoch for reproducibility (matching the `--mtime=@0`
+/// convention used by the tar archive plan); the full dependency graph remains
+/// available via `cargo metadata` at release time.
+fn write_sbom(
+    path: &Path,
+    version: &str,
+    source_commit: &str,
+    target_triple: &str,
+    runtime_libraries: &[&str],
+) -> Result<(), LocalPackageError> {
+    let document = SpdxDocument {
+        spdx_version: "SPDX-2.3",
+        data_license: "CC0-1.0",
+        spdx_id: "SPDXRef-DOCUMENT",
+        name: "feathermark",
+        document_namespace: format!(
+            "https://kyanitelabs.ai/spdx/feathermark-{version}-{source_commit}-{target_triple}"
+        ),
+        creation_info: SpdxCreationInfo {
+            creators: &["Tool: feathermark-xtask", "Organization: Kyanite"],
+            created: "1970-01-01T00:00:00Z",
+        },
+        packages: vec![SpdxPackage {
+            name: "feathermark",
+            spdx_id: "SPDXRef-Package-feathermark",
+            version_info: version.to_owned(),
+            license_concluded: PACKAGE_LICENSE,
+            license_declared: PACKAGE_LICENSE,
+            download_location: "NOASSERTION",
+            files_analyzed: false,
+            copyright_text: "NOASSERTION",
+            supplier: "Organization: Kyanite",
+            feathermark_workspace_crates: SBOM_WORKSPACE_CRATES,
+            feathermark_runtime_libraries: runtime_libraries
+                .iter()
+                .map(|soname| (*soname).to_owned())
+                .collect(),
+        }],
+        relationships: vec![SpdxRelationship {
+            spdx_element_id: "SPDXRef-DOCUMENT",
+            relationship_type: "DESCRIBES",
+            related_spdx_element: "SPDXRef-Package-feathermark",
+        }],
+    };
+    let mut bytes = serde_json::to_vec_pretty(&document)?;
+    bytes.push(b'\n');
+    write_new_file(path, &bytes)
 }

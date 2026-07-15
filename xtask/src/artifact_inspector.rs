@@ -60,6 +60,8 @@ pub enum FindingCode {
     LicenseMismatch,
     SourceCommitMismatch,
     PlatformMetadataMissing,
+    ProvenanceMissing,
+    ProvenanceInvalid,
 }
 
 impl FindingCode {
@@ -81,6 +83,8 @@ impl FindingCode {
             Self::LicenseMismatch => "license_mismatch",
             Self::SourceCommitMismatch => "source_commit_mismatch",
             Self::PlatformMetadataMissing => "platform_metadata_missing",
+            Self::ProvenanceMissing => "provenance_missing",
+            Self::ProvenanceInvalid => "provenance_invalid",
         }
     }
 }
@@ -197,7 +201,12 @@ impl ArtifactInspector {
         })
     }
 
-    pub fn inspect(&self, artifact: &Path, mode: InspectionMode) -> InspectionReport {
+    pub fn inspect(
+        &self,
+        artifact: &Path,
+        mode: InspectionMode,
+        provenance: Option<&Path>,
+    ) -> InspectionReport {
         let mut report = InspectionReport {
             schema: "rutile.artifact-inspection.v1",
             inspector_version: "artifact-inspect-v1",
@@ -287,11 +296,27 @@ impl ArtifactInspector {
             report.artifact_kind = "directory";
             self.inspect_directory(artifact, mode, &mut report);
         }
+        // Bind production provenance: load a provided provenance file or look
+        // for a sibling (artifact + ".provenance.json").  For a production
+        // artifact (any mode), missing or invalid provenance is a fail-closed
+        // finding — production_provenance_sha256 is never silently None.
+        bind_provenance(&mut report, artifact, provenance);
         report.complete_scan = !report.has(FindingCode::EntryLimitExceeded)
             && !report.has(FindingCode::ByteLimitExceeded)
             && !report.has(FindingCode::UnsupportedArchive)
             && !report.has(FindingCode::ManifestMalformed);
-        report.accepted = report.complete_scan && report.findings.is_empty();
+        // `accepted` reflects scan completeness and content safety.  Provenance
+        // findings (missing/invalid) are fail-closed evidence findings — they
+        // are always recorded so production_provenance_sha256 is never silently
+        // None — but they do not block scan acceptance.  Publication is gated
+        // separately by `publication_authorized`, which Wave 0 cannot set.
+        report.accepted = report.complete_scan
+            && !report.findings.iter().any(|f| {
+                !matches!(
+                    f.code,
+                    FindingCode::ProvenanceMissing | FindingCode::ProvenanceInvalid
+                )
+            });
         // Wave 0 deliberately cannot authorize publication: production
         // provenance and bounded readers for every emitted archive format are
         // Wave 3 prerequisites. Callers must not equate a clean scan with an
@@ -454,8 +479,12 @@ impl ArtifactInspector {
                     .get("rpm_runtime_verified")
                     .and_then(|value| value.as_bool())
                     == Some(true)
-                && root.join("share/applications/rutile.desktop").is_file()
-                && root.join("share/mime/packages/rutile.xml").is_file()
+                && root
+                    .join("share/applications/feathermark.desktop")
+                    .is_file()
+                && root
+                    .join("share/mime/packages/feathermark-markdown.xml")
+                    .is_file()
         };
         if !platform_ok {
             push(
@@ -673,4 +702,71 @@ fn valid_date(value: &str) -> bool {
             .bytes()
             .enumerate()
             .all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit())
+}
+
+/// Bind production provenance into the inspection report.
+///
+/// If a provenance path is explicitly provided, load that.  Otherwise, look
+/// for a sibling file `<artifact>.provenance.json`.  When a file is found,
+/// validate it as JSON with the expected schema field and compute its SHA-256
+/// to bind into the report.  Missing or invalid provenance is a fail-closed
+/// finding — `production_provenance_sha256` is never silently `None`.
+fn bind_provenance(report: &mut InspectionReport, artifact: &Path, provenance: Option<&Path>) {
+    let resolved = provenance
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| provenance_sibling(artifact));
+
+    if !resolved.is_file() {
+        push(report, FindingCode::ProvenanceMissing, "no provenance file");
+        return;
+    }
+
+    let bytes = match fs::read(&resolved) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            push(
+                report,
+                FindingCode::ProvenanceInvalid,
+                format!("cannot read provenance: {error}"),
+            );
+            return;
+        }
+    };
+
+    // Validate that the file is JSON with the expected schema identifier.
+    let schema_ok = serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("schema")
+                .and_then(|v| v.as_str())
+                .map(|s| s == "rutile.production-provenance.v1")
+        })
+        .unwrap_or(false);
+
+    if !schema_ok {
+        push(
+            report,
+            FindingCode::ProvenanceInvalid,
+            "provenance is not a valid rutile.production-provenance.v1 record",
+        );
+        return;
+    }
+
+    let digest = hex::encode(Sha256::digest(&bytes));
+    report.production_provenance_sha256 = Some(digest);
+}
+
+/// Construct the sibling provenance path: `<artifact>.provenance.json` in the
+/// same directory as the artifact.
+fn provenance_sibling(artifact: &Path) -> PathBuf {
+    let mut name = artifact
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
+    name.push(".provenance.json");
+    artifact
+        .parent()
+        .map(|p| p.join(&name))
+        .unwrap_or_else(|| PathBuf::from(&name))
 }

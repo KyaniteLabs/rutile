@@ -6,15 +6,20 @@ pub mod artifact_inspector;
 #[allow(dead_code)] // Task 1C wires the capability boundary to real scenario owners.
 mod candidate;
 pub mod comparator;
+pub mod evidence;
 pub mod fixtures;
 pub mod gui;
+#[cfg(unix)]
+pub mod linux_gate;
 pub mod local_package;
 pub mod local_package_cli;
 pub mod metrics;
 #[cfg(unix)]
 pub mod native_smoke;
 pub mod package;
+pub mod provenance;
 pub mod release_preflight;
+pub mod reproducible_build;
 pub mod runner;
 #[doc(hidden)]
 pub mod runner_native;
@@ -54,6 +59,10 @@ pub mod cli {
             #[command(subcommand)]
             command: ComparatorCommand,
         },
+        Evidence {
+            #[command(subcommand)]
+            command: EvidenceCommand,
+        },
         Gui {
             #[command(subcommand)]
             command: GuiCommand,
@@ -73,6 +82,27 @@ pub mod cli {
             #[arg(long)]
             evidence_dir: PathBuf,
         },
+        #[cfg(unix)]
+        LinuxGate {
+            #[arg(long)]
+            binary: PathBuf,
+            #[arg(long, value_enum)]
+            profile: NativeSmokeProfile,
+            #[arg(long)]
+            cycles: NonZeroUsize,
+            #[arg(long)]
+            exit_code: i32,
+            #[arg(long)]
+            started_ms: u128,
+            #[arg(long)]
+            ended_ms: u128,
+            #[arg(long)]
+            stdout_log: PathBuf,
+            #[arg(long)]
+            stderr_log: PathBuf,
+            #[arg(long)]
+            evidence_dir: PathBuf,
+        },
         Package {
             #[command(subcommand)]
             command: PackageCommand,
@@ -87,6 +117,14 @@ pub mod cli {
             #[arg(long)]
             out: PathBuf,
         },
+        ReproducibleBuild {
+            #[arg(long, default_value = "feathermark-app")]
+            package: String,
+            #[arg(long, default_value = "feathermark")]
+            bin: String,
+            #[arg(long)]
+            features: Option<String>,
+        },
     }
 
     #[derive(Subcommand)]
@@ -100,6 +138,8 @@ pub mod cli {
             policy: Option<PathBuf>,
             #[arg(long, value_enum, default_value_t = ArtifactInspectionMode::Package)]
             mode: ArtifactInspectionMode,
+            #[arg(long)]
+            provenance: Option<PathBuf>,
         },
     }
 
@@ -126,6 +166,19 @@ pub mod cli {
         Scaffold {
             #[command(subcommand)]
             command: ScaffoldCommand,
+        },
+    }
+
+    #[derive(Subcommand)]
+    pub enum EvidenceCommand {
+        /// Validate a JSON instance against a checked-in rutile schema.
+        Validate {
+            #[arg(long)]
+            input: PathBuf,
+            /// Schema kind, e.g. "production-provenance" or "evidence-index".
+            /// Maps to schemas/rutile.<kind>.v1.schema.json.
+            #[arg(long)]
+            schema: String,
         },
     }
 

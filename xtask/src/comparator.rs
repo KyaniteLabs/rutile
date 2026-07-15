@@ -45,6 +45,7 @@ ed25519-dalek.workspace = true
 feathermark-protocol.workspace = true
 getrandom.workspace = true
 hex.workspace = true
+jsonschema.workspace = true
 libc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -79,6 +80,7 @@ ed25519-dalek = "=2.1.1"
 feathermark-protocol = { path = "../contracts/feathermark-protocol" }
 getrandom = "=0.3.3"
 hex = "=0.4.3"
+jsonschema = "=0.29.1"
 libc = "=0.2.172"
 serde = { version = "=1.0.219", features = ["derive"] }
 serde_json = "=1.0.140"
