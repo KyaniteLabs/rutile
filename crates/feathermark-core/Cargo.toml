@@ -28,3 +28,12 @@ harness = false
 [[bench]]
 name = "render"
 harness = false
+
+# Wave 4 — performance budgets (docs/wave4/performance-budget.md).
+[[bench]]
+name = "save_atomic"
+harness = false
+
+[[bench]]
+name = "autosave"
+harness = false

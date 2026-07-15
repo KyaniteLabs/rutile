@@ -1,0 +1,31 @@
+{
+  "schema": "rutile.accessibility-attestation.v1",
+  "version": 1,
+  "source_commit": "47c23f57274be89b84d119f803612665677f0654",
+  "platform": "macos",
+  "tool": "voiceover",
+  "rows": [
+    {
+      "action": "file/open",
+      "passed": true,
+      "evidence_ref": "release/evidence/runs/run-1783924839-a11y/file-open.wav"
+    },
+    {
+      "action": "edit/replace-all",
+      "passed": true,
+      "evidence_ref": "release/evidence/runs/run-1783924839-a11y/replace-all.wav"
+    },
+    {
+      "action": "view/scroll",
+      "passed": false,
+      "evidence_ref": "release/evidence/runs/run-1783924839-a11y/scroll-trap.wav"
+    }
+  ],
+  "summary": { "passed": 2, "total": 3, "failed": 1 },
+  "unverified_rows": [
+    {
+      "action": "view/preview-sync",
+      "reason": "interactive VoiceOver capture deferred to the release lane"
+    }
+  ]
+}

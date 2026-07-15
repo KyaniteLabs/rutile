@@ -1,0 +1,34 @@
+{
+  "schema": "rutile.performance-evidence.v1",
+  "version": 1,
+  "source_commit": "47c23f57274be89b84d119f803612665677f0654",
+  "platform": "linux",
+  "budget_ref": "docs/decisions/0002-release-budgets.md",
+  "measurements": [
+    {
+      "operation": "preview/render",
+      "input_size": 1048576,
+      "p50_ms": 3.2,
+      "p99_ms": 7.8,
+      "budget_ms": 16.0,
+      "passed": true
+    },
+    {
+      "operation": "edit/insert",
+      "input_size": 5242880,
+      "p50_ms": 1.1,
+      "p99_ms": 3.4,
+      "budget_ms": 8.0,
+      "passed": true
+    },
+    {
+      "operation": "scroll/frame",
+      "input_size": 1048576,
+      "p50_ms": 18.5,
+      "p99_ms": 31.2,
+      "budget_ms": 16.0,
+      "passed": false
+    }
+  ],
+  "summary": { "passed": 2, "total": 3, "over_budget": 1 }
+}

@@ -12,6 +12,8 @@ pub const KNOWN_SCHEMA_KINDS: &[&str] = &[
     "gate-result",
     "release-prerequisite-preflight",
     "w0b-stage0-blocked-receipt",
+    "accessibility-attestation",
+    "performance-evidence",
 ];
 
 /// Resolve a schema kind string (e.g. "production-provenance") to the
@@ -99,11 +101,125 @@ mod tests {
         assert!(schema_path("production-provenance").is_some());
         assert!(schema_path("evidence-index").is_some());
         assert!(schema_path("artifact-inspection").is_some());
+        assert!(schema_path("accessibility-attestation").is_some());
+        assert!(schema_path("performance-evidence").is_some());
     }
 
     #[test]
     fn schema_path_returns_none_for_unknown_kind() {
         assert!(schema_path("nonexistent").is_none());
+    }
+
+    /// The checked-in Wave 4 accessibility sample must validate against the
+    /// accessibility-attestation schema. This guards against schema regressions
+    /// that would silently break the release evidence pipeline.
+    #[test]
+    fn accessibility_attestation_sample_validates() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask is a workspace member");
+        let sample =
+            root.join("release/evidence/samples/rutile.accessibility-attestation.v1.sample.json");
+        assert!(
+            sample.is_file(),
+            "accessibility-attestation sample must be checked in at {}",
+            sample.display()
+        );
+        validate_kind(&sample, "accessibility-attestation").unwrap_or_else(|e| panic!("{e}"));
+    }
+
+    /// The checked-in Wave 4 performance sample must validate against the
+    /// performance-evidence schema.
+    #[test]
+    fn performance_evidence_sample_validates() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask is a workspace member");
+        let sample =
+            root.join("release/evidence/samples/rutile.performance-evidence.v1.sample.json");
+        assert!(
+            sample.is_file(),
+            "performance-evidence sample must be checked in at {}",
+            sample.display()
+        );
+        validate_kind(&sample, "performance-evidence").unwrap_or_else(|e| panic!("{e}"));
+    }
+
+    /// Host-local absolute paths and secret markers must be rejected by the
+    /// accessibility-attestation schema (evidence_ref is repo-relative only).
+    #[test]
+    fn accessibility_attestation_rejects_host_path_in_evidence_ref() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask is a workspace member");
+        let schema_file = root.join("schemas/rutile.accessibility-attestation.v1.schema.json");
+        let value = serde_json::json!({
+            "schema": "rutile.accessibility-attestation.v1",
+            "version": 1,
+            "source_commit": "47c23f57274be89b84d119f803612665677f0654",
+            "platform": "macos",
+            "tool": "voiceover",
+            "rows": [{
+                "action": "file/open",
+                "passed": true,
+                "evidence_ref": "/Users/leaker/evidence.wav"
+            }],
+            "summary": { "passed": 1, "total": 1, "failed": 0 }
+        });
+        validate_value_against_file(&value, &schema_file)
+            .expect_err("host-local path in evidence_ref must be rejected");
+    }
+
+    /// budget_ms of zero is meaningless and must be rejected by the
+    /// performance-evidence schema.
+    #[test]
+    fn performance_evidence_rejects_zero_budget() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask is a workspace member");
+        let schema_file = root.join("schemas/rutile.performance-evidence.v1.schema.json");
+        let value = serde_json::json!({
+            "schema": "rutile.performance-evidence.v1",
+            "version": 1,
+            "source_commit": "47c23f57274be89b84d119f803612665677f0654",
+            "platform": "linux",
+            "budget_ref": "docs/decisions/0002-release-budgets.md",
+            "measurements": [{
+                "operation": "preview/render",
+                "input_size": 1048576,
+                "p50_ms": 3.2,
+                "p99_ms": 7.8,
+                "budget_ms": 0,
+                "passed": true
+            }],
+            "summary": { "passed": 1, "total": 1, "over_budget": 0 }
+        });
+        validate_value_against_file(&value, &schema_file)
+            .expect_err("budget_ms of zero must be rejected");
+    }
+
+    /// Helper: validate an in-memory JSON value against an explicit schema file.
+    fn validate_value_against_file(
+        value: &serde_json::Value,
+        schema_file: &Path,
+    ) -> Result<(), ValidationError> {
+        let schema_str =
+            std::fs::read_to_string(schema_file).map_err(|e| ValidationError::SchemaRead {
+                path: schema_file.to_owned(),
+                error: e,
+            })?;
+        let schema_value: serde_json::Value = serde_json::from_str(&schema_str)?;
+        let validator = jsonschema::validator_for(&schema_value)
+            .map_err(|e| ValidationError::SchemaCompile(e.to_string()))?;
+        let errors: Vec<String> = validator
+            .iter_errors(value)
+            .map(|e| format!("  - {e}"))
+            .collect();
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(ValidationError::ValidationFailed(errors.join("\n")))
+        }
     }
 
     #[test]
