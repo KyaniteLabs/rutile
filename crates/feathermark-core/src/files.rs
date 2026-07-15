@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
 use super::{Document, DocumentSnapshot, MAX_DOCUMENT_BYTES};
 
 const UTF8_BOM: &[u8; 3] = b"\xef\xbb\xbf";
@@ -59,18 +62,54 @@ pub enum FileError {
     TooLarge { max: usize },
     #[error("target path does not name a file")]
     InvalidTarget,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SaveError {
+    #[error("file I/O failed: {0}")]
+    Io(#[from] io::Error),
+    #[error("target path does not name a file")]
+    InvalidTarget,
+    #[error("target is not a regular file")]
+    NotARegularFile,
+    #[error("target is a symlink")]
+    Symlink,
+    #[error("target has multiple hard links")]
+    HardLinked,
+    #[error("target is owned by a different user")]
+    OwnerMismatch,
+    #[error("failed to copy file metadata to temporary file")]
+    MetadataCopyFailed(#[source] io::Error),
     #[error("injected failure before atomic rename")]
     InjectedBeforeRename,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum DurabilityError {
+    #[error("file I/O failed: {0}")]
+    Io(#[from] io::Error),
+    #[error("injected failure after atomic rename")]
+    InjectedAfterRename,
+}
+
+#[derive(Debug)]
+pub enum SaveOutcome {
+    NotCommitted {
+        reason: SaveError,
+    },
+    Committed {
+        disk: DiskVersion,
+    },
+    CommittedDurabilityUnknown {
+        disk: DiskVersion,
+        reason: DurabilityError,
+    },
 }
 
 pub trait FileService {
     fn load(&self, path: &Path, max: usize) -> Result<LoadedDocument, FileError>;
 
-    fn save_atomic(
-        &self,
-        path: &Path,
-        snapshot: &DocumentSnapshot,
-    ) -> Result<DiskVersion, FileError>;
+    fn save_atomic(&self, path: &Path, snapshot: &DocumentSnapshot) -> SaveOutcome;
 
     fn inspect_external_change(
         &self,
@@ -95,6 +134,7 @@ pub enum SaveFault {
     #[default]
     None,
     BeforeRename,
+    AfterRename,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -141,39 +181,207 @@ impl FileService for LocalFileService {
         Ok(LoadedDocument { document, disk })
     }
 
-    fn save_atomic(
-        &self,
-        path: &Path,
-        snapshot: &DocumentSnapshot,
-    ) -> Result<DiskVersion, FileError> {
+    fn save_atomic(&self, path: &Path, snapshot: &DocumentSnapshot) -> SaveOutcome {
         let parent = normalized_parent(path);
-        let file_name = path.file_name().ok_or(FileError::InvalidTarget)?;
-        let (temporary_path, mut temporary_file) = create_same_directory_temp(parent, file_name)?;
+        let file_name = match path.file_name() {
+            Some(name) => name,
+            None => {
+                return SaveOutcome::NotCommitted {
+                    reason: SaveError::InvalidTarget,
+                };
+            }
+        };
+
+        let target = match classify_target(path) {
+            Ok(target) => target,
+            Err(reason) => return SaveOutcome::NotCommitted { reason },
+        };
+
+        let (temporary_path, mut temporary_file) =
+            match create_temporary_file(parent, file_name, Some(0o600)) {
+                Ok(pair) => pair,
+                Err(error) => {
+                    return SaveOutcome::NotCommitted {
+                        reason: SaveError::Io(error),
+                    };
+                }
+            };
         let mut cleanup = TempCleanup::new(temporary_path.clone());
 
         let mut writer = HashingWriter::new(&mut temporary_file);
-        snapshot.write_to(&mut writer)?;
-        writer.flush()?;
+        if let Err(error) = snapshot.write_to(&mut writer) {
+            return SaveOutcome::NotCommitted {
+                reason: SaveError::Io(error),
+            };
+        }
+        if let Err(error) = writer.flush() {
+            return SaveOutcome::NotCommitted {
+                reason: SaveError::Io(error),
+            };
+        }
         let digest = writer.finalize();
-        temporary_file.sync_all()?;
-
-        if self.fault == SaveFault::BeforeRename {
-            drop(temporary_file);
-            return Err(FileError::InjectedBeforeRename);
+        if let Err(error) = temporary_file.sync_all() {
+            return SaveOutcome::NotCommitted {
+                reason: SaveError::Io(error),
+            };
         }
 
-        drop(temporary_file);
-        fs::rename(&temporary_path, path)?;
-        cleanup.disarm();
-        sync_parent_directory(parent)?;
+        let temp_metadata = match fs::metadata(&temporary_path) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                return SaveOutcome::NotCommitted {
+                    reason: SaveError::Io(error),
+                };
+            }
+        };
 
-        let metadata = fs::metadata(path)?;
-        Ok(DiskVersion {
+        if let TargetClass::ExistingRegular { mode } = target {
+            #[cfg(unix)]
+            {
+                let permissions = std::fs::Permissions::from_mode(mode);
+                if let Err(error) = fs::set_permissions(&temporary_path, permissions) {
+                    return SaveOutcome::NotCommitted {
+                        reason: SaveError::MetadataCopyFailed(error),
+                    };
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = mode;
+            }
+        }
+
+        if self.fault == SaveFault::BeforeRename {
+            return SaveOutcome::NotCommitted {
+                reason: SaveError::InjectedBeforeRename,
+            };
+        }
+
+        if let Err(error) = fs::rename(&temporary_path, path) {
+            return SaveOutcome::NotCommitted {
+                reason: SaveError::Io(error),
+            };
+        }
+        cleanup.disarm();
+
+        let fallback_disk = DiskVersion {
             digest,
-            modified: metadata.modified()?,
-            len: metadata.len(),
-        })
+            modified: temp_metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+            len: temp_metadata.len(),
+        };
+
+        if self.fault == SaveFault::AfterRename {
+            return SaveOutcome::CommittedDurabilityUnknown {
+                disk: fallback_disk,
+                reason: DurabilityError::InjectedAfterRename,
+            };
+        }
+
+        if let Err(error) = sync_parent_directory(parent) {
+            return SaveOutcome::CommittedDurabilityUnknown {
+                disk: fallback_disk,
+                reason: DurabilityError::Io(error),
+            };
+        }
+
+        match fs::metadata(path) {
+            Ok(metadata) => match disk_version(digest, &metadata) {
+                Ok(disk) => SaveOutcome::Committed { disk },
+                Err(error) => SaveOutcome::CommittedDurabilityUnknown {
+                    disk: fallback_disk,
+                    reason: DurabilityError::Io(error),
+                },
+            },
+            Err(error) => SaveOutcome::CommittedDurabilityUnknown {
+                disk: fallback_disk,
+                reason: DurabilityError::Io(error),
+            },
+        }
     }
+}
+
+#[cfg(unix)]
+fn effective_uid() -> u32 {
+    // SAFETY: `libc::geteuid` has no preconditions and is thread-safe.
+    unsafe { libc::geteuid() }
+}
+
+enum TargetClass {
+    NewFile,
+    ExistingRegular { mode: u32 },
+}
+
+fn classify_target(path: &Path) -> Result<TargetClass, SaveError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(SaveError::Symlink);
+            }
+            if !metadata.file_type().is_file() {
+                return Err(SaveError::NotARegularFile);
+            }
+
+            #[cfg(unix)]
+            {
+                if metadata.nlink() > 1 {
+                    return Err(SaveError::HardLinked);
+                }
+                if metadata.uid() != effective_uid() {
+                    return Err(SaveError::OwnerMismatch);
+                }
+                let mode = metadata.mode();
+                Ok(TargetClass::ExistingRegular { mode })
+            }
+            #[cfg(not(unix))]
+            {
+                Ok(TargetClass::ExistingRegular { mode: 0o644 })
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(TargetClass::NewFile),
+        Err(error) => Err(SaveError::Io(error)),
+    }
+}
+
+fn disk_version(digest: blake3::Hash, metadata: &fs::Metadata) -> io::Result<DiskVersion> {
+    Ok(DiskVersion {
+        digest,
+        modified: metadata.modified()?,
+        len: metadata.len(),
+    })
+}
+
+fn create_temporary_file(
+    parent: &Path,
+    file_name: &OsStr,
+    mode: Option<u32>,
+) -> io::Result<(PathBuf, File)> {
+    for _ in 0..128 {
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let name = format!(
+            ".{}.feathermark-{}-{sequence}.tmp",
+            file_name.to_string_lossy(),
+            std::process::id()
+        );
+        let path = parent.join(name);
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if let Some(mode) = mode {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(mode);
+        }
+        #[cfg(not(unix))]
+        let _ = mode;
+        match options.open(&path) {
+            Ok(file) => return Ok((path, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not allocate a unique atomic-save temporary file",
+    ))
 }
 
 /// Coalesces noisy native watcher notifications until one complete quiet period.
@@ -280,24 +488,7 @@ fn create_same_directory_temp(
     parent: &Path,
     file_name: &std::ffi::OsStr,
 ) -> io::Result<(PathBuf, File)> {
-    for _ in 0..128 {
-        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let name = format!(
-            ".{}.feathermark-{}-{sequence}.tmp",
-            file_name.to_string_lossy(),
-            std::process::id()
-        );
-        let path = parent.join(name);
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(file) => return Ok((path, file)),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error),
-        }
-    }
-    Err(io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        "could not allocate a unique atomic-save temporary file",
-    ))
+    create_temporary_file(parent, file_name, None)
 }
 
 struct HashingWriter<'file> {

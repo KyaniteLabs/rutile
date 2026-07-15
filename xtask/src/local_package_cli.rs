@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use thiserror::Error;
 
+use crate::artifact_inspector::{ArtifactInspector, InspectionMode, InspectorError, PolicyPaths};
+
 use crate::local_package::{
     ArtifactManifest, CommandPlan, LINUX_ARCHIVE_NAME, LINUX_DEB_NAME, LINUX_RPM_NAME,
     LinuxPackageRequest, LocalPackageError, MACOS_DMG_NAME, MACOS_ZIP_NAME, MAX_ARTIFACT_BYTES,
@@ -33,6 +35,10 @@ pub enum LocalPackageCliError {
     ExecutableTooLarge { path: PathBuf, bytes: u64 },
     #[error("artifact exceeds maximum size: {path} ({bytes} bytes)")]
     ArtifactTooLarge { path: PathBuf, bytes: u64 },
+    #[error(transparent)]
+    Inspector(#[from] InspectorError),
+    #[error("artifact policy rejected {path}: {findings}")]
+    PolicyRejected { path: PathBuf, findings: String },
 }
 
 pub enum LocalPackageCliRequest {
@@ -73,10 +79,58 @@ pub fn run_local_package(
     request: LocalPackageCliRequest,
     executor: &dyn CommandExecutor,
 ) -> Result<Vec<ArtifactManifest>, LocalPackageCliError> {
-    match request {
+    let inspector = ArtifactInspector::load(&PolicyPaths::repository_defaults())?;
+    run_local_package_with_inspector(request, executor, &inspector)
+}
+
+pub fn run_local_package_with_inspector(
+    request: LocalPackageCliRequest,
+    executor: &dyn CommandExecutor,
+    inspector: &ArtifactInspector,
+) -> Result<Vec<ArtifactManifest>, LocalPackageCliError> {
+    let (candidate, output_root) = match &request {
+        LocalPackageCliRequest::Macos(request) => (&request.candidate, &request.output_root),
+        LocalPackageCliRequest::Linux(request) => (&request.candidate, &request.output_root),
+    };
+    enforce_inspection(inspector, candidate, InspectionMode::Candidate)?;
+    let output_root = output_root.clone();
+    let manifests = match request {
         LocalPackageCliRequest::Macos(request) => run_macos(request, executor),
         LocalPackageCliRequest::Linux(request) => run_linux(request, executor),
+    }?;
+    for manifest in &manifests {
+        enforce_inspection(
+            inspector,
+            &output_root.join(&manifest.artifact),
+            InspectionMode::Package,
+        )?;
     }
+    Ok(manifests)
+}
+
+#[doc(hidden)]
+pub fn enforce_inspection(
+    inspector: &ArtifactInspector,
+    path: &Path,
+    mode: InspectionMode,
+) -> Result<(), LocalPackageCliError> {
+    let report = inspector.inspect(path, mode);
+    if report.accepted && (mode == InspectionMode::Candidate || report.publication_authorized) {
+        return Ok(());
+    }
+    let mut findings = report
+        .findings
+        .iter()
+        .map(|finding| finding.code.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    if report.accepted && mode == InspectionMode::Package && !report.publication_authorized {
+        findings = "publication_not_authorized".into();
+    }
+    Err(LocalPackageCliError::PolicyRejected {
+        path: path.to_owned(),
+        findings,
+    })
 }
 
 fn run_macos(

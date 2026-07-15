@@ -1,5 +1,7 @@
 # Copy-Paste Prompt for a Lower-Cost Continuation Orchestrator
 
+> **Status: Superseded historical prompt.** The described 0.1.0 paused wave completed and 0.2.0 is now on `main`. Do not execute this prompt; use `docs/handoff/current-state.md`.
+
 Copy the text below as-is into a new agent working from the FeatherMark build worktree.
 
 ---

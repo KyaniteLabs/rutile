@@ -22,6 +22,11 @@ pub const MAX_EXPORT_TITLE_BYTES: usize = 512;
 /// styles.
 pub const MAX_EXPORT_PAGE_BYTES: usize = MAX_RENDERED_PAGE_BYTES;
 
+/// Content-Security-Policy for the exported file: deny by default, permit only
+/// the inline stylesheet and (future) inline data-URI images. Belt-and-suspenders
+/// over the [`ExportPage`] inspection for recipients whose viewer honors meta CSP.
+pub const EXPORT_CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'";
+
 /// A request to render the current document as a self-contained HTML page.
 ///
 /// Fields are private so every request is validated on construction.
@@ -84,6 +89,16 @@ pub enum ExportViolation {
     DataHtmlUrl,
     #[error("export page contains a CSS expression()")]
     CssExpression,
+    #[error("export page contains a <meta http-equiv=\"refresh\"> redirect")]
+    MetaRefresh,
+    #[error("export page contains navigation-capable metadata ({tag})")]
+    NavigationCapableMeta { tag: String },
+    #[error("export page contains duplicate CSP meta tags")]
+    DuplicateCsp,
+    #[error("export page is missing the required CSP meta tag")]
+    MissingCsp,
+    #[error("export page CSP meta has an unexpected value")]
+    CspMismatch,
     #[error("export page exceeds {max} bytes")]
     TooLarge { max: usize },
 }
@@ -149,10 +164,15 @@ impl ExportPage {
 /// `url()` are allowlisted to `data:` only (anything else is an external or
 /// relative reference); `@import` and `expression()` are rejected. `href` keeps
 /// http/https/mailto/relative anchors — they fetch nothing on open.
+///
+/// Complete HTML pages (those with a `<!doctype html>` or `<html>` element) must
+/// carry exactly one CSP meta tag whose `content` equals [`EXPORT_CSP`].
 fn inspect(html: &str) -> Result<(), ExportViolation> {
     let lower = html.to_ascii_lowercase();
     let bytes = lower.as_bytes();
     let mut index = 0;
+    let mut csp_count = 0;
+    let mut is_complete_page = false;
     while index < bytes.len() {
         if bytes[index] != b'<' {
             index += 1;
@@ -168,6 +188,9 @@ fn inspect(html: &str) -> Result<(), ExportViolation> {
         }
         // Declaration such as `<!doctype html>`: no attributes of concern.
         if bytes.get(index + 1) == Some(&b'!') {
+            if lower[index..].starts_with("<!doctype html") {
+                is_complete_page = true;
+            }
             index = match lower[index..].find('>') {
                 Some(offset) => index + offset + 1,
                 None => bytes.len(),
@@ -181,16 +204,31 @@ fn inspect(html: &str) -> Result<(), ExportViolation> {
         };
         let closing = inner.starts_with('/');
         let name = tag_name(inner);
+        if name == "html" {
+            is_complete_page = true;
+        }
         match name {
             "script" => return Err(ExportViolation::Script),
             "link" => return Err(ExportViolation::LinkElement),
             "iframe" | "frame" | "object" | "embed" | "applet" => {
                 return Err(ExportViolation::FrameOrObject);
             }
-            _ => {}
-        }
-        if !closing {
-            inspect_attributes(inner)?;
+            "base" | "form" => {
+                return Err(ExportViolation::NavigationCapableMeta {
+                    tag: name.to_owned(),
+                });
+            }
+            "meta" => {
+                inspect_attributes(inner)?;
+                if inspect_meta(inner)? {
+                    csp_count += 1;
+                }
+            }
+            _ => {
+                if !closing {
+                    inspect_attributes(inner)?;
+                }
+            }
         }
         index = after;
         // A `<style>` element's content is trusted CSS, but the allowlist still
@@ -203,6 +241,13 @@ fn inspect(html: &str) -> Result<(), ExportViolation> {
             inspect_css(&lower[index..css_end])?;
             index = css_end;
         }
+    }
+    if is_complete_page && csp_count != 1 {
+        return if csp_count == 0 {
+            Err(ExportViolation::MissingCsp)
+        } else {
+            Err(ExportViolation::DuplicateCsp)
+        };
     }
     Ok(())
 }
@@ -217,14 +262,18 @@ fn tag_name(inner: &str) -> &str {
         .unwrap_or("")
 }
 
-/// Walks the attributes of an opening tag and applies the allowlist to each.
-fn inspect_attributes(inner: &str) -> Result<(), ExportViolation> {
+/// Parses the attributes of a tag body into `(name, value)` pairs.
+///
+/// `inner` is expected to be lowercased; values are returned as they appear in
+/// `inner` (also lowercased because of the caller's preprocessing).
+fn parse_attributes(inner: &str) -> Vec<(&str, &str)> {
     let bytes = inner.as_bytes();
     let mut index = 0;
     // Skip the tag name.
     while index < bytes.len() && !bytes[index].is_ascii_whitespace() {
         index += 1;
     }
+    let mut attributes = Vec::new();
     while index < bytes.len() {
         while index < bytes.len() && (bytes[index].is_ascii_whitespace() || bytes[index] == b'/') {
             index += 1;
@@ -269,9 +318,45 @@ fn inspect_attributes(inner: &str) -> Result<(), ExportViolation> {
                 value = &inner[value_start..index];
             }
         }
+        attributes.push((name, value));
+    }
+    attributes
+}
+
+/// Walks the attributes of an opening tag and applies the allowlist to each.
+fn inspect_attributes(inner: &str) -> Result<(), ExportViolation> {
+    for (name, value) in parse_attributes(inner) {
         inspect_attribute(name, value)?;
     }
     Ok(())
+}
+
+/// Inspects a `<meta>` tag body. Returns `true` if it is the single allowed CSP
+/// meta, `false` for inert meta tags, and errors for navigation-capable metadata.
+fn inspect_meta(inner: &str) -> Result<bool, ExportViolation> {
+    let mut http_equiv = None;
+    let mut content = None;
+    for (name, value) in parse_attributes(inner) {
+        match name {
+            "http-equiv" => http_equiv = Some(value),
+            "content" => content = Some(value),
+            _ => {}
+        }
+    }
+    match http_equiv {
+        Some("refresh") => Err(ExportViolation::MetaRefresh),
+        Some("content-security-policy") => {
+            if content == Some(EXPORT_CSP) {
+                Ok(true)
+            } else {
+                Err(ExportViolation::CspMismatch)
+            }
+        }
+        Some(_) => Err(ExportViolation::NavigationCapableMeta {
+            tag: "meta http-equiv".to_owned(),
+        }),
+        None => Ok(false),
+    }
 }
 
 /// Applies the allowlist to a single `name="value"` attribute pair.
@@ -297,10 +382,31 @@ fn inspect_attribute(name: &str, value: &str) -> Result<(), ExportViolation> {
     match name {
         "src" | "poster" | "background" => classify_reference(value)?,
         "srcset" => return Err(ExportViolation::ExternalReference),
+        "href" => classify_href(value)?,
         "style" => inspect_css(value)?,
         _ => {}
     }
     Ok(())
+}
+
+/// Allowlists an `href` value to http/https/mailto targets and relative anchors.
+fn classify_href(reference: &str) -> Result<(), ExportViolation> {
+    let reference = reference.trim();
+    if reference.is_empty() {
+        return Err(ExportViolation::RelativeReference {
+            reference: reference.to_owned(),
+        });
+    }
+    if reference.starts_with("http:")
+        || reference.starts_with("https:")
+        || reference.starts_with("mailto:")
+        || reference.starts_with('#')
+    {
+        return Ok(());
+    }
+    Err(ExportViolation::RelativeReference {
+        reference: reference.to_owned(),
+    })
 }
 
 /// Allowlists a resource reference: only `data:` URLs load nothing external and

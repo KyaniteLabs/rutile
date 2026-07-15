@@ -223,7 +223,17 @@ fn tokenize(html: &str) -> Vec<Token> {
             index += 1;
         }
         let name = html[name_start..index].to_ascii_lowercase();
-        let (tag_end, self_closing) = scan_tag_end(bytes, index);
+        let (tag_end, self_closing, closed) = scan_tag_end(bytes, index);
+
+        // An unterminated `<name` (no closing `>` before the next `<` or EOF)
+        // is literal text, not a real element, so the prose survives conversion
+        // unchanged. Processing resumes at the next `<`, if any.
+        if !closed && !self_closing {
+            tokens.push(Token::Text(html[cursor..tag_end].to_string()));
+            text_start = tag_end;
+            cursor = tag_end;
+            continue;
+        }
 
         if is_end {
             tokens.push(Token::End { name });
@@ -289,8 +299,9 @@ fn skip_to_gt(bytes: &[u8], mut index: usize) -> usize {
 
 /// Find the end of a start/end tag beginning at `index` (just past the name),
 /// honoring quoted attribute values so a `>` inside a value is not the end.
-/// Returns the byte offset just past `>` and whether the tag self-closed.
-fn scan_tag_end(bytes: &[u8], mut index: usize) -> (usize, bool) {
+/// Returns the byte offset just past `>`, whether the tag self-closed, and
+/// whether a closing `>` was actually found for this tag.
+fn scan_tag_end(bytes: &[u8], mut index: usize) -> (usize, bool, bool) {
     let len = bytes.len();
     let mut quote: Option<u8> = None;
     let mut last_solidus = false;
@@ -308,7 +319,8 @@ fn scan_tag_end(bytes: &[u8], mut index: usize) -> (usize, bool) {
                     quote = Some(byte);
                     last_solidus = false;
                 }
-                b'>' => return (index + 1, last_solidus),
+                b'>' => return (index + 1, last_solidus, true),
+                b'<' => return (index, false, false),
                 b'/' => last_solidus = true,
                 b if b.is_ascii_whitespace() => {}
                 _ => last_solidus = false,
@@ -316,7 +328,7 @@ fn scan_tag_end(bytes: &[u8], mut index: usize) -> (usize, bool) {
         }
         index += 1;
     }
-    (len, false)
+    (len, false, false)
 }
 
 /// Skip the contents of a raw-text element up to and including its close tag.

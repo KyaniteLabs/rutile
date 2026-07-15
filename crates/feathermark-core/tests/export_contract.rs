@@ -1,9 +1,9 @@
 use feathermark_core::{
-    ExportError, ExportPage, ExportRequest, ExportViolation, MAX_EXPORT_PAGE_BYTES,
+    EXPORT_CSP, ExportError, ExportPage, ExportRequest, ExportViolation, MAX_EXPORT_PAGE_BYTES,
     MAX_EXPORT_TITLE_BYTES, MAX_RENDERED_PAGE_BYTES, RenderError, render_export_page,
 };
 
-const CLEAN_PAGE: &str = "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>Note</title>\n<style>:root{color-scheme:light dark}@media print{a{color:#000}}</style>\n</head>\n<body><h1>Note</h1><p>Hello <a href=\"https://example.com\">there</a>.</p></body>\n</html>\n";
+const CLEAN_PAGE: &str = "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'\">\n<title>Note</title>\n<style>:root{color-scheme:light dark}@media print{a{color:#000}}</style>\n</head>\n<body><h1>Note</h1><p>Hello <a href=\"https://example.com\">there</a>.</p></body>\n</html>\n";
 
 #[test]
 fn export_request_accepts_bounded_titles() {
@@ -433,5 +433,94 @@ fn export_page_allows_escaped_hostile_text_outside_tags() {
     assert!(
         ExportPage::from_html(page).is_ok(),
         "escaped text must not trip the tag-aware inspector"
+    );
+}
+
+#[test]
+fn export_validator_rejects_meta_refresh() {
+    let refresh = CLEAN_PAGE.replace(
+        "<meta charset=\"utf-8\">",
+        "<meta http-equiv=\"refresh\" content=\"0;url=https://evil.example\">",
+    );
+    assert!(matches!(
+        ExportPage::from_html(refresh),
+        Err(ExportViolation::MetaRefresh)
+    ));
+}
+
+#[test]
+fn export_validator_rejects_duplicate_csp() {
+    let with_extra = CLEAN_PAGE.replace(
+        "<meta charset=\"utf-8\">",
+        &format!(
+            "<meta charset=\"utf-8\">\n<meta http-equiv=\"Content-Security-Policy\" content=\"{EXPORT_CSP}\">"
+        ),
+    );
+    assert!(matches!(
+        ExportPage::from_html(with_extra),
+        Err(ExportViolation::DuplicateCsp)
+    ));
+}
+
+#[test]
+fn export_validator_rejects_missing_csp() {
+    let missing = CLEAN_PAGE.replace(
+        "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'\">\n",
+        "",
+    );
+    assert!(matches!(
+        ExportPage::from_html(missing),
+        Err(ExportViolation::MissingCsp)
+    ));
+}
+
+#[test]
+fn export_validator_rejects_navigation_capable_metadata() {
+    for injection in [
+        "<base href=\"https://evil.example\">",
+        "<form action=\"https://evil.example\"></form>",
+        "<meta http-equiv=\"set-cookie\" content=\"session=bad\">",
+    ] {
+        let html = CLEAN_PAGE.replace("</head>", &format!("{injection}\n</head>"));
+        assert!(
+            matches!(
+                ExportPage::from_html(html),
+                Err(ExportViolation::NavigationCapableMeta { .. })
+                    | Err(ExportViolation::MetaRefresh)
+            ),
+            "{injection} must be rejected as navigation-capable metadata"
+        );
+    }
+}
+
+#[test]
+fn export_validator_rejects_href_outside_allowlist() {
+    for href in [
+        "ftp://files.example/x",
+        "file:///etc/passwd",
+        "./local",
+        "/root",
+    ] {
+        let html = CLEAN_PAGE.replace("https://example.com", href);
+        assert!(
+            matches!(
+                ExportPage::from_html(html),
+                Err(ExportViolation::RelativeReference { .. })
+            ),
+            "href {href} must be rejected"
+        );
+    }
+}
+
+#[test]
+fn export_of_a_normal_document_passes_and_contains_exact_csp() {
+    let page = render_export_page("# Note\n\nHello.", &ExportRequest::new(1, None).unwrap())
+        .expect("normal document must export");
+    let html = page.as_html();
+    let expected =
+        format!("<meta http-equiv=\"Content-Security-Policy\" content=\"{EXPORT_CSP}\">");
+    assert!(
+        html.contains(&expected),
+        "exported document must contain the exact CSP meta; got:\n{html}"
     );
 }

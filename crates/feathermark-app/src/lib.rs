@@ -15,6 +15,7 @@ pub mod brand;
 pub mod platform;
 pub mod preview_host;
 pub mod render_scheduler;
+pub mod session_core;
 
 /// Dispatches to the selected native adapter. With no platform feature this is
 /// intentionally a no-op so the headless contracts remain testable everywhere.

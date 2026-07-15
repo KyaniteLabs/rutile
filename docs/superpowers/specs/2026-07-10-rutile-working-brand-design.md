@@ -1,5 +1,7 @@
 # Rutile Working Brand Design
 
+> **Status: Implemented historical design decision.** Rutile remains the user-facing name in 0.2.0 while technical `feathermark` identifiers remain intentionally stable.
+
 **Status:** Approved by the user on 2026-07-10 with “just do rutile for now” and “go.”
 
 ## Goal
@@ -43,4 +45,3 @@ No icon, color-system, URL, or legal/trademark change is included because Rutile
 - Packaging tests assert Rutile display names while asserting that technical `feathermark` identifiers remain unchanged.
 - A final reference audit distinguishes permitted internal/historical `FeatherMark` references from unintended product-facing references.
 - `cargo test --workspace --all-targets --locked` and platform-appropriate build checks must pass before completion is claimed.
-

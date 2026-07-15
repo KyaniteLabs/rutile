@@ -2,10 +2,10 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use feathermark_core::{
-    AutosaveEntryV1, AutosaveError, AutosaveStore, ChangeSet, Counts, DiskVersion, Document, Edit,
-    EditError, EditPlan, EditTransaction, ExportError, ExportRequest, ExternalResolution,
-    FindDirection, FindQuery, FormatCommand, RecoveredDocument, RenderError, ReplaceSpec,
-    SESSION_SCHEMA_V1, Selection, SessionSelectionV1, SessionStateV1, SessionWindowV1,
+    AutosaveEntryV1, AutosaveError, AutosaveRecordOutcome, AutosaveStore, ChangeSet, Counts,
+    DiskVersion, Document, Edit, EditError, EditPlan, EditTransaction, ExportError, ExportRequest,
+    ExternalResolution, FindDirection, FindQuery, FormatCommand, RecoveredDocument, RenderError,
+    ReplaceSpec, SESSION_SCHEMA_V1, Selection, SessionSelectionV1, SessionStateV1, SessionWindowV1,
     TransactionKind, apply_format, render_export_page, smart_enter,
 };
 use feathermark_protocol::PreviewEventV1;
@@ -51,6 +51,30 @@ pub enum CloseOutcome {
     KeepOpen,
 }
 
+/// Severity of a [`UserNotice`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NoticeSeverity {
+    Info,
+    Warning,
+    Error,
+}
+
+/// A durable, user-visible notice produced by the reducer.
+///
+/// Notices are persisted in [`AppState::notices`] so the native shell can render
+/// them on its next view update and keep them across reducer messages until the
+/// user dismisses them.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UserNotice {
+    pub id: usize,
+    pub severity: NoticeSeverity,
+    pub message: String,
+    pub source_error: String,
+    pub action_label: Option<String>,
+    pub shown: bool,
+    pub dismissed: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AppMessage {
     NewDocument,
@@ -63,6 +87,11 @@ pub enum AppMessage {
         revision: Revision,
     },
     SaveCompleted {
+        revision: Revision,
+        path: PathBuf,
+        disk: DiskVersion,
+    },
+    SaveDurabilityUnknown {
         revision: Revision,
         path: PathBuf,
         disk: DiskVersion,
@@ -83,6 +112,51 @@ pub enum AppMessage {
         error: RenderError,
     },
     PreviewEvent(PreviewEventV1),
+    // --- Wave 2-A: shared shell-integration command/status bus ---------------
+    OpenDocument {
+        path: PathBuf,
+    },
+    OpenRequestCompleted {
+        result: Result<(Revision, PathBuf, DiskVersion), String>,
+    },
+    SaveRequested,
+    SaveAsRequested {
+        path: PathBuf,
+    },
+    CloseRequested {
+        decision: CloseDecision,
+    },
+    AutosaveTick,
+    AutosaveCompleted {
+        result: Result<AutosaveRecordOutcome, String>,
+    },
+    RecoveryAdopted {
+        document: RecoveredDocument,
+    },
+    RecoveryDismissed,
+    SessionRestored {
+        state: SessionStateV1,
+    },
+    NoticeDismissed {
+        id: usize,
+    },
+    /// Generic durable notice injection for platform shells.
+    ///
+    /// Use this for save/restore/open-policy warnings and other non-open
+    /// failures. Do **not** route those through [`AppMessage::OpenRequestCompleted`]
+    /// Err — that path always prefixes `"Could not open document:"` and forces
+    /// [`NoticeSeverity::Error`].
+    SurfaceNotice {
+        severity: NoticeSeverity,
+        message: String,
+        source_error: String,
+    },
+    MirrorFailed {
+        error: String,
+    },
+    MirrorResyncCompleted {
+        result: Result<(), String>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -114,6 +188,26 @@ pub enum AppEffect {
     IgnoredStale {
         revision: Revision,
     },
+    // --- Wave 2-A: shared shell-integration effects --------------------------
+    PerformOpen {
+        path: PathBuf,
+    },
+    PerformSave {
+        path: PathBuf,
+    },
+    PerformSaveAs {
+        path: PathBuf,
+    },
+    PerformAutosave,
+    PerformRecovery,
+    PerformSessionRestore,
+    PresentNotice {
+        notice: UserNotice,
+    },
+    /// Full authoritative editor/preview mirror resync after an incremental failure.
+    PerformMirrorResync,
+    RequestCloseDecision,
+    QuitApplication,
 }
 
 #[derive(Debug, Default)]
@@ -127,8 +221,16 @@ pub struct AppState {
     // Wave 2S shared shell-integration state.
     find: Option<FindSession>,
     autosave: Option<AutosaveStore>,
-    autosave_sequence: u64,
     next_transaction_id: u64,
+    // Wave 2-A: durable user notices.
+    notices: Vec<UserNotice>,
+    next_notice_id: usize,
+    /// True while a one-shot full mirror resync is outstanding.
+    ///
+    /// Incremental mirror failure triggers exactly one full authoritative resync.
+    /// A second failure while the resync is outstanding, or a failed resync
+    /// completion, surfaces a durable [`UserNotice`] instead of looping forever.
+    mirror_resync_pending: bool,
 }
 
 impl AppState {
@@ -158,6 +260,45 @@ impl AppState {
 
     pub fn external_conflict(&self) -> Option<&DiskVersion> {
         self.external_conflict.as_ref()
+    }
+
+    /// Borrows the active user notices.
+    pub fn notices(&self) -> &[UserNotice] {
+        &self.notices
+    }
+
+    /// Pushes a new notice and returns a clone for immediate presentation.
+    fn push_notice(
+        &mut self,
+        severity: NoticeSeverity,
+        message: impl Into<String>,
+        source_error: impl Into<String>,
+    ) -> UserNotice {
+        let id = self.next_notice_id;
+        self.next_notice_id = self.next_notice_id.saturating_add(1);
+        let notice = UserNotice {
+            id,
+            severity,
+            message: message.into(),
+            source_error: source_error.into(),
+            action_label: None,
+            shown: false,
+            dismissed: false,
+        };
+        self.notices.push(notice.clone());
+        notice
+    }
+
+    /// Marks the notice with `id` as dismissed, if it exists.
+    fn dismiss_notice(&mut self, id: usize) {
+        if let Some(notice) = self.notices.iter_mut().find(|n| n.id == id) {
+            notice.dismissed = true;
+        }
+    }
+
+    /// Removes dismissed notices from the active list.
+    fn gc_dismissed_notices(&mut self) {
+        self.notices.retain(|notice| !notice.dismissed);
     }
 
     pub fn reduce(&mut self, message: AppMessage) -> Vec<AppEffect> {
@@ -205,6 +346,24 @@ impl AppState {
                 vec![]
             }
             AppMessage::SaveCompleted { revision, .. } => {
+                vec![AppEffect::IgnoredStale { revision }]
+            }
+            AppMessage::SaveDurabilityUnknown {
+                revision,
+                path,
+                disk,
+            } if revision == self.revision => {
+                // The atomic rename committed but parent-directory durability
+                // could not be verified. Keep dirty set so the user can re-save
+                // to flush the directory, but record the disk version/path so
+                // external-change detection can proceed.
+                self.dirty = true;
+                self.path = Some(path);
+                self.saved_disk = Some(disk);
+                self.external_conflict = None;
+                vec![]
+            }
+            AppMessage::SaveDurabilityUnknown { revision, .. } => {
                 vec![AppEffect::IgnoredStale { revision }]
             }
             AppMessage::SaveFailed { revision } if revision == self.revision => {
@@ -269,6 +428,142 @@ impl AppState {
                 vec![AppEffect::IgnoredStale { revision }]
             }
             AppMessage::PreviewEvent(event) => self.reduce_preview_event(event),
+            // --- Wave 2-A: shared shell-integration reducer handling -----------
+            AppMessage::OpenDocument { path } => {
+                vec![AppEffect::PerformOpen { path }]
+            }
+            AppMessage::OpenRequestCompleted { result } => match result {
+                Ok((revision, path, disk)) => {
+                    self.revision = revision;
+                    self.dirty = false;
+                    self.path = Some(path);
+                    self.saved_disk = Some(disk);
+                    self.external_conflict = None;
+                    self.preview = PreviewState::Waiting { revision };
+                    vec![AppEffect::ScheduleRender { revision }]
+                }
+                Err(error) => {
+                    let notice = self.push_notice(
+                        NoticeSeverity::Error,
+                        format!("Could not open document: {error}"),
+                        &error,
+                    );
+                    vec![AppEffect::PresentNotice { notice }]
+                }
+            },
+            AppMessage::SaveRequested => {
+                let Some(path) = self.path.clone() else {
+                    return vec![AppEffect::RequestCloseDecision];
+                };
+                if self.dirty {
+                    vec![AppEffect::PerformSave { path }]
+                } else {
+                    vec![]
+                }
+            }
+            AppMessage::SaveAsRequested { path } => {
+                if self.dirty {
+                    vec![AppEffect::PerformSaveAs { path }]
+                } else {
+                    vec![]
+                }
+            }
+            AppMessage::CloseRequested { decision } => match decision {
+                CloseDecision::Save { untitled_path } => {
+                    let path = self.path.clone().or(untitled_path);
+                    let Some(path) = path else {
+                        return vec![AppEffect::RequestCloseDecision];
+                    };
+                    if self.dirty {
+                        vec![AppEffect::PerformSave { path }]
+                    } else {
+                        vec![AppEffect::QuitApplication]
+                    }
+                }
+                CloseDecision::Discard => vec![AppEffect::QuitApplication],
+                CloseDecision::Cancel => vec![],
+            },
+            AppMessage::AutosaveTick => {
+                if self.dirty && self.autosave.is_some() {
+                    vec![AppEffect::PerformAutosave]
+                } else {
+                    vec![]
+                }
+            }
+            AppMessage::AutosaveCompleted { result } => match result {
+                Ok(_outcome) => {
+                    // The autosave entry has already been written by the shell.
+                    // Nothing further to record in reducer state at this layer.
+                    vec![]
+                }
+                Err(error) => {
+                    let notice = self.push_notice(
+                        NoticeSeverity::Warning,
+                        format!("Autosave failed: {error}"),
+                        &error,
+                    );
+                    vec![AppEffect::PresentNotice { notice }]
+                }
+            },
+            AppMessage::RecoveryAdopted { document } => {
+                let document_path = document.entry.document_path.as_ref().map(PathBuf::from);
+                self.adopt_recovered(&document.document, document_path)
+            }
+            AppMessage::RecoveryDismissed => {
+                // The recovery modal was dismissed; keep the empty/new state.
+                vec![]
+            }
+            AppMessage::SessionRestored { state } => {
+                let restore = self.restore_session(&state);
+                if let Some(path) = restore.last_file {
+                    vec![AppEffect::PerformOpen { path }]
+                } else {
+                    vec![]
+                }
+            }
+            AppMessage::NoticeDismissed { id } => {
+                self.dismiss_notice(id);
+                self.gc_dismissed_notices();
+                vec![]
+            }
+            AppMessage::SurfaceNotice {
+                severity,
+                message,
+                source_error,
+            } => {
+                let notice = self.push_notice(severity, message, source_error);
+                vec![AppEffect::PresentNotice { notice }]
+            }
+            AppMessage::MirrorFailed { error } => {
+                // Contract: one full authoritative resync after incremental failure.
+                // If a resync is already outstanding (or already failed without
+                // clearing), surface a durable notice rather than retry forever.
+                if self.mirror_resync_pending {
+                    let notice = self.push_notice(
+                        NoticeSeverity::Error,
+                        format!("Preview mirror failed: {error}"),
+                        &error,
+                    );
+                    vec![AppEffect::PresentNotice { notice }]
+                } else {
+                    self.mirror_resync_pending = true;
+                    vec![AppEffect::PerformMirrorResync]
+                }
+            }
+            AppMessage::MirrorResyncCompleted { result } => {
+                self.mirror_resync_pending = false;
+                match result {
+                    Ok(()) => vec![],
+                    Err(error) => {
+                        let notice = self.push_notice(
+                            NoticeSeverity::Error,
+                            format!("Preview mirror could not resync: {error}"),
+                            &error,
+                        );
+                        vec![AppEffect::PresentNotice { notice }]
+                    }
+                }
+            }
         }
     }
 
@@ -311,7 +606,7 @@ impl AppState {
 ///
 /// These methods are the vocabulary both platform lanes bind native input to.
 /// Every mutating action takes `&mut Document` and routes its
-/// [`EditPlan`](feathermark_core::EditPlan)s through the existing transaction
+/// [`EditPlan`]s through the existing transaction
 /// path (`into_transaction` → `Document::apply`), then advances the reducer via
 /// [`AppMessage::DocumentEdited`] so the render pipeline behaves exactly as it
 /// does for typed edits. See [`crate::actions`] for the state-authority note.
@@ -575,11 +870,10 @@ impl AppState {
 
     // --- autosave / session -------------------------------------------------
 
-    /// Binds the autosave/session store this state owns, priming the next
-    /// autosave sequence from any existing journal so recovery-then-continue
-    /// keeps monotonically increasing sequences.
+    /// Binds the autosave/session store this state owns. Sequence allocation
+    /// is internal to the store, so recovery-then-continue keeps monotonically
+    /// increasing sequences without caller bookkeeping.
     pub fn bind_autosave(&mut self, store: AutosaveStore) -> Result<(), AutosaveError> {
-        self.autosave_sequence = store.next_sequence()?;
         self.autosave = Some(store);
         Ok(())
     }
@@ -599,24 +893,17 @@ impl AppState {
         let Some(store) = self.autosave.clone() else {
             return Ok(None);
         };
-        let sequence = self.autosave_sequence;
         let snapshot = document.snapshot();
         let document_path = self.path().map(|path| path.to_string_lossy().into_owned());
-        let entry = store.record(
-            sequence,
-            &snapshot,
-            document_path.as_deref(),
-            captured_at_unix_ms,
-        )?;
-        self.autosave_sequence = self.autosave_sequence.saturating_add(1);
-        Ok(Some(entry))
+        let outcome = store.record(&snapshot, document_path.as_deref(), captured_at_unix_ms)?;
+        Ok(Some(outcome.entry))
     }
 
     /// Recovery-on-startup: returns the highest verifiable autosaved document,
     /// or `None` when there is nothing to recover / no store is bound.
     pub fn recover(&self) -> Result<Option<RecoveredDocument>, AutosaveError> {
         match &self.autosave {
-            Some(store) => store.recover(),
+            Some(store) => Ok(store.recover()?.recovered),
             None => Ok(None),
         }
     }

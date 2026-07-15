@@ -1,18 +1,21 @@
 # FeatherMark fuzz targets
 
-`preview_event` exercises the real bounded protocol decoder and is the evidence-bearing Task 1A
-target. Its exact input grammar is an eight-byte little-endian loaded revision followed by one
-newline-terminated preview-event NDJSON frame. Inputs shorter than eight bytes exercise the
-explicit harness error path without calling the decoder. Successful decodes assert revision,
-scroll-bound, and canonical-link invariants.
+> **Status: Current.** The fuzz workspace uses a pinned nightly toolchain and exercises four production protocol/core surfaces.
 
-The `corpus/render_markdown/` and `corpus/source_blocks/` directories remain unchanged as
-Task-1A-owned reserved, non-evidence seed data. Their former no-op harnesses and bins are removed.
-Task 1C alone recreates real harnesses against its typed-render/source-block owner and may then
-claim these corpora as evidence.
+| Target | Production surface | Main invariants |
+|---|---|---|
+| `preview_event` | `feathermark-protocol` decoder | Bounded typed decode, loaded-revision equality, scroll bounds, canonical safe links |
+| `render_markdown` | Markdown renderer and source-block validator | Output byte caps, balanced allowlisted HTML, fixed internal assets/CSP, valid source mapping |
+| `source_blocks` | Source-block builder/validator | Ordered non-overlapping blocks, byte caps, continuation typing |
+| `html_to_markdown` | Smart-paste converter plus renderer | Bounded conversion, no executable HTML/schemes, safe re-rendering |
 
-Pinned evidence command:
+Run deterministic smoke passes from the repository root:
 
 ```sh
 cargo +nightly-2026-07-01 fuzz run --fuzz-dir fuzz preview_event -- -runs=10000 -seed=1
+cargo +nightly-2026-07-01 fuzz run --fuzz-dir fuzz render_markdown -- -runs=10000 -seed=1
+cargo +nightly-2026-07-01 fuzz run --fuzz-dir fuzz source_blocks -- -runs=10000 -seed=1
+cargo +nightly-2026-07-01 fuzz run --fuzz-dir fuzz html_to_markdown -- -runs=10000 -seed=1
 ```
+
+Corpus and crash artifacts live under `fuzz/corpus/<target>/` and `fuzz/artifacts/<target>/`. Do not describe a run as evidence-bearing unless its command, seed/run budget, toolchain, source revision, and retained artifacts are recorded with the result.

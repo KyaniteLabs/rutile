@@ -1,4 +1,4 @@
-host: Simon’s MacBook Air (MacBook Air, arm64)
+host: Apple Silicon arm64 verification host
 macOS: 26.5.1 build 25F80
 WebKit/Safari: 26.5
 WKWebView framework: 

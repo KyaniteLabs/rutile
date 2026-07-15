@@ -12,6 +12,8 @@
 //! journal (referenced by bare file name only — path traversal is
 //! unrepresentable). Session restore is a single [`SessionStateV1`] record.
 
+use std::path::Path;
+
 use feathermark_types::Revision;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
@@ -225,6 +227,12 @@ fn validate_path(path: &str) -> Result<(), SessionError> {
     }
     if path.len() > MAX_SESSION_PATH_BYTES {
         return Err(SessionError::InvalidMetadata("path exceeds its byte cap"));
+    }
+    if path.contains('\0') {
+        return Err(SessionError::InvalidMetadata("path must not contain NUL"));
+    }
+    if !Path::new(path).is_absolute() {
+        return Err(SessionError::InvalidMetadata("path must be absolute"));
     }
     Ok(())
 }

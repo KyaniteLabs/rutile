@@ -1,0 +1,223 @@
+# SPDX-License-Identifier: MIT
+#
+# FeatherMark Rutile release pipeline (Forgejo Actions / GitHub Actions compatible).
+#
+# Triggers ONLY from a protected clean v* tag. It re-runs the entire verify
+# pipeline at release profile on the exact tagged commit (so shipped artifacts
+# passed release-profile gates on the tag's tree), then guards that the tag
+# commit/tree match the checked-out HEAD exactly and that the tree is clean,
+# generates and binds provenance, and retains raw logs + machine-readable
+# evidence.
+#
+# Required-check enforcement from verify.yml is additionally bound through
+# branch protection (status checks); that wiring is recorded in wiring_needed.
+#
+# Jobs marked "needs: external" require an authenticated runner or a signing
+# identity that cannot be auto-provisioned; the provenance job fails closed
+# (listing hard blockers) until the Phase B provenance keystone and manual owner
+# approval are in place.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: short
+  FORGEJO_RUNNER_NAME: ${{ vars.FORGEJO_RUNNER_NAME || '' }}
+
+jobs:
+  # 1. Guard the tag: must be v*, clean, exact commit/tree match.
+  tag-guard:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      commit: ${{ steps.identity.outputs.commit }}
+      tree: ${{ steps.identity.outputs.tree }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: assert protected clean v* tag with exact commit/tree match
+        id: identity
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF##*/}"
+          case "$tag" in
+            v*) ;;
+            *) echo "release: refusing non-v* tag: $tag" >&2; exit 2 ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          head_commit="$(git rev-parse HEAD)"
+          tag_commit="$(git rev-list -n 1 "$tag")"
+          if [ "$head_commit" != "$tag_commit" ]; then
+            echo "release: HEAD ($head_commit) != tag commit ($tag_commit)" >&2
+            exit 2
+          fi
+          if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+            echo "release: working tree is dirty" >&2
+            exit 2
+          fi
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "commit=$head_commit" >> "$GITHUB_OUTPUT"
+          echo "tree=$tree" >> "$GITHUB_OUTPUT"
+          # Require the tagged commit to be reachable from the protected branch
+          # tip (main), so a tag on an unmerged commit cannot ship.
+          if ! git merge-base --is-ancestor "$head_commit" origin/main; then
+            echo "release: tagged commit is not an ancestor of origin/main" >&2
+            exit 2
+          fi
+          echo "release: tag=$tag commit=$head_commit tree=$tree (clean, on main)"
+
+  # 2. Re-run the full verify pipeline at release profile on the tagged tree.
+  #    verify.yml gates emit rutile.gate-result.v1 under target/evidence/.
+  verify-release:
+    needs: tag-guard
+    uses: ./.forgejo/workflows/verify.yml
+    with:
+      profile: release
+    # Required-status-check enforcement for the v* branch is additionally bound
+    # through branch protection; see wiring_needed.
+
+  # 3. Clean packages from the tagged clean tree (exact commit/tree match).
+  release-package:
+    # needs: external — packaging runner per kind; signing identity external.
+    needs: [tag-guard, verify-release]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - kind: macos
+            features: macos-shell
+            runs-on: [self-hosted, macos, arm64]
+          - kind: linux
+            features: linux-gtk
+            runs-on: [self-hosted, linux, x11]
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.tag-guard.outputs.commit }}
+          fetch-depth: 0
+      - uses: Swatinem/rust-cache@v2
+      - name: assert exact tagged commit/tree
+        run: |
+          set -euo pipefail
+          [ "$(git rev-parse HEAD)" = "${{ needs.tag-guard.outputs.commit }}" ] || { echo "commit mismatch"; exit 2; }
+          [ "$(git rev-parse 'HEAD^{tree}')" = "${{ needs.tag-guard.outputs.tree }}" ] || { echo "tree mismatch"; exit 2; }
+          [ -z "$(git status --porcelain --untracked-files=all)" ] || { echo "dirty tree"; exit 2; }
+      - name: bootstrap toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
+      - name: build featured release candidate from clean tree
+        run: cargo build --locked --release -p feathermark-app --features ${{ matrix.features }} --bin feathermark
+      - name: package + inspect (release)
+        run: |
+          bash scripts/ci/package-inspect.sh \
+            --candidate target/release/feathermark \
+            --kind ${{ matrix.kind }} \
+            --profile release \
+            --job release-package-${{ matrix.kind }}
+      - name: retain packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-packages-${{ matrix.kind }}
+          path: target/evidence/**/packages/
+          if-no-files-found: warn
+          retention-days: 365
+      - name: retain evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-evidence-package-${{ matrix.kind }}
+          path: target/evidence/
+          if-no-files-found: error
+          retention-days: 365
+
+  # 4. Generate + bind provenance. The canonical provenance keystone (which
+  #    produces the fully-attested release-prerequisite-preflight document from
+  #    runner probes + signing identities + owner approval) lands in Phase B.
+  #    Today this job consumes an attested preflight inventory (committed or
+  #    supplied via PREFLIGHT_INPUT) and runs the real `xtask release-preflight`
+  #    command, which validates the inventory's commit/tree against the live
+  #    repository and fails closed (listing hard blockers) until the inventory
+  #    is regenerated for the tag and result.ready becomes true. No input or
+  #    output is fabricated: a missing or stale inventory fails closed.
+  provenance:
+    # needs: external — signing identity (Apple notary / GPG) and owner approval.
+    needs: [tag-guard, release-package]
+    runs-on: ubuntu-latest
+    env:
+      # Canonical attested inventory path; override via workflow env to supply a
+      # tag-specific attestation once the Phase B generator exists.
+      PREFLIGHT_INPUT: release/evidence/release-prerequisite-preflight-v1.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.tag-guard.outputs.commit }}
+          fetch-depth: 0
+      - name: bootstrap toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal --no-self-update
+      - name: validate attested preflight inventory (real command; fails closed)
+        # release-preflight parses the full rutile.release-prerequisite-preflight.v1
+        # document, asserts its source commit/tree match the checked-out tag
+        # exactly, and reports readiness. Until the Phase B generator produces a
+        # matching inventory and the owner approves the protected tag, this step
+        # exits non-zero and blocks publication of the release.
+        run: |
+          set -euo pipefail
+          if [ ! -f "$PREFLIGHT_INPUT" ]; then
+            echo "release: no attested preflight inventory at $PREFLIGHT_INPUT (Phase B provenance generator required)" >&2
+            exit 2
+          fi
+          mkdir -p release/evidence/provenance
+          cargo run --locked -p xtask --bin xtask -- release-preflight \
+            --input "$PREFLIGHT_INPUT" \
+            --out release/evidence/provenance/
+      - name: retain preflight evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-preflight
+          path: |
+            release/evidence/
+            ${{ env.PREFLIGHT_INPUT }}
+          if-no-files-found: warn
+          retention-days: 365
+
+  # 5. Retain raw logs + machine-readable evidence; final fail-on-skip gate.
+  evidence-retention:
+    needs: [tag-guard, verify-release, release-package, provenance]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.tag-guard.outputs.commit }}
+          fetch-depth: 0
+      - name: merge all release evidence
+        uses: actions/download-artifact@v4
+        with:
+          path: target/evidence
+          pattern: release-evidence-*
+          merge-multiple: true
+      - name: validate release evidence (fail-on-skip)
+        run: |
+          bash scripts/ci/evidence-finalize.sh \
+            --required release-package-macos,release-package-linux \
+            --fail-on-dirty \
+            --job release-evidence
+      - name: retain final release evidence (long retention)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-evidence-final
+          path: |
+            target/evidence/
+            release/evidence/
+          if-no-files-found: error
+          retention-days: 365

@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://feathermark.local/schemas/rutile.production-provenance.v1.schema.json",
+  "title": "Rutile production provenance v1",
+  "description": "Derived build provenance binding a production candidate to its source tree, toolchain, exact enabled cargo features, reproducibility controls, and candidate artifact hash. Every field is measured from the build environment rather than caller-asserted; a production candidate must originate from a clean tree, must not enable the test-control feature, and must remap path prefixes for reproducibility.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "version",
+    "product",
+    "product_version",
+    "source_commit",
+    "source_tree_clean",
+    "toolchain",
+    "features",
+    "candidate_sha256",
+    "reproducibility",
+    "built_at"
+  ],
+  "properties": {
+    "schema": { "const": "rutile.production-provenance.v1" },
+    "version": { "const": 1 },
+    "product": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z][A-Za-z0-9 _.-]*$"
+    },
+    "product_version": { "$ref": "#/$defs/semver" },
+    "source_commit": { "$ref": "#/$defs/gitCommit40" },
+    "source_tree_clean": { "const": true },
+    "source_tag": {
+      "description": "Clean detached signed tag naming this release (for example v0.2.0). Optional; absent when the candidate is built from an untagged commit.",
+      "$ref": "#/$defs/gitTag"
+    },
+    "toolchain": { "$ref": "#/$defs/toolchain" },
+    "features": { "$ref": "#/$defs/features" },
+    "candidate_sha256": { "$ref": "#/$defs/sha256" },
+    "reproducibility": { "$ref": "#/$defs/reproducibility" },
+    "built_at": {
+      "description": "ISO-8601 build completion timestamp, for example 2026-07-14T00:00:00Z.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "gitCommit40": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "semver": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$"
+    },
+    "gitTag": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._/+-]*$",
+      "not": {
+        "pattern": "(?i:(\\.\\.|lock|token|secret|credentials|password|/Users/|/home/|/private/))"
+      }
+    },
+    "triple": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9_]+(-[a-z0-9_]+){2,}$"
+    },
+    "toolchain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rustc_version", "host_triple", "target_triple"],
+      "properties": {
+        "rustc_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^(rustc )?[0-9]+\\.[0-9]+\\.[0-9]+",
+          "not": { "pattern": "(?i:(token|secret|password|BEGIN PRIVATE KEY))" }
+        },
+        "host_triple": { "$ref": "#/$defs/triple" },
+        "target_triple": { "$ref": "#/$defs/triple" }
+      }
+    },
+    "features": {
+      "description": "Exactly the cargo features enabled on the candidate build, in canonical order. The test-control feature must be absent: it gates instrumented test-only lifecycle behavior and is forbidden in production artifacts.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
+      },
+      "not": { "contains": { "const": "test-control" } }
+    },
+    "reproducibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_date_epoch", "remap_path_prefix", "target_root"],
+      "properties": {
+        "source_date_epoch": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4102444800
+        },
+        "remap_path_prefix": { "const": true },
+        "target_root": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9._/-]+$",
+          "not": {
+            "pattern": "(?i:(^/|\\.\\.|token|secret|credentials|password|/Users/|/home/|/private/|/var/folders/))"
+          }
+        }
+      }
+    }
+  }
+}

@@ -402,3 +402,61 @@ fn many_raw_text_tags_do_not_blow_up_quadratically() {
     // <style> content is dropped entirely, so the output is empty/whitespace.
     assert!(markdown.trim().is_empty());
 }
+
+#[test]
+fn unterminated_tag_like_text_is_preserved_literally() {
+    let markdown = convert("This is a <tag");
+    let rendered = render_markdown(&markdown, 1).expect("rendered markdown");
+    assert!(
+        rendered.body.contains("&lt;tag"),
+        "unterminated tag must survive as literal text; got markdown: {markdown}"
+    );
+    // A later genuine tag still parses normally.
+    let markdown2 = convert("a <tag and <p>real</p>");
+    let rendered2 = render_markdown(&markdown2, 1).expect("rendered markdown");
+    assert!(rendered2.body.contains("&lt;tag"));
+    assert!(rendered2.body.contains("<p>"));
+}
+
+#[test]
+fn inert_prose_containing_security_keywords_is_preserved() {
+    // Entity-encoded hostile-looking tokens must survive as literal prose.
+    let cases = [
+        (
+            "<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>",
+            "&lt;script&gt;alert(1)&lt;/script&gt;",
+        ),
+        (
+            "<p>&lt;img onerror=alert(1)&gt;</p>",
+            "&lt;img onerror=alert(1)&gt;",
+        ),
+    ];
+    for (html, expected_rendered) in cases {
+        let markdown = html_to_markdown(html).expect("conversion should succeed");
+        let rendered = render_markdown(&markdown, 1).expect("rendered markdown");
+        assert!(
+            rendered.body.contains(expected_rendered),
+            "literal security keyword prose must be preserved; got markdown: {markdown}"
+        );
+        assert!(
+            !rendered.body.to_ascii_lowercase().contains("<script"),
+            "must not leak a real script element"
+        );
+    }
+
+    // Bare security-scheme strings in prose stay literal (not links or scripts).
+    let js = convert("<p>javascript:alert(1)</p>");
+    let rendered_js = render_markdown(&js, 1).expect("rendered markdown");
+    assert!(
+        rendered_js.body.contains("javascript:alert(1)"),
+        "literal javascript: prose must be preserved"
+    );
+    assert!(!rendered_js.body.contains("href=\"javascript:"));
+
+    let url = convert("<p>url(http://evil.example/x.png)</p>");
+    let rendered_url = render_markdown(&url, 1).expect("rendered markdown");
+    assert!(
+        rendered_url.body.contains("url(http://evil.example/x.png)"),
+        "literal url(http…) prose must be preserved"
+    );
+}

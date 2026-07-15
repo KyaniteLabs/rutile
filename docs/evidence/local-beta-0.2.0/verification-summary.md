@@ -1,5 +1,7 @@
 # Rutile / FeatherMark 0.2.0 — Verification Summary
 
+> **Post-release audit annotation — 2026-07-12:** This receipt accurately records the commands and hashes used for 0.2.0, but its release-readiness conclusion is superseded. The Linux packages were built with `test-control`, and both platform binaries embed absolute builder paths. Do not redistribute these artifacts. Rebuild from a feature-clean target with path remapping and artifact leak checks. See `docs/handoff/current-state.md` and the 2026-07-12 UltraQA remediation plan.
+
 **Source commit:** `119c02cdb27db01f328224143a8ed7c917a41815` (branch `release/0.2.0`, cut from `main` `0496df6`)
 **Evidence generated:** 2026-07-11T18:41:46Z
 **Scope:** minor release. 0.2.0 = 0.1.1 + the 0.2 feature waves (auto-format engine §6, recipient-grade self-contained HTML export §7, QoL set §9), rebuilt, retested, and repackaged on both platforms with the locked xtask driver.
@@ -29,7 +31,7 @@ The workspace `Cargo.lock` resolves `pulldown-cmark 0.13.4` with no `source` fie
 
 ## Build & Test Receipts
 
-### macOS (Simon's MacBook Air — Apple Silicon arm64, rustc 1.88.0)
+### macOS (Apple Silicon arm64 verification host, rustc 1.88.0)
 
 | Gate | Command | Result |
 |------|---------|--------|

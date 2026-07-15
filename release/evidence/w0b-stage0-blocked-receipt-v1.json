@@ -1,0 +1,29 @@
+{
+  "schema": "rutile.w0b-stage0-blocked-receipt.v1",
+  "version": 1,
+  "status": "blocked",
+  "scope": "dirty-local-reproduction-only",
+  "source": {
+    "commit": "47c23f57274be89b84d119f803612665677f0654",
+    "tree": "fd3a6ea283351cd29ae215b0a37dc413e803ec12",
+    "dirty": true
+  },
+  "original_receipt_sha256": "4e58eb43a56826f8d461f11a5dd79116a00521bbaea45f9038e725f0c0fbd6e4",
+  "logical_receipt_id": "native-smoke/wave0-pr/run-1783924839408-56526-0",
+  "started_unix_ms": 1783924839410,
+  "ended_unix_ms": 1783924871269,
+  "tests": {
+    "total": 10,
+    "passed": 0,
+    "failed": 1,
+    "skipped": 9
+  },
+  "run": {
+    "status": "failed",
+    "reaped": true,
+    "stage_traces": 1,
+    "resize_traces": 0,
+    "failure": "parent-deadline-exceeded"
+  },
+  "summary": "The supervised macOS native smoke failed at stage 0. This sanitized receipt binds the private local receipt by SHA-256 and is not release-readiness evidence."
+}

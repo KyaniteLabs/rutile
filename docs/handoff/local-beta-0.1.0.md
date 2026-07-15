@@ -1,8 +1,10 @@
 # FeatherMark Local Beta 0.1.0 — Handoff Document
 
+> **Status: Historical release snapshot.** Superseded by Rutile 0.2.0. Commands, paths, hashes, and state below intentionally describe the 0.1.0 release only.
+
 **Date:** 2026-07-10  
 **Branch:** `feat/feathermark-build`  
-**Worktree:** `/Users/simongonzalezdecruz/workspaces/feathermark/.worktrees/feathermark-build`  
+**Worktree:** `<repo>/.worktrees/feathermark-build`
 **Release commit:** `6a47ef8` — `release: package FeatherMark local beta artifacts`  
 **Source commit for artifacts:** `1fd504996666d1d95cbc520e084c9e15f1ccc763`
 
@@ -91,7 +93,7 @@ All artifacts are in the hosts' `target/package-final/` directories.
 ### macOS
 
 ```bash
-cd /Users/simongonzalezdecruz/workspaces/feathermark/.worktrees/feathermark-build
+cd /path/to/feathermark/.worktrees/feathermark-build
 
 git checkout 6a47ef8
 
@@ -195,7 +197,7 @@ You are picking up the FeatherMark local beta branch.
 
 Current state:
 - Branch: feat/feathermark-build
-- Worktree: /Users/simongonzalezdecruz/workspaces/feathermark/.worktrees/feathermark-build
+- Worktree: `<repo>/.worktrees/feathermark-build`
 - Release commit: 6a47ef8
 - Source commit for beta artifacts: 1fd504996666d1d95cbc520e084c9e15f1ccc763
 

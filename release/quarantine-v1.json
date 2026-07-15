@@ -1,0 +1,36 @@
+{
+  "schema": "rutile.artifact-quarantine.v1",
+  "version": 1,
+  "entries": [
+    {
+      "sha256": "952124f6ae6948727f06f92e2fbfd8e4d495d01987fd1bcf7c371eb4fb7b666f",
+      "artifact": "Rutile-0.2.0-macos-arm64.app.zip",
+      "reason": "Absolute builder-path leakage was found during the 2026-07-12 release audit.",
+      "discovered_at": "2026-07-12"
+    },
+    {
+      "sha256": "2d7b34b074852d744e833dcddddd8ac3f37644a77ff1f80979555a5ce876e18a",
+      "artifact": "Rutile-0.2.0-macos-arm64.dmg",
+      "reason": "Absolute builder-path leakage was found during the 2026-07-12 release audit.",
+      "discovered_at": "2026-07-12"
+    },
+    {
+      "sha256": "8e50e66c69fb0a3edcf99843b9d6d45953e1480f273d59294e0bff7136a9941d",
+      "artifact": "Rutile-0.2.0-linux-x86_64.tar.zst",
+      "reason": "Instrumented test-control behavior and absolute builder-path leakage were found during the 2026-07-12 release audit.",
+      "discovered_at": "2026-07-12"
+    },
+    {
+      "sha256": "6f42d2bc68ffa31f86779a93c7f38af288a77779b652dbe98963348e8ced887a",
+      "artifact": "feathermark_0.2.0_amd64.deb",
+      "reason": "Instrumented test-control behavior and absolute builder-path leakage were found during the 2026-07-12 release audit.",
+      "discovered_at": "2026-07-12"
+    },
+    {
+      "sha256": "2b8fbf0405e8e87abb323d9be7ee47aaee12dc2ceaf7aa403e89d3901c8eca11",
+      "artifact": "feathermark-0.2.0-1.x86_64.rpm",
+      "reason": "Instrumented test-control behavior and absolute builder-path leakage were found during the 2026-07-12 release audit.",
+      "discovered_at": "2026-07-12"
+    }
+  ]
+}

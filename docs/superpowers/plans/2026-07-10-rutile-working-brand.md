@@ -1,5 +1,7 @@
 # Rutile Working Brand Implementation Plan
 
+> **Status: Completed historical plan.** The user-facing brand contract and packaging display names are implemented in 0.2.0; technical identifiers remain unchanged by design.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Rebrand the completed native beta’s current user-facing surfaces from FeatherMark to Rutile while preserving migration-sensitive technical identifiers.
@@ -81,4 +83,3 @@
 - [ ] Run a focused `rg` audit over current application and packaging sources; classify remaining FeatherMark references as technical or historical.
 - [ ] Run the macOS feature build check: `cargo check -p feathermark-app --no-default-features --features macos-shell --locked`.
 - [ ] Record the changed-file list and test receipts in the final handoff; do not push.
-

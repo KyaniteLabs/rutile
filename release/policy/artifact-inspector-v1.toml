@@ -1,0 +1,39 @@
+schema = "rutile.artifact-inspector-policy.v1"
+version = 1
+max_entries = 256
+max_uncompressed_bytes = 67108864
+expected_license = "MIT"
+expected_version = "0.2.0"
+expected_source_commit = "119c02cdb27db01f328224143a8ed7c917a41815"
+
+test_control_environment = [
+  "FEATHERMARK_AUTOMATED_TEST",
+  "FEATHERMARK_LIFECYCLE_CYCLE",
+  "FEATHERMARK_PRODUCT_FUNCTIONAL_PATH",
+  "FEATHERMARK_SMOKE_AUTOCLOSE_MS",
+  "FEATHERMARK_STARTUP_TRACE",
+  "FEATHERMARK_TEST_CONTROL",
+  "RUTILE_AUTOMATED_TEST",
+  "RUTILE_TEST_CONTROL",
+]
+
+forbidden_patterns = [
+  "--native-smoke",
+  "FEATHERMARK_AUTOMATED_TEST",
+  "FEATHERMARK_LIFECYCLE_CYCLE",
+  "FEATHERMARK_PRODUCT_FUNCTIONAL_PATH",
+  "FEATHERMARK_SMOKE_AUTOCLOSE_MS",
+  "FEATHERMARK_STARTUP_TRACE",
+  "FEATHERMARK_TEST_CONTROL",
+  "RUTILE_AUTOMATED_TEST",
+  "RUTILE_TEST_CONTROL",
+  "/Users/",
+  "/home/",
+  "/private/tmp/",
+  "/var/folders/",
+  "CARGO_MANIFEST_DIR=",
+  "BEGIN PRIVATE KEY",
+  "Authorization: Bearer ",
+  "api_key=",
+  "access_token=",
+]

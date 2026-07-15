@@ -1,5 +1,7 @@
 # FeatherMark End-to-End Completion Implementation Plan
 
+> **Status: Completed historical 0.1.0 plan.** Do not execute its version-locked commands against the 0.2.0 tree; use `docs/handoff/current-state.md` and the current release handoff.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: use `superpowers:executing-plans` for an assigned lane and `superpowers:test-driven-development` for every behavior change. Reviewers use `superpowers:requesting-code-review` or the repository's equivalent read-only review protocol.
 
 **Goal:** Finish FeatherMark as a usable local macOS arm64 and Linux x86_64 Rust-native Markdown editor, package the reviewed binaries, and retain explicit evidence debt for infrastructure that is not available.

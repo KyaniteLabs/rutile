@@ -1,187 +1,92 @@
-# FeatherMark Paused-State Handoff
+# Rutile Current-State Handoff
 
-> **Execution authority:** `docs/superpowers/plans/2026-07-10-feathermark-end-to-end-completion.md`. This file records paused-state facts; it does not reopen any decision made by the authoritative plan.
+> **Status: Current.** Reconciled with `main` on 2026-07-12. This file supersedes the paused-state handoff formerly stored at this path.
 
 ## BLUF
 
-Work paused at the user's request. All active workers were interrupted, and no build, remote verification, or smoke process remained running at pause time.
+Rutile 0.2.0 is merged on `main`, tagged `v0.2.0`, and backed by checked-in macOS arm64 and Linux x86_64 verification evidence. A 2026-07-12 adversarial audit invalidated the packages for redistribution: the Linux artifacts contain `test-control` behavior and both platform binaries expose builder paths. Keep them quarantined as historical evidence until clean replacements are built.
 
-The current dirty tree is valuable and must be preserved. It contains the newest macOS/Linux product-shell corrections and local packaging implementation, but it has not received a final integrated test/review/commit.
+The earlier 0.1.0 paused native-shell/package wave is complete and historical. Do not resume `docs/handoff/continuation-plan.md`, `docs/handoff/cheap-model-prompt.md`, or `docs/superpowers/plans/2026-07-10-feathermark-end-to-end-completion.md` as live instructions.
 
-## Repository state at pause
+Wave 0-C retained preflight evidence is [`release/evidence/release-prerequisite-preflight-v1.json`](../../release/evidence/release-prerequisite-preflight-v1.json). It records unavailable authority as hard blockers; it is not release authorization. Forgejo macOS arm64/Linux x86_64 runner capabilities, Apple Developer ID/notarization authority, Linux GPG verification, protected `v*` tags and manual owner approval, artifact retention, and clean install hosts must be independently attested. The current command only retains a create-only blocked inventory; no public-publication helper exists. Wave 3 must replace it with an authenticated release job. Local package commands remain local-only and do not imply publication authority. The sanitized [`W0-B blocked receipt`](../../release/evidence/w0b-stage0-blocked-receipt-v1.json) separately retains the dirty local stage-0 reproduction and is not release-readiness evidence.
 
-- Branch: `feat/feathermark-build`
-- Remote branch head: `1728480889cc519161272b14ca9b3fac92c3924f`
-- Local HEAD: same pushed commit
-- Dirty tracked files: 11
-- New product/package files: 6
-- Durable `.omx` state remains untracked and must not be deleted
+## Repository and release state
 
-Recent commits:
+- Branch: `main`
+- Remote tracking: `origin/main`
+- Current documentation baseline before this pass: `2238b58`
+- Release merge: `b69035a`
+- Release tag: `v0.2.0`
+- Version-bump/source commit used for 0.2.0 artifacts: `119c02cdb27db01f328224143a8ed7c917a41815`
+- Evidence commit: `c9bafb0`
+- Workspace/crate version: `0.2.0`
+- Rust toolchain: `1.88.0`, edition 2024
 
-```text
-1728480 feat: add bounded FeatherMark app core
-5270736 feat: implement FeatherMark core and native seams
-7491e37 fix(native-runner): enforce measured probe deadline
-```
+The tag points to the release merge while `main` contains a later documentation handoff commit. No product-code commit follows the tagged release.
 
-## Files in the paused dirty wave
+## Product state
 
-Tracked modifications:
+Implemented across the native shells, with the platform gaps below:
 
-```text
-Cargo.lock
-crates/feathermark-app/Cargo.toml
-crates/feathermark-app/src/app.rs
-crates/feathermark-app/src/main.rs
-crates/feathermark-app/src/platform/linux_gtk.rs
-crates/feathermark-app/src/platform/macos.rs
-crates/feathermark-app/src/preview_host.rs
-crates/feathermark-app/src/render_scheduler.rs
-crates/feathermark-app/tests/app_reducer.rs
-crates/feathermark-app/tests/preview_host.rs
-xtask/src/lib.rs
-```
+- native source editing and system-webview preview;
+- incremental edits, IME, undo/redo, atomic save, and dirty-close handling; Linux has external-file conflict handling, while macOS does not;
+- revisioned two-way source/preview scrolling;
+- formatting commands and smart list continuation;
+- find/replace, counts, reading-time estimate, smart paste, autosave/recovery, and partial session restoration;
+- self-contained HTML save/copy export;
+- bounded rendering, protocol, navigation, and link-safety contracts.
 
-New files:
+macOS can open a document supplied as its first positional CLI argument, but the packaged app has no Open/Save As UI or app-open event handler. Linux discards the parsed positional path before launching GTK. Neither package installs complete Markdown file associations or default-viewer integration.
 
-```text
-crates/feathermark-app/src/platform/macos/editor.rs
-crates/feathermark-app/src/platform/macos/native.rs
-crates/feathermark-app/tests/linux_product.rs
-crates/feathermark-app/tests/macos_product.rs
-xtask/src/local_package.rs
-xtask/tests/local_package.rs
-```
+## Verification and artifacts
 
-## Verified committed baseline
+Canonical release receipts:
 
-The pushed baseline is independently reviewed and includes:
+- `docs/handoff/local-beta-0.2.0.md`
+- `docs/evidence/local-beta-0.2.0/verification-summary.md`
+- `docs/evidence/local-beta-0.2.0/manifest-index.json`
 
-- production document/history/editor core;
-- typed secure renderer and fuzz targets;
-- atomic file service;
-- revisioned scroll engine;
-- real native seam proofs;
-- bounded app reducer/scheduler/preview host;
-- exact protocol and fixed bridge security boundary.
+Local, gitignored artifacts were recorded under `target/package-final-0.2.0/` when the release was built. Their hashes are preserved in the handoff/evidence bundle; their continued local presence is not guaranteed by Git.
 
-Do not redo or replace that baseline.
+Historical release rows (verification receipts, not current distribution approval):
 
-## Mac dirty-wave state
+- macOS arm64: tests, formatting, strict clippy, dependency policy, release build, app ZIP/DMG packaging, remount, and ad-hoc code-sign verification.
+- Linux x86_64/X11: formatting, strict clippy, product tests, 50-cycle WebKitGTK lifecycle, release build, tar/DEB/RPM packaging, and DEB install smoke.
 
-### Verified before the final correction pass
+The Linux release build in that row used `linux-gtk,test-control`; it is not a feature-clean production binary. Both packaged binaries also contain absolute builder paths. The receipts remain accurate descriptions of what ran, but their earlier release-readiness conclusion is superseded.
 
-- Real Iced compositor and presented editor pixels
-- Child WKWebView preview
-- Exact 50/50 resize and focus transfer
-- Centralized `AppState` path, saved `DiskVersion`, and external conflict state
-- Bounded typed preview-scroll emission
-- Explicit `WebContext` and WebView-first teardown
-- Typed dirty-close domain and native Save / Discard / Cancel UI
-- IPC health/backpressure accounting; required loss/disconnect is fatal
+## Known debt
 
-Latest real smoke before pause included presented frames, non-background pixels, IME commits, resize, focus transfers, and preview scroll events.
+- Quarantine and rebuild every 0.2.0 package without test-only features, with path remapping and binary/archive leak scans.
+- Fix macOS save semantics: untitled `Command-S` is a silent no-op, save failure exits the app, standard command-key editing shortcuts are swallowed, and external changes can be overwritten.
+- Replace title-only recovery/close prompts with accessible modal flows; do not permit edits that a later recovery action can discard.
+- Preserve permissions and metadata when atomically replacing an existing file.
+- Serialize autosave record/prune transactions and expose corrupt recovery candidates, pruning failures, and session persistence failures.
+- Harden arbitrary export validation against navigation-capable metadata and add content-preserving malformed smart-paste behavior.
+- Replace Linux's ignored document path, 100 Hz polling, transient title errors, and swallowed mirror/autosave failures.
+- Add checked-in Forgejo CI with explicit native feature suites, production-binary gates, fuzz/dependency policy, packaging, and artifact inspection.
+- Correct package license/SBOM/provenance/signing metadata; the RPM currently says `Proprietary` while the workspace says MIT.
+- Intel macOS build and runtime verification for 0.2.0 (older evidence does not certify this release).
+- Native Wayland runtime/lifecycle verification for 0.2.0 (older evidence does not certify this release).
+- RPM installation verification for 0.2.0 on an RPM-based host.
+- Developer ID signing and notarization.
+- GPG/package signing.
+- Independent-builder reproduction for the 0.2.0 source/artifact pipeline.
+- Complete document-open/file-association/default-viewer behavior, especially Linux CLI open and macOS bundle document declarations.
+- The hermetic compile-contract fixture still needs a cached crates.io `pulldown-cmark 0.13.4` tarball on a fresh host because the temporary fixture does not inherit the workspace patch.
 
-### Corrections implemented but not finally integrated/approved
+## Documentation authority
 
-- `IcedEditorAdapter` incremental edit path with typed `AdapterCommitId`
-- typed composition API, undo/redo, ack/reject, external-change hooks
-- real revisioned two-way scroll controller
-- native close UI and untitled save panel
-- explicit WebContext retention
-- 1 MiB and 5 MiB incremental edit test passed in 163.85 seconds with zero whole-buffer reads/replacements during the edit
+Use these in order:
 
-### Mac work still required after pause
+1. `README.md` — entry point, features, build/run commands, limits, and documentation map.
+2. `docs/architecture.md` — implemented ownership and runtime boundaries.
+3. This file — live operational state and open debt.
+4. `docs/handoff/local-beta-0.2.0.md` and `docs/evidence/local-beta-0.2.0/` — immutable release receipts.
+5. `DESIGN-SYSTEM.md` — current visual rules for document/export surfaces and implemented shell direction.
 
-- Run the complete macOS app suite after all latest editor/scroll/close changes.
-- Confirm real WindowEvent IME, native undo/redo, paint acknowledgement, and safe close through production runtime—not only isolated helpers.
-- Rerun clippy, formatting, release build, and native smoke.
-- Run an independent final macOS review.
+Everything in `docs/plan/`, `docs/research/`, versioned old handoffs, and dated `docs/superpowers/` files is provenance unless its header explicitly says **Current**.
 
-## Linux dirty-wave state
+## Safe next step
 
-### Closed implementation seams
-
-- Real incremental GtkSourceView adapter and typed commit acknowledgement
-- Typed GTK IME one-apply/ack/paint and stale-preedit handling
-- O(1) Rope snapshot handoff to render worker; no UI-thread whole-source flatten
-- Revisioned bidirectional scroll with interaction IDs and echo suppression
-- Centralized path/saved-version/conflict state
-- External reload/conflict resolution via reducer and file service
-- Production generated-source exact read-only mode
-- Explicit `WebContext`/`WebView` ownership and WebView-first close
-- Persistent split/resize/focus/lifecycle callbacks
-- Real product-functional edit/save/reopen process passed on Linux X11
-
-### Latest independent Linux review
-
-All code seams above were accepted. One remaining defect/evidence gap remained:
-
-- The deterministic 50-cycle real WebKitGTK lifecycle runner was not reproducible on the exact synced tree. The process sometimes stopped before GTK `activate` under the X11/session-bus harness. The Linux worker was interrupted while fixing GApplication/session activation and rerunning exactly 50 real ready/close cycles.
-
-Do not cite an earlier claimed `50/50` result as final proof; the independent rerun contradicted it.
-
-### Linux work required after pause
-
-1. Inspect the partially modified lifecycle launcher.
-2. Make application/session activation deterministic under the configured X11 runner.
-3. Run exactly 50 real product or native WebKitGTK cycles.
-4. Retain 50 ready receipts and 50 `webview_first=true closed=true` receipts with zero failures.
-5. Rerun the independent Linux review.
-
-Native Wayland is still unproven because no live Wayland session was available.
-
-## Packaging dirty-wave state
-
-Implemented and locally green before pause:
-
-- `xtask::local_package` module
-- macOS arm64 app/DMG command plans and hash manifests
-- Linux x86_64 tar.zst plans and runtime dependency metadata
-- Mach-O/ELF validation
-- traversal and symlink rejection
-- exact honesty labels
-- seven focused tests and strict xtask clippy
-
-Still required:
-
-- independent packaging review;
-- an audited CLI/driver entrypoint;
-- actual package creation from the final reviewed product binary;
-- installed/package smoke and hash verification.
-
-## External infrastructure truth
-
-The original plan's exact five-runner matrix is not available. In particular, the live fleet does not provide the required Intel macOS row or a native Wayland graphical row. The user explicitly directed the build to continue end-to-end and treat those as evidence debt.
-
-Do not mint fake manifests, weaken runner checks, or claim a five-platform release.
-
-## First commands on resume
-
-```bash
-git status --short
-git diff --check
-git diff --stat
-cargo check --locked -p feathermark-app
-cargo test --locked -p xtask --test local_package --no-run
-```
-
-Then inspect compile failures and current tests before assigning new edits. Do not run destructive Git commands.
-
-## Review history pattern
-
-Green tests repeatedly missed real product defects. The successful workflow was:
-
-1. implement with red/green tests;
-2. independent spec review;
-3. fix every Blocker/High finding;
-4. rerun live native receipts;
-5. independent rereview;
-6. only then commit and push.
-
-Continue that pattern. Do not accept startup-only smoke, state-only UI, helper-only production claims, or generic drop spies as end-to-end proof.
-
-## Locked next execution shape
-
-The continuation is not an open-ended redesign. Resume with one shared-contract freeze, then three simultaneous non-overlapping implementation lanes for macOS, Linux, and packaging, then three simultaneous independent reviews. Release artifact building splits into independent macOS and Linux lanes after the integrated source tree is clean and reviewed. The orchestrator alone integrates and creates the five commits named in the authoritative plan.
+For product work, start with the full remediation plan produced by the 2026-07-12 UltraQA audit. Release blockers and data-integrity risks come before new feature work. Treat default-viewer/document-open support as a real product feature: it is not solved by the existing macOS positional argument alone.

@@ -19,12 +19,14 @@ use feathermark_core::{
     apply_editor_commit,
 };
 use feathermark_core::{
-    AutosaveEntryV1, AutosaveStore, Counts, FindDirection, FindQuery, FormatCommand, MatchMode,
-    RecoveredDocument, Selection, SessionStateV1, SessionWindowV1, html_to_markdown,
+    AutosaveEntryV1, AutosaveRecordOutcome, AutosaveStore, Counts, FindDirection, FindQuery,
+    FormatCommand, MatchMode, RecoveredDocument, Selection, SessionStateV1, SessionWindowV1,
+    html_to_markdown,
 };
 use feathermark_protocol::RenderUrl;
 use feathermark_types::{InteractionId, Revision};
 use gtk::gdk::keys::constants as keys;
+use gtk::gio::prelude::ApplicationExtManual;
 use gtk::prelude::*;
 use sourceview4::prelude::*;
 use wry::http::{Response, StatusCode};
@@ -46,7 +48,64 @@ use crate::render_scheduler::{
 const APP_ID: &str = "tech.kyanitelabs.feathermark";
 const INITIAL_WIDTH: u32 = 1100;
 const INITIAL_HEIGHT: u32 = 760;
-const RENDER_POLL_MS: u64 = 10;
+/// Bounded, debounced external-disk polling cadence (LNX-004). The previous
+/// design ran a single 10 ms (100 Hz) omnibus timer that drained editor events,
+/// polled the render worker, inspected the disk, and refreshed chrome. Wave 2-C
+/// replaces that with channel-driven wakeups (editor events and render
+/// completions arrive on a `glib::MainContext` channel and wake the loop only
+/// when there is work) plus this standalone, debounced disk inspector. 1 Hz
+/// keeps idle CPU well under the 1%-of-one-core budget while still surfacing
+/// external edits promptly.
+const DISK_POLL_MS: u64 = 1_000;
+/// Clipboard `(target_name, info_id)` pairs published by copy-as-HTML (LNX-005).
+/// HTML is first so rich pastes win; the plain-text fallbacks cover every
+/// conventional `text/plain`/`STRING` requestor.
+const CLIPBOARD_HTML_TARGETS: [(&str, u32); 5] = [
+    ("text/html", 0),
+    ("UTF8_STRING", 1),
+    ("text/plain", 2),
+    ("text/plain;charset=utf-8", 3),
+    ("STRING", 4),
+];
+
+/// Wakes the GTK main-loop handler when editor or render work is pending.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LoopWakeup {
+    Work,
+}
+
+/// Result of applying the Linux multi-file open policy (INT-001): exactly one
+/// primary path is opened; additional paths are counted and surfaced as a
+/// warning rather than opened in parallel.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LinuxOpenDelivery {
+    pub primary: Option<PathBuf>,
+    pub ignored_extra_count: usize,
+    pub warning: Option<String>,
+}
+
+/// Plans which path the shared open command should load. Non-file paths are
+/// rejected; when multiple files arrive (cold launch or second-instance `%f`
+/// delivery) only the first is opened and the rest are reported.
+pub fn plan_open_delivery(paths: Vec<PathBuf>) -> LinuxOpenDelivery {
+    let mut iter = paths.into_iter();
+    let primary = iter.next();
+    let extras: Vec<PathBuf> = iter.collect();
+    let ignored_extra_count = extras.len();
+    let warning = if ignored_extra_count == 0 {
+        None
+    } else {
+        Some(format!(
+            "Opened only the first of {} files; additional paths were ignored",
+            ignored_extra_count.saturating_add(1)
+        ))
+    };
+    LinuxOpenDelivery {
+        primary,
+        ignored_extra_count,
+        warning,
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct IncrementalAdapterStats {
@@ -831,8 +890,8 @@ impl PlatformAdapter for LinuxGtkAdapter {
 /// callbacks enter through these methods; document, render, file, and preview
 /// authority remain in the shared Rust contracts.
 pub struct LinuxProductSession {
-    app: AppState,
-    document: Document,
+    /// Sole AppState/Document authority (Wave 2-A DocumentSessionCore).
+    core: crate::session_core::DocumentSessionCore,
     scheduler: RenderScheduler,
     preview_host: PreviewHost,
     generated_source: Option<(Revision, Arc<str>)>,
@@ -862,8 +921,7 @@ impl LinuxProductSession {
             }
         }
         Ok(Self {
-            app,
-            document,
+            core: crate::session_core::DocumentSessionCore::from_parts(app, document),
             scheduler,
             preview_host: PreviewHost::new(),
             generated_source: None,
@@ -877,26 +935,29 @@ impl LinuxProductSession {
     }
 
     pub fn revision(&self) -> Revision {
-        self.document.revision()
+        self.core.document().revision()
     }
 
     pub fn dirty(&self) -> bool {
-        self.app.dirty()
+        self.core.app().dirty()
     }
 
     pub fn has_external_conflict(&self) -> bool {
-        self.app.external_conflict().is_some()
+        self.core.app().external_conflict().is_some()
     }
 
     pub fn preview_ready(&self) -> bool {
-        matches!(self.app.preview(), crate::app::PreviewState::Ready { .. })
+        matches!(
+            self.core.app().preview(),
+            crate::app::PreviewState::Ready { .. }
+        )
     }
 
     pub fn source(&self) -> String {
         let mut stats = self.stats.get();
         stats.ui_full_source_flattens = stats.ui_full_source_flattens.saturating_add(1);
         self.stats.set(stats);
-        self.document.snapshot().to_string()
+        self.core.document().snapshot().to_string()
     }
 
     pub fn stats(&self) -> LinuxSessionStats {
@@ -904,7 +965,7 @@ impl LinuxProductSession {
     }
 
     pub fn path(&self) -> Option<&Path> {
-        self.app.path()
+        self.core.app().path()
     }
 
     pub fn preview_host(&self) -> &PreviewHost {
@@ -929,20 +990,22 @@ impl LinuxProductSession {
             .next_transaction_id
             .checked_add(1)
             .ok_or_else(|| "transaction id overflow".to_owned())?;
-        let revision = self.document.revision();
+        let revision = self.core.document().revision();
+        let document_len = self.core.document().len_bytes();
         let change = self
-            .document
+            .core
+            .document_mut()
             .apply(EditTransaction {
                 base_revision: revision,
                 id: self.next_transaction_id,
                 kind: TransactionKind::Programmatic,
                 edits: vec![Edit {
-                    byte_range: 0..self.document.len_bytes(),
+                    byte_range: 0..document_len,
                     replacement: replacement.to_owned(),
                 }],
             })
             .map_err(|error| error.to_string())?;
-        for effect in self.app.reduce(AppMessage::DocumentEdited {
+        for effect in self.core.reduce(AppMessage::DocumentEdited {
             revision: change.after,
         }) {
             if let AppEffect::ScheduleRender { revision } = effect {
@@ -963,21 +1026,22 @@ impl LinuxProductSession {
     }
 
     pub fn undo_change(&mut self, now_ms: u64) -> Option<ChangeSet> {
-        let change = self.document.undo()?;
+        let change = self.core.document_mut().undo()?;
         self.schedule_changed_revision(change.after, now_ms);
         Some(change)
     }
 
     pub fn redo_change(&mut self, now_ms: u64) -> Option<ChangeSet> {
-        let change = self.document.redo()?;
+        let change = self.core.document_mut().redo()?;
         self.schedule_changed_revision(change.after, now_ms);
         Some(change)
     }
 
     pub fn new_document(&mut self, now_ms: u64) -> Result<(), String> {
-        self.document = Document::new("").map_err(|error| error.to_string())?;
+        self.core
+            .set_document(Document::new("").map_err(|error| error.to_string())?);
         self.closed = false;
-        for effect in self.app.reduce(AppMessage::NewDocument) {
+        for effect in self.core.reduce(AppMessage::NewDocument) {
             if let AppEffect::ScheduleRender { revision } = effect {
                 self.scheduler
                     .submit(RenderRequest::new(revision, Arc::from("")), now_ms);
@@ -991,10 +1055,10 @@ impl LinuxProductSession {
             .file_service
             .load(path, feathermark_core::MAX_DOCUMENT_BYTES)
             .map_err(|error| error.to_string())?;
-        self.document = loaded.document;
+        self.core.set_document(loaded.document);
         self.closed = false;
-        let revision = self.document.revision();
-        for effect in self.app.reduce(AppMessage::DocumentOpened {
+        let revision = self.core.document().revision();
+        for effect in self.core.reduce(AppMessage::DocumentOpened {
             revision,
             path: path.to_path_buf(),
             disk: loaded.disk,
@@ -1008,7 +1072,8 @@ impl LinuxProductSession {
 
     pub fn save(&mut self) -> Result<(), String> {
         let path = self
-            .app
+            .core
+            .app_mut()
             .path()
             .map(Path::to_path_buf)
             .ok_or_else(|| "save requires a document path".to_owned())?;
@@ -1016,42 +1081,62 @@ impl LinuxProductSession {
     }
 
     pub fn save_as(&mut self, path: &Path) -> Result<(), String> {
-        let revision = self.document.revision();
-        let disk = self
+        let revision = self.core.document().revision();
+        let path_buf = path.to_path_buf();
+        let outcome = self
             .file_service
-            .save_atomic(path, &self.document.snapshot())
-            .map_err(|error| error.to_string())?;
-        self.app.reduce(AppMessage::SaveCompleted {
-            revision,
-            path: path.to_path_buf(),
-            disk,
-        });
+            .save_atomic(path, &self.core.document().snapshot());
+        match outcome {
+            feathermark_core::SaveOutcome::Committed { disk } => {
+                self.core.reduce(AppMessage::SaveCompleted {
+                    revision,
+                    path: path_buf,
+                    disk,
+                });
+            }
+            feathermark_core::SaveOutcome::CommittedDurabilityUnknown { disk, .. } => {
+                self.core.reduce(AppMessage::SaveDurabilityUnknown {
+                    revision,
+                    path: path_buf,
+                    disk,
+                });
+            }
+            feathermark_core::SaveOutcome::NotCommitted { reason } => {
+                return Err(reason.to_string());
+            }
+        };
         Ok(())
     }
 
     pub fn decide_close(&mut self, decision: CloseDecision) -> Result<CloseOutcome, String> {
-        if !self.app.dirty() {
+        if !self.core.app().dirty() {
             return Ok(CloseOutcome::Close);
         }
         match decision {
             CloseDecision::Cancel => Ok(CloseOutcome::KeepOpen),
             CloseDecision::Discard => Ok(CloseOutcome::Close),
             CloseDecision::Save { untitled_path } => {
-                if self.app.path().is_some() {
+                if self.core.app().path().is_some() {
                     self.save()?;
                 } else {
                     let path = untitled_path.ok_or("save panel returned no path".to_owned())?;
                     self.save_as(&path)?;
                 }
-                Ok(CloseOutcome::Close)
+                // Durability-unknown saves leave dirty set; keep the window open
+                // so the user can re-save to flush the parent directory.
+                if self.core.app().dirty() {
+                    Ok(CloseOutcome::KeepOpen)
+                } else {
+                    Ok(CloseOutcome::Close)
+                }
             }
         }
     }
 
     pub fn inspect_external_change(&mut self, now_ms: u64) -> Result<LinuxExternalOutcome, String> {
         let (Some(path), Some(saved)) = (
-            self.app.path().map(Path::to_path_buf),
-            self.app.saved_disk().cloned(),
+            self.core.app().path().map(Path::to_path_buf),
+            self.core.app().saved_disk().cloned(),
         ) else {
             return Ok(LinuxExternalOutcome::Unchanged);
         };
@@ -1060,16 +1145,16 @@ impl LinuxProductSession {
             .inspect_external_change(
                 &path,
                 &saved,
-                self.app.dirty(),
+                self.core.app().dirty(),
                 feathermark_core::MAX_DOCUMENT_BYTES,
             )
             .map_err(|error| error.to_string())?
         {
             ExternalChange::Unchanged => Ok(LinuxExternalOutcome::Unchanged),
             ExternalChange::Reloaded(loaded) => {
-                self.document = loaded.document;
-                let revision = self.document.revision();
-                for effect in self.app.reduce(AppMessage::DocumentOpened {
+                self.core.set_document(loaded.document);
+                let revision = self.core.document().revision();
+                for effect in self.core.reduce(AppMessage::DocumentOpened {
                     revision,
                     path,
                     disk: loaded.disk,
@@ -1082,7 +1167,8 @@ impl LinuxProductSession {
             }
             ExternalChange::Conflict { disk } => {
                 let effects = self
-                    .app
+                    .core
+                    .app_mut()
                     .reduce(AppMessage::ExternalConflictDetected { disk });
                 Ok(
                     if effects
@@ -1104,7 +1190,8 @@ impl LinuxProductSession {
         now_ms: u64,
     ) -> Result<(), String> {
         for effect in self
-            .app
+            .core
+            .app_mut()
             .reduce(AppMessage::ResolveExternalConflict(resolution))
         {
             match effect {
@@ -1133,13 +1220,16 @@ impl LinuxProductSession {
         completed: CompletedRender,
         nonce: [u8; 16],
     ) -> Result<NativeRenderOutcome, String> {
-        match self.scheduler.finish(completed, self.document.revision()) {
+        match self
+            .scheduler
+            .finish(completed, self.core.document().revision())
+        {
             Completion::Accepted(page) => {
                 let revision = page.revision;
                 let page_bytes = page.page.len();
                 self.scroll = Some(LinuxScrollController::new(
                     revision,
-                    self.document.len_bytes(),
+                    self.core.document().len_bytes(),
                     page.blocks
                         .iter()
                         .map(|block| (block.start, block.end, block.ordinal)),
@@ -1154,7 +1244,7 @@ impl LinuxProductSession {
                         Arc::from(generated_source.as_bytes().to_vec()),
                     )
                     .map_err(|error| error.to_string())?;
-                self.app.reduce(AppMessage::RenderAccepted {
+                self.core.reduce(AppMessage::RenderAccepted {
                     revision,
                     page_bytes,
                 });
@@ -1164,14 +1254,15 @@ impl LinuxProductSession {
                 })
             }
             Completion::PreviewTooLarge { revision } => {
-                self.app.reduce(AppMessage::RenderFailed {
+                self.core.reduce(AppMessage::RenderFailed {
                     revision,
                     error: RenderError::PreviewTooLarge,
                 });
                 Ok(NativeRenderOutcome::Failed { revision })
             }
             Completion::Failed { revision, error } => {
-                self.app
+                self.core
+                    .app_mut()
                     .reduce(AppMessage::RenderFailed { revision, error });
                 Ok(NativeRenderOutcome::Failed { revision })
             }
@@ -1187,7 +1278,7 @@ impl LinuxProductSession {
             .preview_host
             .handle_ipc(bytes)
             .map_err(|error| error.to_string())?;
-        Ok(self.app.reduce(AppMessage::PreviewEvent(event)))
+        Ok(self.core.reduce(AppMessage::PreviewEvent(event)))
     }
 
     pub fn source_user_scroll(
@@ -1262,14 +1353,14 @@ impl LinuxProductSession {
         else {
             return Ok(None);
         };
-        let change = apply_editor_commit(&mut self.document, adapter_commit_id, commit)
+        let change = apply_editor_commit(self.core.document_mut(), adapter_commit_id, commit)
             .map_err(|error| error.to_string())?;
         self.schedule_changed_revision(change.after, now_ms);
         Ok(Some((adapter_commit_id, change)))
     }
 
     fn schedule_changed_revision(&mut self, revision: Revision, now_ms: u64) {
-        for effect in self.app.reduce(AppMessage::DocumentEdited { revision }) {
+        for effect in self.core.reduce(AppMessage::DocumentEdited { revision }) {
             if let AppEffect::ScheduleRender { revision } = effect {
                 self.submit_rope_render(revision, now_ms);
             }
@@ -1277,7 +1368,7 @@ impl LinuxProductSession {
     }
 
     fn submit_rope_render(&mut self, revision: Revision, now_ms: u64) {
-        let snapshot = self.document.snapshot();
+        let snapshot = self.core.document().snapshot();
         debug_assert_eq!(snapshot.revision, revision);
         self.scheduler
             .submit(RenderRequest::from_snapshot(snapshot), now_ms);
@@ -1295,7 +1386,7 @@ impl LinuxProductSession {
 /// caller resyncs the native mirror from [`Self::snapshot`] afterwards.
 impl LinuxProductSession {
     pub fn snapshot(&self) -> feathermark_core::DocumentSnapshot {
-        self.document.snapshot()
+        self.core.document().snapshot()
     }
 
     fn schedule_effects(&mut self, effects: &[AppEffect], now_ms: u64) {
@@ -1317,10 +1408,11 @@ impl LinuxProductSession {
         if self.closed {
             return Err("document session is closed".to_owned());
         }
-        let applied = self
-            .app
-            .apply_format_command(&mut self.document, selection, command)
-            .map_err(|error| error.to_string())?;
+        let applied = {
+            let (app, document) = self.core.app_and_document_mut();
+            app.apply_format_command(document, selection, command)
+                .map_err(|error| error.to_string())?
+        };
         self.schedule_effects(&applied.effects, now_ms);
         Ok(applied)
     }
@@ -1348,10 +1440,11 @@ impl LinuxProductSession {
         if self.closed {
             return Err("document session is closed".to_owned());
         }
-        let applied = self
-            .app
-            .insert_text(&mut self.document, selection, text)
-            .map_err(|error| error.to_string())?;
+        let applied = {
+            let (app, document) = self.core.app_and_document_mut();
+            app.insert_text(document, selection, text)
+                .map_err(|error| error.to_string())?
+        };
         self.schedule_effects(&applied.effects, now_ms);
         Ok(applied)
     }
@@ -1372,23 +1465,23 @@ impl LinuxProductSession {
     // --- find / replace -----------------------------------------------------
 
     pub fn start_find(&mut self, query: FindQuery, direction: FindDirection, wrap: bool) {
-        self.app.start_find(query, direction, wrap);
+        self.core.app_mut().start_find(query, direction, wrap);
     }
 
     pub fn end_find(&mut self) {
-        self.app.end_find();
+        self.core.app_mut().end_find();
     }
 
     pub fn find_session(&self) -> Option<&FindSession> {
-        self.app.find_session()
+        self.core.app().find_session()
     }
 
     pub fn find_next(
         &mut self,
         from_byte: usize,
     ) -> Result<Option<std::ops::Range<usize>>, String> {
-        self.app
-            .find_next(&self.document, from_byte)
+        let (app, document) = self.core.app_mut_and_document();
+        app.find_next(document, from_byte)
             .map_err(|error| error.to_string())
     }
 
@@ -1396,8 +1489,8 @@ impl LinuxProductSession {
         &mut self,
         from_byte: usize,
     ) -> Result<Option<std::ops::Range<usize>>, String> {
-        self.app
-            .find_prev(&self.document, from_byte)
+        let (app, document) = self.core.app_mut_and_document();
+        app.find_prev(document, from_byte)
             .map_err(|error| error.to_string())
     }
 
@@ -1406,10 +1499,11 @@ impl LinuxProductSession {
         replacement: String,
         now_ms: u64,
     ) -> Result<ReplaceApplied, String> {
-        let applied = self
-            .app
-            .replace_current(&mut self.document, replacement)
-            .map_err(|error| error.to_string())?;
+        let applied = {
+            let (app, document) = self.core.app_and_document_mut();
+            app.replace_current(document, replacement)
+                .map_err(|error| error.to_string())?
+        };
         self.schedule_effects(&applied.effects, now_ms);
         Ok(applied)
     }
@@ -1419,10 +1513,11 @@ impl LinuxProductSession {
         replacement: String,
         now_ms: u64,
     ) -> Result<ReplaceApplied, String> {
-        let applied = self
-            .app
-            .replace_all(&mut self.document, replacement)
-            .map_err(|error| error.to_string())?;
+        let applied = {
+            let (app, document) = self.core.app_and_document_mut();
+            app.replace_all(document, replacement)
+                .map_err(|error| error.to_string())?
+        };
         self.schedule_effects(&applied.effects, now_ms);
         Ok(applied)
     }
@@ -1432,9 +1527,11 @@ impl LinuxProductSession {
     /// Produces a validated, self-contained export page for Save-as-HTML and
     /// Copy-as-HTML.
     pub fn export_html(&self, title: Option<String>) -> Result<ExportOutput, String> {
-        self.app
-            .export_html(&self.document, title)
-            .map_err(|error| error.to_string())
+        {
+            let (app, document) = self.core.app_and_document();
+            app.export_html(document, title)
+                .map_err(|error| error.to_string())
+        }
     }
 
     /// Writes the export page to `path` for the Save-as-HTML gesture.
@@ -1446,13 +1543,14 @@ impl LinuxProductSession {
     // --- counts -------------------------------------------------------------
 
     pub fn counts(&self) -> Counts {
-        self.app.counts(&self.document)
+        self.core.app().counts(self.core.document())
     }
 
     // --- autosave / recovery / session --------------------------------------
 
     pub fn bind_autosave(&mut self, store: AutosaveStore) -> Result<(), String> {
-        self.app
+        self.core
+            .app_mut()
             .bind_autosave(store)
             .map_err(|error| error.to_string())
     }
@@ -1461,13 +1559,13 @@ impl LinuxProductSession {
         &mut self,
         captured_at_unix_ms: u64,
     ) -> Result<Option<AutosaveEntryV1>, String> {
-        self.app
-            .autosave_tick(&self.document, captured_at_unix_ms)
+        let (app, document) = self.core.app_mut_and_document();
+        app.autosave_tick(document, captured_at_unix_ms)
             .map_err(|error| error.to_string())
     }
 
     pub fn recover(&self) -> Result<Option<RecoveredDocument>, String> {
-        self.app.recover().map_err(|error| error.to_string())
+        self.core.app().recover().map_err(|error| error.to_string())
     }
 
     /// Adopts a recovered document (crash-recovery accept) as the live buffer.
@@ -1483,9 +1581,12 @@ impl LinuxProductSession {
         now_ms: u64,
     ) -> Result<(), String> {
         let hint = recovered.entry.document_path.clone().map(PathBuf::from);
-        self.document = recovered.document;
+        self.core.set_document(recovered.document);
         self.closed = false;
-        let effects = self.app.adopt_recovered(&self.document, hint);
+        let effects = {
+            let (app, document) = self.core.app_mut_and_document();
+            app.adopt_recovered(document, hint)
+        };
         self.schedule_effects(&effects, now_ms);
         Ok(())
     }
@@ -1497,25 +1598,302 @@ impl LinuxProductSession {
         top_visible_byte: Option<usize>,
         window: Option<SessionWindowV1>,
     ) -> SessionStateV1 {
-        self.app
+        self.core
+            .app()
             .capture_session_state(saved_at_unix_ms, selection, top_visible_byte, window)
     }
 
     pub fn save_session_state(&self, state: &SessionStateV1) -> Result<(), String> {
-        self.app
+        self.core
+            .app()
             .save_session_state(state)
             .map_err(|error| error.to_string())
     }
 
     pub fn load_session_state(&self) -> Result<Option<SessionStateV1>, String> {
-        self.app
+        self.core
+            .app()
             .load_session_state()
             .map_err(|error| error.to_string())
     }
 
     pub fn restore_session(&self, state: &SessionStateV1) -> SessionRestore {
-        self.app.restore_session(state)
+        self.core.app().restore_session(state)
     }
+
+    // --- Wave 2-C: durable notices + shared open/mirror/autosave bus --------
+
+    /// Borrows the active durable notices (LNX-001/LNX-002). Notices persist in
+    /// the shared status model across render and disk polling until the user
+    /// dismisses them, so a transient poll never clears a persistent error.
+    pub fn notices(&self) -> &[crate::app::UserNotice] {
+        self.core.app().notices()
+    }
+
+    /// Returns the most recent undismissed notice, if any, for chrome rendering.
+    pub fn latest_notice(&self) -> Option<crate::app::UserNotice> {
+        self.core
+            .app()
+            .notices()
+            .iter()
+            .rev()
+            .find(|notice| !notice.dismissed)
+            .cloned()
+    }
+
+    /// Dismisses the notice with `id` through the shared reducer.
+    pub fn dismiss_notice(&mut self, id: usize) {
+        let effects = self.core.reduce(AppMessage::NoticeDismissed { id });
+        // Notice dismissal does not schedule renders, but stay consistent with
+        // the shared bus: honour any effect the reducer emits.
+        for effect in effects {
+            if let AppEffect::ScheduleRender { revision } = effect {
+                self.submit_rope_render(revision, 0);
+            }
+        }
+    }
+
+    /// Requests opening `path` through the shared open command bus (INT-001).
+    /// Returns the reducer effects for the shell to act on (a `PerformOpen`).
+    pub fn request_open(&mut self, path: PathBuf) -> Vec<AppEffect> {
+        self.core.reduce(AppMessage::OpenDocument { path })
+    }
+
+    /// Delivers an application-open or positional path through the shared open
+    /// command bus (INT-001): request → perform the load → report completion.
+    /// On a load failure the error becomes a durable notice instead of a fatal
+    /// exit, and the existing document is preserved. On success the loaded
+    /// [`Document`] is swapped in and bound to `path`.
+    pub fn open_via_shared_command(&mut self, path: PathBuf, now_ms: u64) -> Vec<AppEffect> {
+        let _ = self
+            .core
+            .app_mut()
+            .reduce(AppMessage::OpenDocument { path: path.clone() });
+        let result = self
+            .file_service
+            .load(&path, feathermark_core::MAX_DOCUMENT_BYTES)
+            .map(|loaded| {
+                self.core.set_document(loaded.document);
+                self.closed = false;
+                (self.core.document().revision(), path, loaded.disk)
+            })
+            .map_err(|error| error.to_string());
+        self.complete_open_request(result, now_ms)
+    }
+
+    /// Records a failed save as a durable error notice while keeping the
+    /// document dirty (LNX-006). Uses [`AppMessage::SurfaceNotice`] so the
+    /// message is not mislabeled as an open failure.
+    pub fn report_save_failure(&mut self, error: impl Into<String>) -> Vec<AppEffect> {
+        let error = error.into();
+        let revision = self.core.document().revision();
+        let _ = self.core.reduce(AppMessage::SaveFailed { revision });
+        self.core.reduce(AppMessage::SurfaceNotice {
+            severity: crate::app::NoticeSeverity::Error,
+            message: format!("Save failed: {error}"),
+            source_error: error,
+        })
+    }
+
+    /// Surfaces a non-fatal open-delivery warning (for example multi-file
+    /// `%f` requests) as a dismissible warning notice.
+    pub fn report_open_warning(&mut self, message: impl Into<String>) -> Vec<AppEffect> {
+        let message = message.into();
+        self.core.reduce(AppMessage::SurfaceNotice {
+            severity: crate::app::NoticeSeverity::Warning,
+            message: message.clone(),
+            source_error: message,
+        })
+    }
+
+    /// Completes a shared open request with the reducer-ready `(revision, path,
+    /// disk)` tuple produced by a successful load, or an error string. The
+    /// caller is responsible for swapping the loaded [`Document`] in before
+    /// calling this. Success schedules the render; failure pushes a durable
+    /// error notice (LNX-002) instead of exiting. Returns the reducer effects so
+    /// the shell can render the resulting notice.
+    pub fn complete_open_request(
+        &mut self,
+        result: Result<(Revision, PathBuf, feathermark_core::DiskVersion), String>,
+        now_ms: u64,
+    ) -> Vec<AppEffect> {
+        let effects = self
+            .core
+            .reduce(AppMessage::OpenRequestCompleted { result });
+        self.schedule_effects(&effects, now_ms);
+        effects
+    }
+
+    /// Reports an autosave result through the shared bus. A failure pushes a
+    /// durable warning notice (LNX-002) instead of being lost in a transient
+    /// status line.
+    pub fn complete_autosave(
+        &mut self,
+        result: Result<AutosaveRecordOutcome, String>,
+    ) -> Vec<AppEffect> {
+        self.core.reduce(AppMessage::AutosaveCompleted { result })
+    }
+
+    /// Reports a session-restore failure as a durable, non-fatal notice
+    /// (LNX-002): degraded restore never exits the process.
+    pub fn report_restore_failure(&mut self, error: String) -> Vec<AppEffect> {
+        self.core.reduce(AppMessage::SurfaceNotice {
+            severity: crate::app::NoticeSeverity::Warning,
+            message: format!("session restore degraded: {error}"),
+            source_error: error,
+        })
+    }
+
+    /// Drives the shared mirror-failure contract (LNX-003): the first failure
+    /// triggers exactly one full authoritative resync; a second failure while a
+    /// resync is outstanding surfaces a durable error notice instead of looping.
+    pub fn record_mirror_failure(&mut self, error: String) -> Vec<AppEffect> {
+        self.core.reduce(AppMessage::MirrorFailed { error })
+    }
+
+    /// Completes a one-shot mirror resync. A failed resync pushes a durable
+    /// error notice; success clears the pending flag and allows a later failure
+    /// to request another single resync (LNX-003).
+    pub fn complete_mirror_resync(&mut self, result: Result<(), String>) -> Vec<AppEffect> {
+        self.core
+            .app_mut()
+            .reduce(AppMessage::MirrorResyncCompleted { result })
+    }
+
+    /// Performs a full authoritative editor mirror resync after an incremental
+    /// failure (the `PerformMirrorResync` effect's shell side, LNX-003). Returns
+    /// `Ok(())` once the native mirror is reinstalled; the caller then reports
+    /// the outcome through [`complete_mirror_resync`].
+    pub fn resync_editor_mirror(
+        &mut self,
+        adapter: &mut GtkSourceEditorAdapter,
+    ) -> Result<(), String> {
+        let snapshot = self.core.document().snapshot();
+        adapter
+            .install_open_snapshot(&snapshot)
+            .map_err(|error| error.to_string())
+    }
+}
+
+/// Dual-target clipboard payload for copy-as-HTML (LNX-005): both `text/html`
+/// and a tag-stripped plain-text fallback. GTK publishes every target in
+/// [`CLIPBOARD_HTML_TARGETS`] so rich and plain pastes both receive content.
+///
+/// The payload is constructed from the already-validated, self-contained export
+/// page; the plain-text fallback is a bounded tag strip over the same bytes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LinuxClipboardPayload {
+    /// The inert, self-contained HTML document (the export page).
+    pub html: String,
+    /// A tag-stripped plain-text rendering of [`html`](Self::html).
+    pub plain: String,
+}
+
+impl LinuxClipboardPayload {
+    /// Builds the dual-target payload from an export page.
+    pub fn for_html_export(html: String) -> Self {
+        Self {
+            plain: html_to_plain_text(&html),
+            html,
+        }
+    }
+
+    /// Returns the bytes to publish for the target identified by `info_id`
+    /// (the `u32` paired with each name in [`CLIPBOARD_HTML_TARGETS`]). `info_id
+    /// == 0` is `text/html`; every other id is served the plain-text fallback.
+    pub fn bytes_for_info(&self, info_id: u32) -> &[u8] {
+        if info_id == 0 {
+            self.html.as_bytes()
+        } else {
+            self.plain.as_bytes()
+        }
+    }
+
+    /// Returns the target name paired with `info_id`, or `None` if it is not a
+    /// published target.
+    pub fn target_name(info_id: u32) -> Option<&'static str> {
+        CLIPBOARD_HTML_TARGETS
+            .iter()
+            .find(|(_, id)| *id == info_id)
+            .map(|(name, _)| *name)
+    }
+}
+
+/// Bounded tag stripper that produces a plain-text fallback for clipboard
+/// publishing. It removes `<…>` tags, decodes the four character references a
+/// self-contained export page emits (`&amp;`, `&lt;`, `&gt;`, `&quot;`,
+/// `&#39;`), collapses intra-whitespace runs, and keeps block boundaries
+/// readable. It is intentionally conservative: the export page is already
+/// scriptless and self-contained, so a perfect renderer is not required, only a
+/// faithful plain-text shadow.
+fn html_to_plain_text(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut chars = html.chars().peekable();
+    let mut last_was_space = true;
+    while let Some(ch) = chars.next() {
+        match ch {
+            '<' => {
+                // Skip until the matching `>`, tolerating a missing close at EOF.
+                for inner in chars.by_ref() {
+                    if inner == '>' {
+                        break;
+                    }
+                }
+                // Treat a tag boundary as a word separator.
+                if !last_was_space {
+                    out.push(' ');
+                    last_was_space = true;
+                }
+            }
+            '&' => {
+                let mut entity = String::new();
+                let mut matched = false;
+                for _ in 0..8 {
+                    match chars.peek() {
+                        Some(&next) if next != ';' => {
+                            entity.push(next);
+                            chars.next();
+                        }
+                        Some(&';') => {
+                            chars.next();
+                            matched = true;
+                            break;
+                        }
+                        _ => break,
+                    }
+                }
+                let decoded = match entity.as_str() {
+                    "amp" => Some('&'),
+                    "lt" => Some('<'),
+                    "gt" => Some('>'),
+                    "quot" => Some('"'),
+                    "#39" => Some('\''),
+                    _ => None,
+                };
+                if let Some(decoded) = decoded {
+                    push_collapsed(&mut out, decoded, &mut last_was_space);
+                } else if matched {
+                    push_collapsed(&mut out, '&', &mut last_was_space);
+                    for decoded in entity.chars() {
+                        push_collapsed(&mut out, decoded, &mut last_was_space);
+                    }
+                } else {
+                    push_collapsed(&mut out, '&', &mut last_was_space);
+                }
+            }
+            _ => push_collapsed(&mut out, ch, &mut last_was_space),
+        }
+    }
+    out.trim().trim_end_matches('\n').to_owned()
+}
+
+fn push_collapsed(out: &mut String, ch: char, last_was_space: &mut bool) {
+    let is_space = ch.is_ascii_whitespace();
+    if is_space && *last_was_space {
+        return;
+    }
+    out.push(ch);
+    *last_was_space = is_space;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1633,10 +2011,12 @@ impl NativeWebState {
         self.set_visible(true)
     }
 
+    #[cfg(feature = "test-control")]
     fn healthy(&self) -> bool {
         self.webview.is_some() && self.context.is_some() && self.visible
     }
 
+    #[cfg(feature = "test-control")]
     fn is_closed(&self) -> bool {
         self.webview.is_none() && self.context.is_none() && !self.visible
     }
@@ -1669,16 +2049,22 @@ struct RenderWorker {
 }
 
 impl RenderWorker {
-    fn new() -> Self {
+    fn new(wakeup: gtk::glib::Sender<LoopWakeup>) -> Self {
         let (request_tx, request_rx) = sync_channel::<RenderPermit>(1);
         let (completion_tx, completion_rx) = sync_channel::<CompletedRender>(1);
+        let main_context = gtk::glib::MainContext::default();
         let thread = std::thread::Builder::new()
             .name("feathermark-render".to_owned())
             .spawn(move || {
                 while let Ok(permit) = request_rx.recv() {
-                    if completion_tx.send(permit.execute()).is_err() {
+                    let completed = permit.execute();
+                    if completion_tx.send(completed).is_err() {
                         break;
                     }
+                    let wake = wakeup.clone();
+                    main_context.invoke(move || {
+                        let _ = wake.send(LoopWakeup::Work);
+                    });
                 }
             })
             .expect("render worker thread must start");
@@ -1715,6 +2101,282 @@ impl Drop for RenderWorker {
     }
 }
 
+fn gio_files_to_paths(files: &[gtk::gio::File]) -> Vec<PathBuf> {
+    files
+        .iter()
+        .filter_map(|file| file.path())
+        .filter(|path| path.is_file())
+        .collect()
+}
+
+fn refresh_window_chrome(
+    session: &Rc<RefCell<LinuxProductSession>>,
+    window: &gtk::ApplicationWindow,
+    status_bar: &gtk::Label,
+    last_counts_revision: &Cell<u64>,
+) {
+    let session_ref = session.borrow();
+    let title = if session_ref.has_external_conflict() {
+        status_title("File changed on disk (Ctrl+Shift+R reload, Ctrl+Shift+K keep)")
+    } else if session_ref.dirty() {
+        status_title("Modified")
+    } else {
+        PRODUCT_NAME.to_owned()
+    };
+    window.set_title(&title);
+
+    if let Some(notice) = session_ref.latest_notice() {
+        status_bar.set_text(&notice.message);
+        return;
+    }
+
+    let revision = session_ref.revision();
+    if last_counts_revision.get() != revision {
+        last_counts_revision.set(revision);
+        let counts = session_ref.counts();
+        let minutes = counts.reading_time_seconds().div_ceil(60);
+        status_bar.set_text(&format!(
+            "{} words   {} characters   {} min read",
+            counts.words, counts.chars, minutes
+        ));
+    }
+}
+
+fn execute_shared_open(
+    session: &Rc<RefCell<LinuxProductSession>>,
+    editor_adapter: &Rc<RefCell<GtkSourceEditorAdapter>>,
+    window: &gtk::ApplicationWindow,
+    path: PathBuf,
+    started: Instant,
+) {
+    let effects = session
+        .borrow_mut()
+        .open_via_shared_command(path, elapsed_ms(started));
+    for effect in effects {
+        if let AppEffect::ScheduleRender { revision } = effect {
+            session
+                .borrow_mut()
+                .submit_rope_render(revision, elapsed_ms(started));
+        }
+    }
+    if session.borrow().is_closed() {
+        return;
+    }
+    let snapshot = session.borrow().snapshot();
+    if let Err(error) = editor_adapter.borrow_mut().install_open_snapshot(&snapshot) {
+        let mirror_effects = session
+            .borrow_mut()
+            .record_mirror_failure(error.to_string());
+        handle_session_effects(&mirror_effects, session, editor_adapter, window, started);
+    }
+}
+
+#[allow(clippy::only_used_in_recursion)] // window reserved for future notice presentation
+fn handle_session_effects(
+    effects: &[AppEffect],
+    session: &Rc<RefCell<LinuxProductSession>>,
+    editor_adapter: &Rc<RefCell<GtkSourceEditorAdapter>>,
+    window: &gtk::ApplicationWindow,
+    started: Instant,
+) {
+    for effect in effects {
+        match effect {
+            AppEffect::PerformMirrorResync => {
+                let result = session
+                    .borrow_mut()
+                    .resync_editor_mirror(&mut editor_adapter.borrow_mut());
+                let follow_up = session
+                    .borrow_mut()
+                    .complete_mirror_resync(result.map_err(|error| error.to_string()));
+                handle_session_effects(&follow_up, session, editor_adapter, window, started);
+            }
+            AppEffect::PresentNotice { .. } => {}
+            AppEffect::ScheduleRender { revision } => {
+                session
+                    .borrow_mut()
+                    .submit_rope_render(*revision, elapsed_ms(started));
+            }
+            _ => {}
+        }
+    }
+}
+
+// Platform pump carries session + render + chrome handles; packing them into a
+// struct would obscure the existing shell shape for little gain.
+#[allow(clippy::too_many_arguments)]
+fn pump_ui_work(
+    session: &Rc<RefCell<LinuxProductSession>>,
+    worker: &Rc<RenderWorker>,
+    native_web: &Rc<RefCell<NativeWebState>>,
+    editor_adapter: &Rc<RefCell<GtkSourceEditorAdapter>>,
+    editor_events: &Rc<RefCell<VecDeque<EditorEvent>>>,
+    frame_seq: &Rc<RefCell<u64>>,
+    window: &gtk::ApplicationWindow,
+    status_bar: &gtk::Label,
+    last_counts_revision: &Cell<u64>,
+    started: Instant,
+) -> gtk::glib::ControlFlow {
+    if session.borrow().is_closed() {
+        return gtk::glib::ControlFlow::Break;
+    }
+
+    while let Some(event) = editor_events.borrow_mut().pop_front() {
+        match event {
+            EditorEvent::CommitRequested {
+                adapter_commit_id,
+                commit,
+            } => {
+                let event = EditorEvent::CommitRequested {
+                    adapter_commit_id,
+                    commit,
+                };
+                match session
+                    .borrow_mut()
+                    .apply_editor_event(event, elapsed_ms(started))
+                {
+                    Ok(Some((commit_id, change))) => {
+                        if let Err(error) = editor_adapter
+                            .borrow_mut()
+                            .acknowledge_local_commit(commit_id, &change)
+                        {
+                            let effects = session
+                                .borrow_mut()
+                                .record_mirror_failure(error.to_string());
+                            handle_session_effects(
+                                &effects,
+                                session,
+                                editor_adapter,
+                                window,
+                                started,
+                            );
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        let snapshot = session.borrow().snapshot();
+                        let _ = editor_adapter.borrow_mut().reject_local_commit(
+                            adapter_commit_id,
+                            LocalCommitRejection::InvalidEdit,
+                            &snapshot,
+                        );
+                        let _ = session
+                            .borrow_mut()
+                            .report_open_warning(format!("edit rejected: {error}"));
+                    }
+                }
+            }
+            EditorEvent::ViewportChanged {
+                revision: _,
+                top_visible_byte,
+                user: true,
+            } => {
+                let _ = editor_adapter.borrow().observe_viewport(true);
+                let webview_slot = native_web.borrow();
+                let dispatch = session.borrow_mut().source_user_scroll(
+                    top_visible_byte,
+                    ScrollClock {
+                        monotonic_ms: elapsed_ms(started),
+                        preview_frame: *frame_seq.borrow(),
+                    },
+                );
+                if let (
+                    Ok(webview),
+                    Ok(LinuxScrollDispatch::Preview {
+                        revision,
+                        source_start,
+                        interaction_id,
+                    }),
+                ) = (webview_slot.webview(), dispatch)
+                {
+                    let mut sink = WryScrollSink(webview);
+                    let _ = session.borrow().preview_host().deliver_scroll_to(
+                        &mut sink,
+                        revision,
+                        source_start,
+                        interaction_id,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let next_frame = frame_seq.borrow().saturating_add(1);
+    *frame_seq.borrow_mut() = next_frame;
+    editor_adapter.borrow().native_layout(next_frame);
+
+    if let Some(permit) = session.borrow_mut().start_render(elapsed_ms(started))
+        && let Err(error) = worker.submit(permit)
+    {
+        // Recoverable: keep the pump attached so later editor commits still drain.
+        let effects = session
+            .borrow_mut()
+            .report_open_warning(format!("render queue failed: {error}"));
+        handle_session_effects(&effects, session, editor_adapter, window, started);
+    }
+
+    match worker.try_recv() {
+        Ok(Some(completed)) => match random_nonce()
+            .and_then(|nonce| session.borrow_mut().finish_render(completed, nonce))
+        {
+            Ok(NativeRenderOutcome::Navigate { url, .. }) => {
+                if let Err(error) = native_web.borrow().load_url(&url) {
+                    let effects = session.borrow_mut().report_open_warning(error.to_string());
+                    handle_session_effects(&effects, session, editor_adapter, window, started);
+                }
+            }
+            Ok(_) => {}
+            Err(error) => {
+                let effects = session
+                    .borrow_mut()
+                    .report_open_warning(format!("render failed: {error}"));
+                handle_session_effects(&effects, session, editor_adapter, window, started);
+            }
+        },
+        Ok(None) => {}
+        Err(error) => {
+            // Worker death is still recoverable enough to keep the editor open
+            // with a durable notice; re-attachable wakeups can continue to drain
+            // editor commits and disk polls even if preview is dead.
+            let effects = session
+                .borrow_mut()
+                .report_open_warning(format!("renderer stopped: {error}"));
+            handle_session_effects(&effects, session, editor_adapter, window, started);
+        }
+    }
+
+    refresh_window_chrome(session, window, status_bar, last_counts_revision);
+    gtk::glib::ControlFlow::Continue
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CloseSaveRetryAction {
+    Retry,
+    SaveAs,
+    Cancel,
+}
+
+fn prompt_close_save_retry(parent: &gtk::ApplicationWindow) -> CloseSaveRetryAction {
+    let dialog = gtk::MessageDialog::new(
+        Some(parent),
+        gtk::DialogFlags::MODAL,
+        gtk::MessageType::Error,
+        gtk::ButtonsType::None,
+        "Could not save changes before closing.",
+    );
+    dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+    dialog.add_button("Save As…", gtk::ResponseType::Apply);
+    dialog.add_button("Retry", gtk::ResponseType::Yes);
+    dialog.set_default_response(gtk::ResponseType::Yes);
+    let response = dialog.run();
+    dialog.close();
+    match response {
+        gtk::ResponseType::Yes => CloseSaveRetryAction::Retry,
+        gtk::ResponseType::Apply => CloseSaveRetryAction::SaveAs,
+        _ => CloseSaveRetryAction::Cancel,
+    }
+}
+
 fn run_application() -> Result<(), String> {
     #[cfg(feature = "test-control")]
     if std::env::var_os("FEATHERMARK_STARTUP_TRACE").is_some() {
@@ -1742,23 +2404,65 @@ fn run_application() -> Result<(), String> {
     } else {
         APP_ID.to_owned()
     };
-    let app_flags = if lifecycle_control {
-        gtk::gio::ApplicationFlags::NON_UNIQUE
-    } else {
-        gtk::gio::ApplicationFlags::empty()
-    };
+    let mut app_flags = gtk::gio::ApplicationFlags::HANDLES_OPEN;
+    if lifecycle_control {
+        app_flags.insert(gtk::gio::ApplicationFlags::NON_UNIQUE);
+    }
     let application = gtk::Application::new(Some(&application_id), app_flags);
     let startup_error = Rc::new(RefCell::new(None::<String>));
     let error_slot = Rc::clone(&startup_error);
     let activated = Arc::new(AtomicBool::new(false));
     let activation_flag = Arc::clone(&activated);
+    let pending_open_paths = Rc::new(RefCell::new(Vec::<PathBuf>::new()));
+    let pending_open_warnings = Rc::new(RefCell::new(Vec::<String>::new()));
+    let window_ready = Rc::new(Cell::new(false));
+    let open_session = Rc::new(RefCell::new(None::<OpenSessionHandles>));
+
+    {
+        let pending_open_paths = Rc::clone(&pending_open_paths);
+        let pending_open_warnings = Rc::clone(&pending_open_warnings);
+        let window_ready = Rc::clone(&window_ready);
+        let open_session = Rc::clone(&open_session);
+        application.connect_open(move |_application, files, _hint| {
+            let paths = gio_files_to_paths(files);
+            if paths.is_empty() {
+                return;
+            }
+            let delivery = plan_open_delivery(paths);
+            if let Some(primary) = delivery.primary {
+                pending_open_paths.borrow_mut().push(primary);
+            }
+            if let Some(warning) = delivery.warning {
+                pending_open_warnings.borrow_mut().push(warning);
+            }
+            if window_ready.get() {
+                if let Some(handles) = open_session.borrow_mut().take() {
+                    drain_pending_open_paths(
+                        &pending_open_paths,
+                        &pending_open_warnings,
+                        &handles.session,
+                        &handles.editor_adapter,
+                        &handles.window,
+                        handles.started,
+                    );
+                    *open_session.borrow_mut() = Some(handles);
+                }
+            }
+        });
+    }
 
     application.connect_activate(move |application| {
         activation_flag.store(true, Ordering::Release);
         if lifecycle_control {
             eprintln!("FEATHERMARK_ACTIVATED pid={}", std::process::id());
         }
-        if let Err(error) = build_window(application) {
+        if let Err(error) = build_window(
+            application,
+            Rc::clone(&pending_open_paths),
+            Rc::clone(&pending_open_warnings),
+            Rc::clone(&window_ready),
+            Rc::clone(&open_session),
+        ) {
             *error_slot.borrow_mut() = Some(error);
             application.quit();
         } else if lifecycle_control {
@@ -1781,11 +2485,41 @@ fn run_application() -> Result<(), String> {
     if std::env::var_os("FEATHERMARK_STARTUP_TRACE").is_some() {
         eprintln!("FEATHERMARK_STARTUP_TRACE before-run");
     }
-    application.run_with_args(&["feathermark"]);
+    let args: Vec<String> = std::env::args().collect();
+    application.run_with_args(&args);
     startup_error.borrow_mut().take().map_or(Ok(()), Err)
 }
 
-fn build_window(application: &gtk::Application) -> Result<(), String> {
+struct OpenSessionHandles {
+    session: Rc<RefCell<LinuxProductSession>>,
+    editor_adapter: Rc<RefCell<GtkSourceEditorAdapter>>,
+    window: gtk::ApplicationWindow,
+    started: Instant,
+}
+
+fn drain_pending_open_paths(
+    pending_paths: &Rc<RefCell<Vec<PathBuf>>>,
+    pending_warnings: &Rc<RefCell<Vec<String>>>,
+    session: &Rc<RefCell<LinuxProductSession>>,
+    editor_adapter: &Rc<RefCell<GtkSourceEditorAdapter>>,
+    window: &gtk::ApplicationWindow,
+    started: Instant,
+) {
+    for warning in pending_warnings.borrow_mut().drain(..) {
+        let _ = session.borrow_mut().report_open_warning(warning);
+    }
+    for path in pending_paths.borrow_mut().drain(..) {
+        execute_shared_open(session, editor_adapter, window, path, started);
+    }
+}
+
+fn build_window(
+    application: &gtk::Application,
+    pending_open_paths: Rc<RefCell<Vec<PathBuf>>>,
+    pending_open_warnings: Rc<RefCell<Vec<String>>>,
+    window_ready: Rc<Cell<bool>>,
+    open_session: Rc<RefCell<Option<OpenSessionHandles>>>,
+) -> Result<(), String> {
     #[cfg(feature = "test-control")]
     let trace = |stage: &str| {
         if std::env::var_os("FEATHERMARK_STARTUP_TRACE").is_some() {
@@ -1796,7 +2530,13 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
     trace("build-window");
     let started = Instant::now();
     let session = Rc::new(RefCell::new(LinuxProductSession::new()?));
-    let worker = Rc::new(RenderWorker::new());
+    // gtk 0.18 marks MainContext::channel deprecated in favor of async-channel +
+    // spawn_future_local. That rewrite is out of scope for W2-C; the wake path
+    // is still the supported local-main-context pattern for shell event pumps.
+    #[allow(deprecated)]
+    let (wakeup_tx, wakeup_rx) =
+        gtk::glib::MainContext::channel::<LoopWakeup>(gtk::glib::Priority::DEFAULT);
+    let worker = Rc::new(RenderWorker::new(wakeup_tx.clone()));
     let editor_events = Rc::new(RefCell::new(VecDeque::<EditorEvent>::new()));
 
     let window = gtk::ApplicationWindow::new(application);
@@ -1816,13 +2556,15 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
     }
     let mut editor_adapter = GtkSourceEditorAdapter::new(&source_buffer);
     editor_adapter
-        .install_open_snapshot(&session.borrow().document.snapshot())
+        .install_open_snapshot(&session.borrow().snapshot())
         .map_err(|error| error.to_string())?;
     editor_adapter.bind_view(&source_view);
     {
         let editor_events = Rc::clone(&editor_events);
+        let wakeup_tx = wakeup_tx.clone();
         editor_adapter.set_event_sink(Box::new(move |event| {
             editor_events.borrow_mut().push_back(event);
+            let _ = wakeup_tx.send(LoopWakeup::Work);
         }));
     }
     let editor_adapter = Rc::new(RefCell::new(editor_adapter));
@@ -2078,7 +2820,7 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
                     .borrow_mut()
                     .resolve_external_conflict(ExternalResolution::ReloadDisk, elapsed_ms(started));
                 let result = result.and_then(|()| {
-                    let snapshot = session.borrow().document.snapshot();
+                    let snapshot = session.borrow().snapshot();
                     editor_adapter
                         .borrow_mut()
                         .install_open_snapshot(&snapshot)
@@ -2352,157 +3094,62 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
         let editor_adapter = Rc::clone(&editor_adapter);
         let editor_events = Rc::clone(&editor_events);
         let frame_seq = Rc::new(RefCell::new(0_u64));
-        let last_external_poll_ms = Rc::new(Cell::new(0_u64));
         let window = window.clone();
         let status_bar = status_bar.clone();
         let last_counts_revision = Cell::new(u64::MAX);
-        gtk::glib::timeout_add_local(Duration::from_millis(RENDER_POLL_MS), move || {
+        wakeup_rx.attach(None, move |_wakeup| {
+            pump_ui_work(
+                &session,
+                &worker,
+                &native_web,
+                &editor_adapter,
+                &editor_events,
+                &frame_seq,
+                &window,
+                &status_bar,
+                &last_counts_revision,
+                started,
+            )
+        });
+        let _ = wakeup_tx.send(LoopWakeup::Work);
+    }
+
+    {
+        let session = Rc::clone(&session);
+        let editor_adapter = Rc::clone(&editor_adapter);
+        let window = window.clone();
+        let status_bar = status_bar.clone();
+        let last_counts_revision = Cell::new(u64::MAX);
+        gtk::glib::timeout_add_local(Duration::from_millis(DISK_POLL_MS), move || {
             if session.borrow().is_closed() {
                 return gtk::glib::ControlFlow::Break;
             }
-            while let Some(event) = editor_events.borrow_mut().pop_front() {
-                match event {
-                    EditorEvent::CommitRequested {
-                        adapter_commit_id,
-                        commit,
-                    } => {
-                        let event = EditorEvent::CommitRequested {
-                            adapter_commit_id,
-                            commit,
-                        };
-                        match session
-                            .borrow_mut()
-                            .apply_editor_event(event, elapsed_ms(started))
-                        {
-                            Ok(Some((commit_id, change))) => {
-                                if let Err(error) = editor_adapter
-                                    .borrow_mut()
-                                    .acknowledge_local_commit(commit_id, &change)
-                                {
-                                    window.set_title(&status_title(&format!(
-                                        "editor acknowledgement failed: {error}"
-                                    )));
-                                }
-                            }
-                            Ok(None) => {}
-                            Err(error) => {
-                                let snapshot = session.borrow().document.snapshot();
-                                let _ = editor_adapter.borrow_mut().reject_local_commit(
-                                    adapter_commit_id,
-                                    LocalCommitRejection::InvalidEdit,
-                                    &snapshot,
-                                );
-                                window.set_title(&status_title(&format!("edit rejected: {error}")));
-                            }
-                        }
-                    }
-                    EditorEvent::ViewportChanged {
-                        revision: _,
-                        top_visible_byte,
-                        user: true,
-                    } => {
-                        let webview_slot = native_web.borrow();
-                        let dispatch = session.borrow_mut().source_user_scroll(
-                            top_visible_byte,
-                            ScrollClock {
-                                monotonic_ms: elapsed_ms(started),
-                                preview_frame: *frame_seq.borrow(),
-                            },
-                        );
-                        if let (
-                            Ok(webview),
-                            Ok(LinuxScrollDispatch::Preview {
-                                revision,
-                                source_start,
-                                interaction_id,
-                            }),
-                        ) = (webview_slot.webview(), dispatch)
-                        {
-                            let mut sink = WryScrollSink(webview);
-                            let _ = session.borrow().preview_host().deliver_scroll_to(
-                                &mut sink,
-                                revision,
-                                source_start,
-                                interaction_id,
-                            );
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            let next_frame = frame_seq.borrow().saturating_add(1);
-            *frame_seq.borrow_mut() = next_frame;
-            editor_adapter.borrow().native_layout(next_frame);
             let now_ms = elapsed_ms(started);
-            if now_ms.saturating_sub(last_external_poll_ms.get()) >= 500 {
-                last_external_poll_ms.set(now_ms);
-                match session.borrow_mut().inspect_external_change(now_ms) {
-                    Ok(LinuxExternalOutcome::Reloaded { .. }) => {
-                        let snapshot = session.borrow().document.snapshot();
-                        if let Err(error) =
-                            editor_adapter.borrow_mut().install_open_snapshot(&snapshot)
-                        {
-                            window.set_title(&status_title(&format!(
-                                "external reload mirror failed: {error}"
-                            )));
-                        }
-                    }
-                    Ok(LinuxExternalOutcome::Conflict | LinuxExternalOutcome::Unchanged) => {}
-                    Err(error) => {
-                        window.set_title(&status_title(&format!(
-                            "external change check failed: {error}"
-                        )));
+            match session.borrow_mut().inspect_external_change(now_ms) {
+                Ok(LinuxExternalOutcome::Reloaded { .. }) => {
+                    let snapshot = session.borrow().snapshot();
+                    if let Err(error) = editor_adapter.borrow_mut().install_open_snapshot(&snapshot)
+                    {
+                        let effects = session
+                            .borrow_mut()
+                            .record_mirror_failure(error.to_string());
+                        handle_session_effects(
+                            &effects,
+                            &session,
+                            &editor_adapter,
+                            &window,
+                            started,
+                        );
                     }
                 }
-            }
-            if let Some(permit) = session.borrow_mut().start_render(elapsed_ms(started))
-                && let Err(error) = worker.submit(permit)
-            {
-                window.set_title(&status_title(&format!("render queue failed: {error}")));
-                return gtk::glib::ControlFlow::Break;
-            }
-            match worker.try_recv() {
-                Ok(Some(completed)) => match random_nonce()
-                    .and_then(|nonce| session.borrow_mut().finish_render(completed, nonce))
-                {
-                    Ok(NativeRenderOutcome::Navigate { url, .. }) => {
-                        if let Err(error) = native_web.borrow().load_url(&url) {
-                            window.set_title(&status_title(&error.to_string()));
-                            return gtk::glib::ControlFlow::Break;
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        window.set_title(&status_title(&format!("render failed: {error}")));
-                    }
-                },
-                Ok(None) => {}
+                Ok(LinuxExternalOutcome::Conflict | LinuxExternalOutcome::Unchanged) => {}
                 Err(error) => {
-                    window.set_title(&status_title(&format!("renderer stopped: {error}")));
-                    return gtk::glib::ControlFlow::Break;
+                    let _ = session
+                        .borrow_mut()
+                        .report_open_warning(format!("external change check failed: {error}"));
                 }
             }
-            let title = if session.borrow().has_external_conflict() {
-                status_title("File changed on disk (Ctrl+Shift+R reload, Ctrl+Shift+K keep)")
-            } else if session.borrow().dirty() {
-                status_title("Modified")
-            } else {
-                PRODUCT_NAME.to_owned()
-            };
-            window.set_title(&title);
-
-            // Live counts in the status bar, recomputed only when the document
-            // revision changes (never per 10 ms tick).
-            let revision = session.borrow().revision();
-            if last_counts_revision.get() != revision {
-                last_counts_revision.set(revision);
-                let counts = session.borrow().counts();
-                let minutes = counts.reading_time_seconds().div_ceil(60);
-                status_bar.set_text(&format!(
-                    "{} words   {} characters   {} min read",
-                    counts.words, counts.chars, minutes
-                ));
-            }
+            refresh_window_chrome(&session, &window, &status_bar, &last_counts_revision);
             gtk::glib::ControlFlow::Continue
         });
     }
@@ -2521,7 +3168,7 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
                 match prompt_dirty_close(window) {
                     CloseDecision::Cancel => return gtk::glib::Propagation::Stop,
                     CloseDecision::Discard => {}
-                    CloseDecision::Save { .. } => {
+                    CloseDecision::Save { .. } => loop {
                         let untitled_path = if session.borrow().path().is_some() {
                             None
                         } else {
@@ -2531,12 +3178,39 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
                             .borrow_mut()
                             .decide_close(CloseDecision::Save { untitled_path })
                         {
-                            Ok(CloseOutcome::Close) => {}
-                            Ok(CloseOutcome::KeepOpen) | Err(_) => {
+                            Ok(CloseOutcome::Close) => break,
+                            Ok(CloseOutcome::KeepOpen) => {
                                 return gtk::glib::Propagation::Stop;
                             }
+                            Err(error) => {
+                                let _ = session.borrow_mut().report_save_failure(&error);
+                                match prompt_close_save_retry(window) {
+                                    CloseSaveRetryAction::Retry => continue,
+                                    CloseSaveRetryAction::SaveAs => {
+                                        let Some(path) = prompt_save_path(Some(window), None)
+                                        else {
+                                            return gtk::glib::Propagation::Stop;
+                                        };
+                                        if let Err(save_error) =
+                                            session.borrow_mut().save_as(&path)
+                                        {
+                                            let _ = session
+                                                .borrow_mut()
+                                                .report_save_failure(save_error);
+                                            continue;
+                                        }
+                                        if session.borrow().dirty() {
+                                            return gtk::glib::Propagation::Stop;
+                                        }
+                                        break;
+                                    }
+                                    CloseSaveRetryAction::Cancel => {
+                                        return gtk::glib::Propagation::Stop;
+                                    }
+                                }
+                            }
                         }
-                    }
+                    },
                 }
             }
             // Persist session-restore state (last file, selection, window
@@ -2595,7 +3269,9 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
             && std::fs::create_dir_all(&dir).is_ok()
         {
             if let Err(error) = session.borrow_mut().bind_autosave(AutosaveStore::new(dir)) {
-                window.set_title(&status_title(&format!("autosave disabled: {error}")));
+                let _ = session
+                    .borrow_mut()
+                    .report_restore_failure(format!("autosave disabled: {error}"));
             }
             // Crash recovery: offer the highest verifiable autosave.
             let recovered = session.borrow().recover();
@@ -2620,17 +3296,9 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
                 window.move_(frame.x, frame.y);
                 window.resize(frame.width.max(1) as i32, frame.height.max(1) as i32);
             }
-            if !recovered_adopted
-                && let Some(path) = restore.last_file.as_ref()
-                && session.borrow_mut().open(path, elapsed_ms(started)).is_ok()
-            {
-                let snapshot = session.borrow().snapshot();
-                if editor_adapter
-                    .borrow_mut()
-                    .install_open_snapshot(&snapshot)
-                    .is_ok()
-                    && let Some(selection) = restore.selection
-                {
+            if !recovered_adopted && let Some(path) = restore.last_file.clone() {
+                execute_shared_open(&session, &editor_adapter, &window, path, started);
+                if let Some(selection) = restore.selection {
                     let _ = editor_adapter.borrow().set_selection(selection);
                 }
             }
@@ -2643,7 +3311,9 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
                 return gtk::glib::ControlFlow::Break;
             }
             if autosave_session.borrow().dirty() {
-                let _ = autosave_session.borrow_mut().autosave_tick(unix_millis());
+                if let Err(error) = autosave_session.borrow_mut().autosave_tick(unix_millis()) {
+                    let _ = autosave_session.borrow_mut().complete_autosave(Err(error));
+                }
             }
             gtk::glib::ControlFlow::Continue
         });
@@ -2695,7 +3365,7 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
                 .borrow_mut()
                 .open(Path::new(&reopen_path), elapsed_ms(started));
             let result = result.and_then(|()| {
-                let snapshot = reopen_session.borrow().document.snapshot();
+                let snapshot = reopen_session.borrow().snapshot();
                 reopen_adapter
                     .borrow_mut()
                     .install_open_snapshot(&snapshot)
@@ -2802,6 +3472,22 @@ fn build_window(application: &gtk::Application) -> Result<(), String> {
             smoke_window.close();
         });
     }
+    window_ready.set(true);
+    *open_session.borrow_mut() = Some(OpenSessionHandles {
+        session: Rc::clone(&session),
+        editor_adapter: Rc::clone(&editor_adapter),
+        window: window.clone(),
+        started,
+    });
+    drain_pending_open_paths(
+        &pending_open_paths,
+        &pending_open_warnings,
+        &session,
+        &editor_adapter,
+        &window,
+        started,
+    );
+
     #[cfg(feature = "test-control")]
     trace("callbacks-installed");
     Ok(())
@@ -3020,7 +3706,17 @@ fn build_format_toolbar(format_action: &Rc<dyn Fn(FormatCommand)>) -> gtk::Box {
     for (label, command) in specs {
         let button = gtk::Button::with_label(label);
         button.set_relief(gtk::ReliefStyle::None);
-        button.set_can_focus(false);
+        // A11Y (toolbar keyboard-focusable + accessible names): the format
+        // buttons stay in the focus chain with their visible label as the
+        // accessible name, so keyboard-only and AT-SPI users can reach and
+        // identify every control. The previous `set_can_focus(false)` removed
+        // them from keyboard navigation entirely.
+        button.set_can_focus(true);
+        button.set_focus_on_click(true);
+        if let Some(accessible) = button.accessible() {
+            accessible.set_name(label);
+            accessible.set_role(gtk::atk::Role::PushButton);
+        }
         let action = Rc::clone(format_action);
         button.connect_clicked(move |_| action(command.clone()));
         toolbar.pack_start(&button, false, false, 0);
@@ -3062,7 +3758,29 @@ fn build_menu_bar(
         let window = window.clone();
         item.connect_activate(move |_| match session.borrow().export_html(None) {
             Ok(output) => {
-                gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD).set_text(&output.html);
+                // LNX-005: publish both text/html and text/plain so rich and
+                // plain pastes both receive content. The payload holds an HTML
+                // copy and a tag-stripped fallback; `set_with_data` lazily
+                // serves whichever target the requestor asks for.
+                let payload = Rc::new(LinuxClipboardPayload::for_html_export(output.html));
+                let targets: Vec<gtk::TargetEntry> = CLIPBOARD_HTML_TARGETS
+                    .iter()
+                    .map(|(name, info)| {
+                        gtk::TargetEntry::new(name, gtk::TargetFlags::empty(), *info)
+                    })
+                    .collect();
+                let clipboard = gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD);
+                let provider = Rc::clone(&payload);
+                clipboard.set_with_data(&targets, move |_clip, selection, info| {
+                    let bytes = provider.bytes_for_info(info);
+                    // The type atom must match the target the requestor asked
+                    // for so paste-side target detection (text/html vs plain)
+                    // succeeds. `target_name` maps the info id back to its atom.
+                    let type_name =
+                        LinuxClipboardPayload::target_name(info).unwrap_or("UTF8_STRING");
+                    let type_atom = gtk::gdk::Atom::intern(type_name);
+                    selection.set(&type_atom, 8, bytes);
+                });
             }
             Err(error) => {
                 window.set_title(&status_title(&format!("HTML copy failed: {error}")));

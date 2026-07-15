@@ -5,6 +5,7 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tempfile::tempdir;
+use xtask::artifact_inspector::{ArtifactInspector, InspectionMode, PolicyPaths};
 use xtask::local_package::{
     LINUX_PACKAGE_LABEL, LINUX_RUNTIME_DEPENDENCIES, LinuxPackageRequest, MACOS_PACKAGE_LABEL,
     MAX_ARTIFACT_BYTES, MAX_EXECUTABLE_BYTES, MacPackageRequest, assemble_macos_app,
@@ -16,11 +17,103 @@ use xtask::local_package::{
 };
 use xtask::local_package_cli::{
     CommandExecutor, LocalPackageCliError, LocalPackageCliRequest, ProcessCommandExecutor,
-    run_local_package,
+    run_local_package, run_local_package_with_inspector,
 };
 
 fn sha256(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
+}
+
+#[test]
+fn packaging_policy_rejects_a_quarantined_candidate() {
+    let temporary = tempdir().unwrap();
+    let candidate = temporary.path().join("candidate");
+    let bytes = mach_o_arm64();
+    fs::write(&candidate, &bytes).unwrap();
+    let quarantine = temporary.path().join("quarantine.json");
+    fs::write(
+        &quarantine,
+        serde_json::to_vec(&serde_json::json!({
+            "schema": "rutile.artifact-quarantine.v1",
+            "version": 1,
+            "entries": [{
+                "sha256": sha256(&bytes),
+                "artifact": "synthetic-candidate",
+                "reason": "test quarantine",
+                "discovered_at": "2026-07-12"
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let policy = temporary.path().join("policy.toml");
+    fs::write(
+        &policy,
+        r#"schema = "rutile.artifact-inspector-policy.v1"
+version = 1
+max_entries = 256
+max_uncompressed_bytes = 67108864
+expected_license = "MIT"
+forbidden_patterns = ["RUTILE_TEST_CONTROL"]
+test_control_environment = ["RUTILE_TEST_CONTROL"]
+"#,
+    )
+    .unwrap();
+    let inspector = ArtifactInspector::load(&PolicyPaths { quarantine, policy }).unwrap();
+
+    let report = inspector.inspect(&candidate, InspectionMode::Candidate);
+
+    assert!(!report.accepted);
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|finding| finding.code.as_str() == "quarantined_hash")
+    );
+}
+
+#[test]
+fn local_packaging_applies_inspector_before_creating_outputs() {
+    let temporary = tempdir().unwrap();
+    let candidate = temporary.path().join("candidate");
+    let mut bytes = mach_o_arm64();
+    bytes.extend_from_slice(b"RUTILE_TEST_CONTROL");
+    fs::write(&candidate, &bytes).unwrap();
+    let quarantine = temporary.path().join("quarantine.json");
+    fs::write(
+        &quarantine,
+        br#"{"schema":"rutile.artifact-quarantine.v1","version":1,"entries":[]}"#,
+    )
+    .unwrap();
+    let policy = temporary.path().join("policy.toml");
+    fs::write(
+        &policy,
+        r#"schema = "rutile.artifact-inspector-policy.v1"
+version = 1
+max_entries = 256
+max_uncompressed_bytes = 67108864
+expected_license = "MIT"
+forbidden_patterns = ["RUTILE_TEST_CONTROL"]
+test_control_environment = ["RUTILE_TEST_CONTROL"]
+"#,
+    )
+    .unwrap();
+    let inspector = ArtifactInspector::load(&PolicyPaths { quarantine, policy }).unwrap();
+    let output = temporary.path().join("must-not-exist");
+    let request = LocalPackageCliRequest::Macos(MacPackageRequest {
+        candidate,
+        build_input_sha256: sha256(&bytes),
+        source_commit: valid_source_commit(),
+        output_root: output.clone(),
+        version: "0.2.0".into(),
+    });
+
+    let error =
+        run_local_package_with_inspector(request, &RecordingExecutor::default(), &inspector)
+            .unwrap_err();
+
+    assert!(error.to_string().contains("test_control_marker"));
+    assert!(!output.exists());
 }
 
 fn valid_source_commit() -> String {
@@ -687,7 +780,7 @@ fn fake_executor_propagates_nonzero_failure() {
 }
 
 #[test]
-fn run_local_package_macos_produces_manifests_and_cleans_staging() {
+fn run_local_package_macos_fails_closed_until_archive_traversal_is_supported() {
     let temporary = tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();
     let candidate = root.join("candidate");
@@ -704,18 +797,8 @@ fn run_local_package_macos_produces_manifests_and_cleans_staging() {
         version: "0.2.0".into(),
     });
 
-    let manifests = run_local_package(request, &executor).unwrap();
-    assert_eq!(manifests.len(), 2);
-    assert_eq!(
-        manifests[0].artifact.as_os_str().to_string_lossy(),
-        "Rutile-0.2.0-macos-arm64.app.zip"
-    );
-    assert_eq!(
-        manifests[1].artifact.as_os_str().to_string_lossy(),
-        "Rutile-0.2.0-macos-arm64.dmg"
-    );
-    assert_eq!(manifests[0].build_input_sha256, sha256(&bytes));
-    assert_eq!(manifests[0].packaged_executable_sha256, sha256(&bytes));
+    let error = run_local_package(request, &executor).unwrap_err();
+    assert!(error.to_string().contains("unsupported_archive"));
 
     let calls = executor.calls();
     assert_eq!(calls[0].0, "codesign");
@@ -724,10 +807,12 @@ fn run_local_package_macos_produces_manifests_and_cleans_staging() {
     assert_eq!(calls[3].0, "hdiutil");
 
     assert!(!output.join("_staging").exists());
+    assert!(output.join("Rutile-0.2.0-macos-arm64.app.zip").is_file());
+    assert!(output.join("Rutile-0.2.0-macos-arm64.dmg").is_file());
 }
 
 #[test]
-fn run_local_package_linux_produces_manifests_and_cleans_staging() {
+fn run_local_package_linux_fails_closed_until_archive_traversal_is_supported() {
     let temporary = tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();
     let candidate = root.join("candidate");
@@ -744,16 +829,8 @@ fn run_local_package_linux_produces_manifests_and_cleans_staging() {
         version: "0.2.0".into(),
     });
 
-    let manifests = run_local_package(request, &executor).unwrap();
-    assert_eq!(manifests.len(), 3);
-    assert_eq!(
-        manifests[0].artifact.as_os_str().to_string_lossy(),
-        "Rutile-0.2.0-linux-x86_64.tar.zst"
-    );
-    assert_eq!(manifests[0].build_input_sha256, sha256(&bytes));
-    assert_eq!(manifests[0].packaged_executable_sha256, sha256(&bytes));
-    assert!(!manifests[0].wayland_verified);
-    assert!(!manifests[0].rpm_runtime_verified);
+    let error = run_local_package(request, &executor).unwrap_err();
+    assert!(error.to_string().contains("unsupported_archive"));
 
     let calls = executor.calls();
     assert_eq!(calls[0].0, "tar");
@@ -762,6 +839,9 @@ fn run_local_package_linux_produces_manifests_and_cleans_staging() {
     assert_eq!(calls[3].0, "rpmbuild");
 
     assert!(!output.join("_staging").exists());
+    assert!(output.join("Rutile-0.2.0-linux-x86_64.tar.zst").is_file());
+    assert!(output.join("feathermark_0.2.0_amd64.deb").is_file());
+    assert!(output.join("feathermark-0.2.0-1.x86_64.rpm").is_file());
 }
 
 #[test]
@@ -964,8 +1044,10 @@ fn json_receipt_hashes_bind_to_artifact_bytes() {
         version: "0.2.0".into(),
     });
 
-    let manifests = run_local_package(request, &executor).unwrap();
-    let json = serde_json::to_string_pretty(&manifests).unwrap();
+    let error = run_local_package(request, &executor).unwrap_err();
+    assert!(error.to_string().contains("unsupported_archive"));
+    let json = fs::read_to_string(output.join("Rutile-0.2.0-macos-arm64.app.zip.manifest-v1.json"))
+        .unwrap();
     assert!(json.contains(&sha256(&bytes)));
     assert!(json.contains(&valid_source_commit()));
     assert!(json.contains("0.2.0"));

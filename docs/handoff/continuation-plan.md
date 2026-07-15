@@ -1,5 +1,7 @@
 # FeatherMark Continuation Runbook
 
+> **Status: Superseded historical runbook.** The paused 0.1.0 wave completed and 0.2.0 is now on `main`. Preserve this for provenance; use `docs/handoff/current-state.md` for current work.
+
 ## BLUF
 
 FeatherMark is paused on `feat/feathermark-build` with a valuable uncommitted native-shell and packaging wave. Preserve it.

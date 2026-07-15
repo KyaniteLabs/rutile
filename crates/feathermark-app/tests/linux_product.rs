@@ -2,11 +2,13 @@
 
 use std::sync::Arc;
 
+use feathermark_app::app::{AppEffect, NoticeSeverity};
 use feathermark_app::app::{CloseDecision, CloseOutcome};
 use feathermark_app::brand::STARTER_DOCUMENT;
 use feathermark_app::platform::linux_gtk::{
-    GtkSourceEditorAdapter, LinuxExternalOutcome, LinuxProductSession, LinuxScrollController,
-    LinuxScrollDispatch, NativeRenderOutcome, scroll_delivery_script,
+    GtkSourceEditorAdapter, LinuxClipboardPayload, LinuxExternalOutcome, LinuxOpenDelivery,
+    LinuxProductSession, LinuxScrollController, LinuxScrollDispatch, NativeRenderOutcome,
+    plan_open_delivery, scroll_delivery_script,
 };
 use feathermark_app::preview_host::{PreviewControlSink, PreviewHost};
 use feathermark_core::{
@@ -681,6 +683,161 @@ fn product_session_close_save_without_path_is_an_error() {
             })
             .is_err()
     );
+}
+
+#[test]
+fn plan_open_delivery_opens_first_file_and_warns_on_extras() {
+    let delivery = plan_open_delivery(vec![
+        std::path::PathBuf::from("/tmp/a.md"),
+        std::path::PathBuf::from("/tmp/b.md"),
+    ]);
+    assert_eq!(
+        delivery,
+        LinuxOpenDelivery {
+            primary: Some(std::path::PathBuf::from("/tmp/a.md")),
+            ignored_extra_count: 1,
+            warning: Some(
+                "Opened only the first of 2 files; additional paths were ignored".to_owned()
+            ),
+        }
+    );
+}
+
+#[test]
+fn clipboard_payload_publishes_html_and_plain_targets() {
+    let payload = LinuxClipboardPayload::for_html_export(
+        "<h1>Title</h1><p>Some <strong>bold</strong> text.</p>".to_owned(),
+    );
+    assert!(payload.html.contains("<h1>Title</h1>"));
+    assert_eq!(payload.bytes_for_info(0), payload.html.as_bytes());
+    assert_eq!(payload.bytes_for_info(2), payload.plain.as_bytes());
+    assert_eq!(LinuxClipboardPayload::target_name(0), Some("text/html"));
+    assert_eq!(LinuxClipboardPayload::target_name(2), Some("text/plain"));
+    assert!(payload.plain.contains("Title"));
+    assert!(payload.plain.contains("bold"));
+}
+
+#[test]
+fn shared_open_failure_pushes_durable_notice() {
+    let mut session = LinuxProductSession::new().unwrap();
+    let effects = session.complete_open_request(Err("permission denied".to_owned()), 0);
+    assert_eq!(effects.len(), 1);
+    let AppEffect::PresentNotice { notice } = effects.into_iter().next().unwrap() else {
+        panic!("expected PresentNotice");
+    };
+    assert_eq!(notice.severity, NoticeSeverity::Error);
+    assert_eq!(session.notices(), &[notice]);
+}
+
+#[test]
+fn mirror_failure_requests_one_resync_then_persistent_notice() {
+    let mut session = LinuxProductSession::new().unwrap();
+    let first = session.record_mirror_failure("preview crashed".to_owned());
+    assert_eq!(first, vec![AppEffect::PerformMirrorResync]);
+
+    let second = session.record_mirror_failure("second failure".to_owned());
+    let AppEffect::PresentNotice { notice } = second.into_iter().next().unwrap() else {
+        panic!("expected PresentNotice");
+    };
+    assert_eq!(notice.severity, NoticeSeverity::Error);
+    assert!(notice.message.contains("second failure"));
+}
+
+#[test]
+fn save_failure_notice_survives_subsequent_poll_state() {
+    let mut session = LinuxProductSession::new().unwrap();
+    session.replace_all("dirty", 0).unwrap();
+    let effects = session.report_save_failure("disk full");
+    let AppEffect::PresentNotice { notice } = effects.into_iter().next().unwrap() else {
+        panic!("expected PresentNotice");
+    };
+    assert_eq!(notice.severity, NoticeSeverity::Error);
+    assert!(notice.message.contains("Save failed: disk full"));
+    assert!(!notice.message.contains("Could not open document"));
+    assert!(session.dirty());
+    assert_eq!(session.latest_notice(), Some(notice.clone()));
+    session.dismiss_notice(notice.id);
+    assert!(session.notices().is_empty());
+}
+
+#[test]
+fn open_via_shared_command_loads_document_and_schedules_render() {
+    let directory = std::env::temp_dir().join(format!(
+        "feathermark-linux-shared-open-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("shared-open.md");
+    std::fs::write(&path, "shared open bytes").unwrap();
+
+    let mut session = LinuxProductSession::new().unwrap();
+    let effects = session.open_via_shared_command(path.clone(), 10);
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, AppEffect::ScheduleRender { .. }))
+    );
+    assert_eq!(session.source(), "shared open bytes");
+    assert_eq!(session.path(), Some(path.as_path()));
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn autosave_failure_pushes_warning_notice_kept_after_render_cycle() {
+    // LNX-002: an injected autosave failure surfaces as a durable warning
+    // notice in the shared status model, and survives an unrelated render cycle
+    // (LNX-001): a subsequent render completion does not clear active notices.
+    let mut session = LinuxProductSession::new().unwrap();
+    session.replace_all("# body\n", 0).unwrap();
+    let effects = session.complete_autosave(Err("journal I/O error".to_owned()));
+    let AppEffect::PresentNotice { notice } = effects.into_iter().next().unwrap() else {
+        panic!("autosave failure must produce a PresentNotice");
+    };
+    assert_eq!(notice.severity, NoticeSeverity::Warning);
+    assert!(notice.message.contains("journal I/O error"));
+
+    // A render cycle must not clear the persistent notice.
+    let completed = session.start_render(50).unwrap().execute();
+    let _ = session.finish_render(completed, [0x07; 16]).unwrap();
+    assert!(session.notices().iter().any(|n| n.id == notice.id));
+}
+
+#[test]
+fn restore_failure_is_non_fatal_and_becomes_a_notice() {
+    // LNX-002: degraded session restore never exits the process; it surfaces as
+    // a dismissible notice through the shared model.
+    let mut session = LinuxProductSession::new().unwrap();
+    let effects = session.report_restore_failure("session state oversize".to_owned());
+    let AppEffect::PresentNotice { notice } = effects.into_iter().next().unwrap() else {
+        panic!("restore failure must produce a PresentNotice");
+    };
+    assert_eq!(notice.severity, NoticeSeverity::Warning);
+    assert!(notice.message.contains("session restore degraded"));
+    assert!(!notice.message.contains("Could not open document"));
+}
+
+#[test]
+fn mirror_resync_failure_then_recovery_follows_the_contract() {
+    // LNX-003: first failure requests one resync; a failed resync surfaces a
+    // persistent notice; a later successful round clears the pending flag so a
+    // subsequent failure can request another single resync.
+    let mut session = LinuxProductSession::new().unwrap();
+    let first = session.record_mirror_failure("preview crashed".to_owned());
+    assert_eq!(first, vec![AppEffect::PerformMirrorResync]);
+
+    let failed = session.complete_mirror_resync(Err("adapter timeout".to_owned()));
+    let AppEffect::PresentNotice { notice } = failed.into_iter().next().unwrap() else {
+        panic!("failed resync must produce a PresentNotice");
+    };
+    assert!(notice.message.contains("adapter timeout"));
+    assert!(session.notices().iter().any(|n| n.id == notice.id));
+
+    // After clearing the pending resync with a success, a new failure may
+    // request exactly one more resync (no infinite loop, no skipped recovery).
+    let _ = session.complete_mirror_resync(Ok(()));
+    let again = session.record_mirror_failure("later failure".to_owned());
+    assert_eq!(again, vec![AppEffect::PerformMirrorResync]);
 }
 
 #[test]

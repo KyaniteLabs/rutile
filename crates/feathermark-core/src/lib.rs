@@ -18,7 +18,9 @@ mod security;
 mod session_contract;
 
 pub use autosave::{
-    AUTOSAVE_JOURNAL_FILE, AUTOSAVE_RETENTION, AutosaveError, AutosaveStore, RecoveredDocument,
+    AUTOSAVE_JOURNAL_FILE, AUTOSAVE_LOCK_FILE, AUTOSAVE_RETENTION, AutosaveError,
+    AutosaveRecordOutcome, AutosaveStore, MAX_JOURNAL_BYTES, OrphanFailure, OrphanGcReport,
+    PruneOutcome, RecoveredDocument, RecoveryReport, RejectedEntry, RejectionReason,
     SESSION_STATE_FILE,
 };
 pub use counts::{Counts, READING_WPM, char_count, counts, reading_time_seconds, word_count};
@@ -34,13 +36,13 @@ pub use editor_contract::{
 };
 pub use export::render_export_page;
 pub use export_contract::{
-    ExportError, ExportPage, ExportRequest, ExportViolation, MAX_EXPORT_PAGE_BYTES,
+    EXPORT_CSP, ExportError, ExportPage, ExportRequest, ExportViolation, MAX_EXPORT_PAGE_BYTES,
     MAX_EXPORT_TITLE_BYTES,
 };
 pub use feathermark_types::{InteractionId, Revision};
 pub use files::{
-    DiskVersion, ExternalChange, ExternalChangeDebouncer, ExternalResolution, FileError,
-    FileService, LoadedDocument, LocalFileService, SaveFault,
+    DiskVersion, DurabilityError, ExternalChange, ExternalChangeDebouncer, ExternalResolution,
+    FileError, FileService, LoadedDocument, LocalFileService, SaveError, SaveFault, SaveOutcome,
 };
 pub use find_contract::{
     FindDirection, FindError, FindQuery, FindReplaceOp, MAX_FIND_PATTERN_BYTES,

@@ -1,5 +1,7 @@
 # FeatherMark runner provisioning
 
+> **Status: Current specialized subsystem, unprovisioned.** The fail-closed runner code remains in `xtask`, but the two trust/dispatch manifests are absent. This subsystem is not required for ordinary product builds or the 0.2.0 local-beta release evidence.
+
 Task 1A is intentionally fail-closed until the five real runners and their root launcher services
 exist. Do not create placeholder manifests, endpoints, snapshots, keys, or lock evidence.
 

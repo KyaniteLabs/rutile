@@ -29,16 +29,11 @@
 //! frame, per `DESIGN-SYSTEM.md`'s imagery section) is forward-compatible with
 //! that future without costing anything now.
 
-use crate::export_contract::{ExportError, ExportPage, ExportRequest};
+use crate::export_contract::{EXPORT_CSP, ExportError, ExportPage, ExportRequest};
 use crate::render::render_markdown;
 
 /// Title used when an [`ExportRequest`] carries none.
 const DEFAULT_TITLE: &str = "FeatherMark document";
-
-/// Content-Security-Policy for the exported file: deny by default, permit only
-/// the inline stylesheet and (future) inline data-URI images. Belt-and-suspenders
-/// over the [`ExportPage`] inspection for recipients whose viewer honors meta CSP.
-const EXPORT_CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'";
 
 /// The renderer emits hyperlinks as inert `data-feathermark-url` carriers for the
 /// live preview bridge; the exported file has no bridge, so the marker is rewritten

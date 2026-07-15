@@ -24,9 +24,7 @@ use iced_winit::program::runtime::UserInterface;
 use iced_winit::program::runtime::user_interface;
 use iced_winit::winit;
 use objc2::MainThreadMarker;
-use objc2_app_kit::{
-    NSModalResponseOK, NSPasteboard, NSPasteboardTypeHTML, NSPasteboardTypeString, NSSavePanel,
-};
+use objc2_app_kit::{NSModalResponseOK, NSOpenPanel, NSSavePanel};
 use objc2_foundation::NSString;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
@@ -37,8 +35,10 @@ use wry::http::{Response, StatusCode};
 use wry::{NewWindowResponse, Rect, WebContext, WebView, WebViewBuilder};
 
 use super::{
-    AppKitMainThread, EditorVisualReceipt, IcedEditorAdapter, MacError, MacScrollDispatch,
-    PreviewIpcFatal, PreviewIpcIngress, ProductSession, preview_ipc_channel, split_panes,
+    AppKitMainThread, EditorVisualReceipt, IcedEditorAdapter, MacError, MacExternalOutcome,
+    MacMenuCommand, MacSaveAction, MacScrollDispatch, MacUserEvent, PreviewIpcFatal,
+    PreviewIpcIngress, ProductSession, bind_open_proxy, forward_open_urls,
+    install_file_menu_with_actions, preview_ipc_channel, split_panes,
 };
 use crate::actions::SessionRestore;
 use crate::app::{AppEffect, CloseDecision, CloseOutcome};
@@ -56,6 +56,8 @@ const SMOKE_LIFECYCLE_CYCLES: u64 = 50;
 /// Autosave cadence for the crash-recovery journal (SPEC §9). A dirty buffer is
 /// journaled at most this often from `about_to_wait`.
 const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(5);
+/// Debounced disk-version polling for external-change detection (MAC-005).
+const DISK_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 // ---------------------------------------------------------------------------
 // DESIGN-SYSTEM.md "specimen case" app-chrome tokens (committed 2026-07-10).
@@ -81,11 +83,17 @@ const CHROME_FONT_SIZE: f32 = 12.0;
 
 pub(super) fn run_native(path: Option<PathBuf>, smoke: bool) -> Result<(), MacError> {
     AppKitMainThread::claim()?;
+    if smoke {
+        eprintln!("SMOKE_TRACE stage=0 event=launch");
+    }
     let session = match path {
         Some(path) => ProductSession::open(&path)?,
         None => ProductSession::new_in_memory(STARTER_DOCUMENT)?,
     };
-    let event_loop = EventLoop::new().map_err(|error| MacError::Native(error.to_string()))?;
+    let event_loop = EventLoop::<MacUserEvent>::with_user_event()
+        .build()
+        .map_err(|error| MacError::Native(error.to_string()))?;
+    bind_open_proxy(event_loop.create_proxy());
     let display_handle = event_loop.owned_display_handle();
     let mut runner = ProductRunner::new(session, smoke, display_handle)?;
     event_loop
@@ -128,6 +136,8 @@ struct ProductRunner {
     last_autosave: Instant,
     pending_recovery: Option<RecoveredDocument>,
     pending_restore: Option<SessionRestore>,
+    last_disk_poll: Instant,
+    menu_installed: bool,
 }
 
 impl ProductRunner {
@@ -209,7 +219,178 @@ impl ProductRunner {
             last_autosave: Instant::now(),
             pending_recovery,
             pending_restore,
+            last_disk_poll: Instant::now(),
+            menu_installed: false,
         })
+    }
+
+    fn render_clock_ms(&self) -> u64 {
+        self.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
+    }
+
+    fn schedule_render(&mut self) -> Result<(), MacError> {
+        self.session.pump_render_start(self.render_clock_ms())?;
+        Ok(())
+    }
+
+    fn drain_render_completions(&mut self) -> Result<(), MacError> {
+        while let Some(receipt) = self.session.pump_render_completions()? {
+            if let Some(webview) = &self.webview {
+                webview
+                    .load_url(&receipt.url)
+                    .map_err(|error| MacError::Native(error.to_string()))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn refresh_after_document_swap(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+    ) -> Result<(), MacError> {
+        self.source_pane
+            .replace(&self.session.snapshot())
+            .map_err(|error| MacError::Core(error.to_string()))?;
+        self.source_pane.update_counts(self.session.counts());
+        self.schedule_render()?;
+        self.drain_render_completions()?;
+        let _ = event_loop;
+        Ok(())
+    }
+
+    fn handle_open_delivery(&mut self, event_loop: &ActiveEventLoop, urls: Vec<String>) {
+        let request = ProductSession::classify_open_urls(&urls);
+        if let Err(error) = self.session.handle_open_request(request) {
+            self.fail(event_loop, error.to_string());
+            return;
+        }
+        if let Err(error) = self.refresh_after_document_swap(event_loop) {
+            self.fail(event_loop, error.to_string());
+        }
+    }
+
+    fn handle_menu_command(&mut self, event_loop: &ActiveEventLoop, command: MacMenuCommand) {
+        // Recovery / dirty-close decisions take priority over menu chrome.
+        if self.pending_recovery.is_some() || self.pending_close {
+            self.surface_error("Finish the pending decision before using the File menu");
+            return;
+        }
+        match command {
+            MacMenuCommand::Open => self.run_open_panel(event_loop),
+            MacMenuCommand::Save => self.run_save(event_loop),
+            MacMenuCommand::SaveAs => self.run_save_as_md(event_loop),
+            MacMenuCommand::Close => {
+                if self.session.app_state().dirty() {
+                    self.pending_close = true;
+                    self.sync_window_title();
+                } else {
+                    self.save_session_on_exit();
+                    event_loop.exit();
+                }
+            }
+        }
+    }
+
+    fn run_open_panel(&mut self, event_loop: &ActiveEventLoop) {
+        match choose_open_path() {
+            Ok(Some(path)) => {
+                self.handle_open_delivery(event_loop, vec![path.display().to_string()])
+            }
+            Ok(None) => {}
+            Err(error) => self.surface_error(error.to_string()),
+        }
+    }
+
+    fn run_save(&mut self, event_loop: &ActiveEventLoop) {
+        if self.session.has_external_conflict() {
+            self.surface_error("Resolve the external file conflict before saving");
+            return;
+        }
+        if let Err(MacError::ExternalConflict) =
+            self.session.ensure_no_external_conflict_before_save()
+        {
+            self.surface_error("The file changed on disk; resolve the conflict before saving");
+            return;
+        }
+        match self.session.request_save() {
+            Ok(MacSaveAction::Completed) | Ok(MacSaveAction::Noop) => {
+                self.sync_window_title();
+            }
+            Ok(MacSaveAction::NeedSaveAs) => self.run_save_as_md(event_loop),
+            Err(error) => self.surface_error(format!("Save failed: {error}")),
+        }
+    }
+
+    fn run_save_as_md(&mut self, _event_loop: &ActiveEventLoop) {
+        let default = self
+            .session
+            .path()
+            .and_then(Path::file_name)
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Untitled.md".to_owned());
+        match choose_save_path(&default) {
+            Ok(Some(path)) => match self.session.request_save_as(path) {
+                Ok(()) => self.sync_window_title(),
+                Err(error) => self.surface_error(format!("Save As failed: {error}")),
+            },
+            Ok(None) => {}
+            Err(error) => self.surface_error(error.to_string()),
+        }
+    }
+
+    fn sync_window_title(&mut self) {
+        if let Some(window) = &self.window {
+            if let Some(notice) = self
+                .session
+                .app_state()
+                .notices()
+                .iter()
+                .find(|notice| !notice.dismissed)
+            {
+                window.set_title(&status_title(&notice.message));
+            } else if self.pending_close {
+                window.set_title(&status_title(
+                    "Unsaved changes: ⌘S Save · ⌘D Don’t Save · Esc Cancel",
+                ));
+            } else if self.pending_recovery.is_some() {
+                window.set_title(&status_title(
+                    "Recovered unsaved changes: ⌘Y Restore · Esc Dismiss",
+                ));
+            } else if self.session.has_external_conflict() {
+                window.set_title(&status_title(
+                    "External change detected: reload or save elsewhere",
+                ));
+            } else {
+                window.set_title(PRODUCT_NAME);
+            }
+            window.request_redraw();
+        }
+    }
+
+    fn maybe_poll_external_change(&mut self) {
+        if self.smoke || self.last_disk_poll.elapsed() < DISK_POLL_INTERVAL {
+            return;
+        }
+        self.last_disk_poll = Instant::now();
+        match self.session.inspect_external_change() {
+            Ok(MacExternalOutcome::Unchanged) => {}
+            Ok(MacExternalOutcome::Reloaded { .. }) => {
+                let _ = self.source_pane.replace(&self.session.snapshot());
+                let _ = self.schedule_render();
+                self.sync_window_title();
+            }
+            Ok(MacExternalOutcome::Conflict) => self.sync_window_title(),
+            Err(error) => self.surface_error(format!("Disk check failed: {error}")),
+        }
+    }
+
+    fn install_file_menu(&mut self) {
+        if self.menu_installed {
+            return;
+        }
+        if install_file_menu().is_ok() {
+            self.menu_installed = true;
+        }
     }
 
     fn process_editor_events(&mut self, event_loop: &ActiveEventLoop) -> Result<bool, MacError> {
@@ -220,6 +401,29 @@ impl ProductRunner {
                 .map_err(|_| MacError::Native("editor event queue lock poisoned".into()))?;
             queue.drain(..).collect::<Vec<_>>()
         };
+        // MAC-004: discard buffer mutations while a recovery decision is pending.
+        // Viewport-only scroll is still allowed so the user can read the buffer.
+        if self.pending_recovery.is_some() {
+            for event in events {
+                if let EditorEvent::ViewportChanged {
+                    top_visible_byte,
+                    user: true,
+                    ..
+                } = event
+                    && let MacScrollDispatch::Preview {
+                        revision,
+                        source_start,
+                        interaction_id,
+                    } = self
+                        .session
+                        .source_scroll(top_visible_byte, self.scroll_clock())?
+                {
+                    self.deliver_preview_scroll(revision, source_start, interaction_id)?;
+                }
+            }
+            let _ = event_loop;
+            return Ok(false);
+        }
         let mut edited = false;
         for event in events {
             match event {
@@ -253,7 +457,7 @@ impl ProductRunner {
             }
         }
         if edited {
-            self.render_and_navigate()?;
+            self.schedule_render()?;
         }
         let _ = event_loop;
         Ok(edited)
@@ -351,13 +555,8 @@ impl ProductRunner {
     }
 
     fn render_and_navigate(&mut self) -> Result<(), MacError> {
-        let receipt = self.session.render_now()?;
-        if let Some(webview) = &self.webview {
-            webview
-                .load_url(&receipt.url)
-                .map_err(|error| MacError::Native(error.to_string()))?;
-        }
-        Ok(())
+        self.schedule_render()?;
+        self.drain_render_completions()
     }
 
     // --- Wave 2M: native input routed to the shared action surface ----------
@@ -478,10 +677,17 @@ impl ProductRunner {
     /// `html_to_markdown` before insert, falling back to plain text when there
     /// is no HTML flavor or the conversion is rejected.
     fn run_smart_paste(&mut self, event_loop: &ActiveEventLoop) {
-        let text = clipboard_html()
-            .and_then(|html| html_to_markdown(&html).ok())
-            .or_else(clipboard_string);
+        let text = ProductSession::read_clipboard_paste_text()
+            .ok()
+            .and_then(|raw| {
+                if raw.trim_start().starts_with('<') {
+                    html_to_markdown(&raw).ok().or(Some(raw))
+                } else {
+                    Some(raw)
+                }
+            });
         let Some(text) = text else {
+            self.surface_error("Paste failed: clipboard is empty or unavailable");
             return;
         };
         // Route the paste through the shared AppState insert primitive and follow
@@ -524,10 +730,10 @@ impl ProductRunner {
     /// Copy-as-HTML onto the general pasteboard (HTML + plain flavors).
     fn run_copy_html(&mut self) {
         match self.session.export_html() {
-            Ok(output) => {
-                copy_html_to_clipboard(&output.html);
-                self.surface_error("Copied HTML to clipboard");
-            }
+            Ok(output) => match ProductSession::write_clipboard_html(&output.html) {
+                Ok(()) => self.surface_error("Copied HTML to clipboard"),
+                Err(error) => self.surface_error(format!("Copy failed: {error}")),
+            },
             Err(error) => self.surface_error(format!("Copy HTML failed: {error}")),
         }
     }
@@ -857,7 +1063,7 @@ impl ProductRunner {
         }
     }
 
-    fn apply_restore(&mut self) {
+    fn apply_restore(&mut self, event_loop: &ActiveEventLoop) {
         let Some(restore) = self.pending_restore.take() else {
             return;
         };
@@ -866,12 +1072,40 @@ impl ProductRunner {
                 window.request_inner_size(winit::dpi::LogicalSize::new(frame.width, frame.height));
             window.set_outer_position(winit::dpi::LogicalPosition::new(frame.x, frame.y));
         }
-        if let Some(selection) = restore.selection {
-            let revision = self.session.snapshot().revision;
-            let _ = self
-                .source_pane
-                .editor_mut()
-                .set_selection(revision, selection);
+        let selection = restore.selection;
+        let viewport = restore.top_visible_byte;
+        match self.session.apply_session_restore(&restore) {
+            Ok(report) => {
+                if report.opened_last_file {
+                    if let Err(error) = self.refresh_after_document_swap(event_loop) {
+                        self.fail(event_loop, error.to_string());
+                        return;
+                    }
+                }
+                if report.selection_applied {
+                    if let Some(selection) = selection {
+                        let revision = self.session.snapshot().revision;
+                        let _ = self
+                            .source_pane
+                            .editor_mut()
+                            .set_selection(revision, selection);
+                    }
+                }
+                if report.viewport_applied {
+                    if let Some(top) = viewport {
+                        let revision = self.session.snapshot().revision;
+                        let _ = self
+                            .source_pane
+                            .editor_mut()
+                            .scroll_to_byte(revision, top, revision);
+                    }
+                }
+                for notice in report.notices {
+                    self.surface_error(notice.message);
+                }
+                self.sync_window_title();
+            }
+            Err(error) => self.surface_error(format!("Session restore failed: {error}")),
         }
     }
 
@@ -983,8 +1217,11 @@ impl ProductRunner {
             return;
         }
         if self.smoke_stage == 0
-            && self.painted_revision == Some(0)
-            && self.source_pane.presented_frames > 0
+            && smoke_stage_zero_ready_to_edit(
+                self.painted_revision,
+                self.source_pane.presented_frames,
+                self.preview_scroll_events,
+            )
         {
             while self.visibility_cycles < SMOKE_LIFECYCLE_CYCLES {
                 if let Some(webview) = &self.webview {
@@ -1021,6 +1258,10 @@ impl ProductRunner {
             if !self.smoke_resize_requested {
                 self.smoke_resize_requested = true;
                 if let Some(window) = &self.window {
+                    eprintln!(
+                        "SMOKE_TRACE stage={} event=resize-request logical=1200x760",
+                        self.smoke_stage
+                    );
                     let _ = window.request_inner_size(winit::dpi::LogicalSize::new(1_200, 760));
                 }
                 return;
@@ -1097,6 +1338,7 @@ impl ProductRunner {
                 return;
             }
             self.smoke_stage = 1;
+            eprintln!("SMOKE_TRACE stage=1 event=edited");
         } else if self.smoke_stage == 1
             && self.painted_revision == Some(self.session.snapshot().revision)
             && self.source_pane.presented_text == "# Native smoke 🪶\n\nEdited.\n"
@@ -1117,6 +1359,7 @@ impl ProductRunner {
                 Ok(reopened) if reopened.source() == "# Native smoke 🪶\n\nEdited.\n" => {
                     self.session = reopened;
                     self.smoke_stage = 2;
+                    eprintln!("SMOKE_TRACE stage=2 event=save-reopen");
                     event_loop.exit();
                 }
                 Ok(_) => self.fail(event_loop, "reopened source did not match saved UTF-8"),
@@ -1126,10 +1369,32 @@ impl ProductRunner {
     }
 }
 
-impl ApplicationHandler for ProductRunner {
+/// Stage-zero readiness for the supervised macOS smoke: the flow must not
+/// perform its first edit until the preview has painted revision 0, the source
+/// editor has presented at least one frame, and the preview has echoed back a
+/// scroll receipt (`preview_scroll_events > 0`). Pure over plain integers so
+/// the invariant can be unit-tested without a live compositor or window.
+fn smoke_stage_zero_ready_to_edit(
+    painted_revision: Option<u64>,
+    presented_frames: u64,
+    preview_scroll_events: u64,
+) -> bool {
+    painted_revision == Some(0) && presented_frames > 0 && preview_scroll_events > 0
+}
+
+impl ApplicationHandler<MacUserEvent> for ProductRunner {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: MacUserEvent) {
+        match event {
+            MacUserEvent::OpenUrls(urls) => self.handle_open_delivery(event_loop, urls),
+            MacUserEvent::MenuCommand(command) => self.handle_menu_command(event_loop, command),
+        }
+    }
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
+        }
+        if self.smoke {
+            eprintln!("SMOKE_TRACE stage=0 event=resumed");
         }
         let attributes = Window::default_attributes()
             .with_title(PRODUCT_NAME)
@@ -1208,7 +1473,8 @@ impl ApplicationHandler for ProductRunner {
             Ok(webview) => {
                 self.webview = Some(webview);
                 self.window = Some(window);
-                self.apply_restore();
+                self.install_file_menu();
+                self.apply_restore(event_loop);
                 if self.pending_recovery.is_some()
                     && let Some(window) = &self.window
                 {
@@ -1237,15 +1503,18 @@ impl ApplicationHandler for ProductRunner {
         if matches!(&event, WindowEvent::CloseRequested) {
             if self.session.app_state().dirty() {
                 self.pending_close = true;
-                if let Some(window) = &self.window {
-                    window.set_title(&status_title(
-                        "Unsaved changes: ⌘S Save · ⌘D Don’t Save · Esc Cancel",
-                    ));
-                    window.request_redraw();
-                }
+                self.sync_window_title();
             } else {
                 self.save_session_on_exit();
                 event_loop.exit();
+            }
+            return;
+        }
+
+        if let WindowEvent::DroppedFile(path) = &event {
+            let delivery = vec![path.display().to_string()];
+            if forward_open_urls(delivery.clone()).is_err() {
+                self.handle_open_delivery(event_loop, delivery);
             }
             return;
         }
@@ -1279,6 +1548,14 @@ impl ApplicationHandler for ProductRunner {
                 && (self.source_pane.state.pane_width - 600.0).abs() < f32::EPSILON
             {
                 self.resize_proven = true;
+                eprintln!(
+                    "SMOKE_TRACE stage={} event=resize logical={}x{} source_width={} preview_width={}",
+                    self.smoke_stage,
+                    logical.width,
+                    logical.height,
+                    panes.source_width,
+                    panes.preview_width,
+                );
             }
         }
 
@@ -1304,22 +1581,23 @@ impl ApplicationHandler for ProductRunner {
                     key_event.logical_key,
                     Key::Named(winit::keyboard::NamedKey::Escape)
                 ) {
-                    let _ = self.session.decide_close(CloseDecision::Cancel);
+                    let _ = self.session.request_close(CloseDecision::Cancel);
                     self.pending_close = false;
-                    if let Some(window) = &self.window {
-                        window.set_title(PRODUCT_NAME);
-                    }
+                    self.sync_window_title();
                     return;
                 }
                 if command
                     && matches!(key_event.logical_key, Key::Character(ref key) if key.eq_ignore_ascii_case("d"))
                 {
-                    match self.session.decide_close(CloseDecision::Discard) {
+                    match self.session.request_close(CloseDecision::Discard) {
                         Ok(CloseOutcome::Close) => {
                             self.save_session_on_exit();
                             event_loop.exit();
                         }
-                        Ok(CloseOutcome::KeepOpen) => self.pending_close = false,
+                        Ok(CloseOutcome::KeepOpen) => {
+                            self.pending_close = false;
+                            self.sync_window_title();
+                        }
                         Err(error) => self.surface_error(error.to_string()),
                     }
                     return;
@@ -1331,11 +1609,9 @@ impl ApplicationHandler for ProductRunner {
                         match choose_save_path("Untitled.md") {
                             Ok(Some(path)) => Some(path),
                             Ok(None) => {
-                                let _ = self.session.decide_close(CloseDecision::Cancel);
+                                let _ = self.session.request_close(CloseDecision::Cancel);
                                 self.pending_close = false;
-                                if let Some(window) = &self.window {
-                                    window.set_title(PRODUCT_NAME);
-                                }
+                                self.sync_window_title();
                                 return;
                             }
                             Err(error) => {
@@ -1348,13 +1624,16 @@ impl ApplicationHandler for ProductRunner {
                     };
                     match self
                         .session
-                        .decide_close(CloseDecision::Save { untitled_path })
+                        .request_close(CloseDecision::Save { untitled_path })
                     {
                         Ok(CloseOutcome::Close) => {
                             self.save_session_on_exit();
                             event_loop.exit();
                         }
-                        Ok(CloseOutcome::KeepOpen) => self.pending_close = false,
+                        Ok(CloseOutcome::KeepOpen) => {
+                            self.pending_close = false;
+                            self.sync_window_title();
+                        }
                         Err(error) => self.surface_error(format!("Save failed: {error}")),
                     }
                     return;
@@ -1363,6 +1642,8 @@ impl ApplicationHandler for ProductRunner {
             let shift = self.modifiers.shift_key();
 
             // Crash-recovery prompt (non-smoke): ⌘Y restore · Esc dismiss.
+            // While pending, all other key-driven edits and commands are blocked
+            // (MAC-004): the only accepted keys are the decision keys.
             if self.pending_recovery.is_some() {
                 if command
                     && matches!(key_event.logical_key, Key::Character(ref key) if key.eq_ignore_ascii_case("y"))
@@ -1377,6 +1658,7 @@ impl ApplicationHandler for ProductRunner {
                     self.dismiss_recovery();
                     return;
                 }
+                return;
             }
 
             // Find/replace bar captures non-command keys while open.
@@ -1384,6 +1666,15 @@ impl ApplicationHandler for ProductRunner {
                 && self.handle_find_key(event_loop, key_event, command, shift)
             {
                 self.source_pane.request_redraw();
+                return;
+            }
+
+            // Open document (⌘O).
+            if command
+                && !shift
+                && matches!(key_event.logical_key, Key::Character(ref key) if key.eq_ignore_ascii_case("o"))
+            {
+                self.run_open_panel(event_loop);
                 return;
             }
 
@@ -1461,13 +1752,10 @@ impl ApplicationHandler for ProductRunner {
             }
 
             if command
+                && !shift
                 && matches!(key_event.logical_key, Key::Character(ref key) if key.eq_ignore_ascii_case("s"))
             {
-                if self.session.app_state().dirty() && self.session.path().is_some() {
-                    if let Err(error) = self.session.save() {
-                        self.fail(event_loop, error.to_string());
-                    }
-                }
+                self.run_save(event_loop);
                 return;
             }
             if command
@@ -1475,46 +1763,34 @@ impl ApplicationHandler for ProductRunner {
             {
                 if self.session.path().is_some() {
                     match self.session.reload() {
-                        Ok(()) => match self.session.render_now() {
-                            Ok(receipt) => {
-                                if let Err(error) =
-                                    self.source_pane.replace(&self.session.snapshot())
-                                {
-                                    self.fail(event_loop, error.to_string());
-                                    return;
-                                }
-                                if let Some(webview) = &self.webview
-                                    && let Err(error) = webview.load_url(&receipt.url)
-                                {
-                                    self.fail(event_loop, error.to_string());
-                                }
+                        Ok(()) => {
+                            if let Err(error) = self.refresh_after_document_swap(event_loop) {
+                                self.fail(event_loop, error.to_string());
                             }
-                            Err(error) => self.fail(event_loop, error.to_string()),
-                        },
-                        Err(error) => self.fail(event_loop, error.to_string()),
+                        }
+                        Err(error) => self.surface_error(error.to_string()),
                     }
                 }
                 return;
             }
-            if command {
-                if matches!(key_event.logical_key, Key::Character(ref key) if key.eq_ignore_ascii_case("z"))
-                {
-                    let redo = self.modifiers.shift_key();
-                    let change = if redo {
-                        self.session.redo()
-                    } else {
-                        self.session.undo()
-                    };
-                    if let Some(change) = change {
-                        if let Err(error) = self
-                            .source_pane
-                            .editor_mut()
-                            .apply_external_change(&change)
-                            .map_err(|error| MacError::Core(error.to_string()))
-                            .and_then(|_| self.render_and_navigate())
-                        {
-                            self.fail(event_loop, error.to_string());
-                        }
+            if command
+                && matches!(key_event.logical_key, Key::Character(ref key) if key.eq_ignore_ascii_case("z"))
+            {
+                let redo = self.modifiers.shift_key();
+                let change = if redo {
+                    self.session.redo()
+                } else {
+                    self.session.undo()
+                };
+                if let Some(change) = change {
+                    if let Err(error) = self
+                        .source_pane
+                        .editor_mut()
+                        .apply_external_change(&change)
+                        .map_err(|error| MacError::Core(error.to_string()))
+                        .and_then(|_| self.render_and_navigate())
+                    {
+                        self.fail(event_loop, error.to_string());
                     }
                 }
                 return;
@@ -1522,6 +1798,10 @@ impl ApplicationHandler for ProductRunner {
         }
 
         if matches!(&event, WindowEvent::RedrawRequested) {
+            if let Err(error) = self.drain_render_completions() {
+                self.fail(event_loop, error.to_string());
+                return;
+            }
             if let Err(error) = self.source_pane.draw_and_present() {
                 self.fail(event_loop, error.to_string());
                 return;
@@ -1589,7 +1869,13 @@ impl ApplicationHandler for ProductRunner {
                 }
             }
         }
+        if let Err(error) = self.drain_render_completions() {
+            self.fail(event_loop, error.to_string());
+            return;
+        }
         self.maybe_autosave();
+        self.maybe_poll_external_change();
+        self.sync_window_title();
         if !self.smoke {
             event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + AUTOSAVE_INTERVAL));
         }
@@ -2336,6 +2622,27 @@ fn format_command_for(key: &Key, command: bool, shift: bool) -> Option<FormatCom
     }
 }
 
+fn choose_open_path() -> Result<Option<PathBuf>, MacError> {
+    let mtm = MainThreadMarker::new()
+        .ok_or_else(|| MacError::Native("open panel must run on the AppKit main thread".into()))?;
+    let panel = NSOpenPanel::openPanel(mtm);
+    panel.setAllowsMultipleSelection(false);
+    panel.setCanChooseFiles(true);
+    panel.setCanChooseDirectories(false);
+    if panel.runModal() != NSModalResponseOK {
+        return Ok(None);
+    }
+    Ok(panel
+        .URLs()
+        .firstObject()
+        .and_then(|url| url.path())
+        .map(|path| PathBuf::from(path.to_string())))
+}
+
+fn install_file_menu() -> Result<(), MacError> {
+    install_file_menu_with_actions().map_err(MacError::Native)
+}
+
 fn choose_save_path(default_name: &str) -> Result<Option<PathBuf>, MacError> {
     let mtm = MainThreadMarker::new()
         .ok_or_else(|| MacError::Native("save panel must run on the AppKit main thread".into()))?;
@@ -2364,32 +2671,35 @@ fn unix_ms_now() -> u64 {
         .unwrap_or(0)
 }
 
-/// Reads clipboard HTML (`public.html`) for smart paste, if present.
-fn clipboard_html() -> Option<String> {
-    let pasteboard = NSPasteboard::generalPasteboard();
-    let html_type = unsafe { NSPasteboardTypeHTML };
-    pasteboard
-        .stringForType(html_type)
-        .map(|value| value.to_string())
-}
+#[cfg(test)]
+mod tests {
+    use super::smoke_stage_zero_ready_to_edit;
 
-/// Reads the plain-text clipboard flavor (smart-paste fallback).
-fn clipboard_string() -> Option<String> {
-    let pasteboard = NSPasteboard::generalPasteboard();
-    let string_type = unsafe { NSPasteboardTypeString };
-    pasteboard
-        .stringForType(string_type)
-        .map(|value| value.to_string())
-}
+    #[test]
+    fn stage_zero_blocks_the_first_edit_until_a_preview_scroll_receipt_arrives() {
+        // The preview has painted revision 0 and the editor has presented a
+        // frame, but no scroll receipt has echoed back yet: editing must stay
+        // blocked. This is the invariant the supervised smoke relies on.
+        assert!(!smoke_stage_zero_ready_to_edit(Some(0), 1, 0));
+    }
 
-/// Copy-as-HTML: writes the self-contained export page to the general
-/// pasteboard under both the HTML and plain-text flavors.
-fn copy_html_to_clipboard(html: &str) {
-    let pasteboard = NSPasteboard::generalPasteboard();
-    pasteboard.clearContents();
-    let value = NSString::from_str(html);
-    let html_type = unsafe { NSPasteboardTypeHTML };
-    let string_type = unsafe { NSPasteboardTypeString };
-    pasteboard.setString_forType(&value, html_type);
-    pasteboard.setString_forType(&value, string_type);
+    #[test]
+    fn stage_zero_is_ready_to_edit_once_the_preview_scroll_receipt_arrives() {
+        // A single receipt is sufficient, and further receipts keep it ready.
+        assert!(smoke_stage_zero_ready_to_edit(Some(0), 1, 1));
+        assert!(smoke_stage_zero_ready_to_edit(Some(0), 4, 7));
+    }
+
+    #[test]
+    fn stage_zero_blocks_without_a_painted_preview_revision_zero() {
+        // No painted preview yet.
+        assert!(!smoke_stage_zero_ready_to_edit(None, 1, 1));
+        // Painted, but not revision 0.
+        assert!(!smoke_stage_zero_ready_to_edit(Some(3), 1, 1));
+    }
+
+    #[test]
+    fn stage_zero_blocks_until_the_source_editor_has_presented_a_frame() {
+        assert!(!smoke_stage_zero_ready_to_edit(Some(0), 0, 1));
+    }
 }

@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Rutile.app — Markdown document-type + UTI declaration fragment.
+
+  This is NOT a complete Info.plist. It is a merge fragment: the root <dict>
+  below holds only the top-level keys that `assemble_macos_app`
+  (xtask/src/local_package.rs) must splice into the generated
+  `Contents/Info.plist` so that the installed bundle can open `.md` files via
+  Finder "Open With" and claim default-editor candidacy.
+
+  Contract for the assembler (Phase C):
+    1. Parse this plist as an XML property list; its root is a <dict>.
+    2. For every top-level <key> in this fragment, insert that key/value pair
+       into the Info.plist root <dict> (skip a key if already present).
+    3. Do not drop `CFBundleIdentifier` / `CFBundleExecutable` / version keys
+       already written by the assembler.
+    4. The merged Info.plist must still pass the artifact-inspector gate,
+       which checks for the substrings `CFBundleIdentifier`,
+       `CFBundleDocumentTypes`, and `UTTypeConformsTo`.
+
+  Why two document entries:
+    * Entry 0 owns `net.feathermark.markdown` — the UTI Rutile exports below —
+      so `LSHandlerRank` is `Owner`.
+    * Entry 1 catches `.md` files that already carry a system/legacy Markdown
+      UTI (`public.markdown-text`, `net.daringfireball.markdown`). Rutile does
+      not own those, so `LSHandlerRank` is `Alternate` (present in "Open With",
+      never forcibly displacing the user's chosen default).
+
+  Role note: `CFBundleTypeRole` is `Editor` because Rutile is a writing studio
+  that edits Markdown in place. macOS treats `Editor` as a superset of
+  `Viewer` — an Editor may open, view, and modify — so a single `Editor` role
+  satisfies the "Viewer/Editor" requirement without an invalid combined value.
+  The macOS entry point already takes the document path as its first CLI
+  argument, so no extra routing is required once the file path is forwarded.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Document types: what the bundle can open from Finder. -->
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <!-- Our owned UTI; we are the authoritative handler. -->
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Markdown</string>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>LSHandlerRank</key>
+      <string>Owner</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>net.feathermark.markdown</string>
+      </array>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>md</string>
+        <string>markdown</string>
+      </array>
+    </dict>
+    <!-- System / legacy Markdown files: present as an alternate editor. -->
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Markdown</string>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>public.markdown-text</string>
+        <string>net.daringfireball.markdown</string>
+      </array>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>md</string>
+        <string>markdown</string>
+        <string>mdown</string>
+        <string>mkd</string>
+      </array>
+    </dict>
+  </array>
+
+  <!-- Exported UTI: declares `net.feathermark.markdown` to LaunchServices. -->
+  <key>UTExportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>net.feathermark.markdown</string>
+      <key>UTTypeDescription</key>
+      <string>Markdown document</string>
+      <!-- Markdown is structured plain text; conform to both the generic
+           plain-text base and the system Markdown conformance, so files are
+           recognized as Markdown and as a plain-text fallback. -->
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.plain-text</string>
+        <string>public.markdown-text</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>md</string>
+          <string>markdown</string>
+          <string>mdown</string>
+          <string>mkd</string>
+        </array>
+        <key>public.mime-type</key>
+        <array>
+          <string>text/markdown</string>
+        </array>
+      </dict>
+    </dict>
+  </array>
+</dict>
+</plist>

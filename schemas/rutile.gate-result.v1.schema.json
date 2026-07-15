@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://feathermark.local/schemas/rutile.gate-result.v1.schema.json",
+  "title": "Rutile gate result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "command_id",
+    "profile",
+    "source",
+    "evidence",
+    "runner",
+    "started_unix_ms",
+    "ended_unix_ms",
+    "exit_code",
+    "tests",
+    "required_row",
+    "artifact_hashes",
+    "retained_logs",
+    "runs"
+  ],
+  "properties": {
+    "schema": { "const": "rutile.gate-result.v1" },
+    "command_id": { "type": "string", "minLength": 1 },
+    "profile": { "enum": ["pr", "release"] },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "tree", "dirty"],
+      "properties": {
+        "commit": { "$ref": "#/$defs/gitObjectId" },
+        "tree": { "$ref": "#/$defs/gitObjectId" },
+        "dirty": { "type": "boolean" }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_directory"],
+      "properties": {
+        "run_directory": {
+          "type": "string",
+          "pattern": "^run-[0-9]+-[0-9]+-[0-9]+$"
+        }
+      }
+    },
+    "runner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "architecture", "name"],
+      "properties": {
+        "platform": { "type": "string", "minLength": 1 },
+        "architecture": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 }
+      }
+    },
+    "started_unix_ms": { "type": "integer", "minimum": 0 },
+    "ended_unix_ms": { "type": "integer", "minimum": 0 },
+    "exit_code": { "type": "integer" },
+    "tests": { "$ref": "#/$defs/testCounts" },
+    "required_row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "required", "status"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "required": { "const": true },
+        "status": { "enum": ["passed", "failed"] }
+      }
+    },
+    "artifact_hashes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/hashReference" }
+    },
+    "retained_logs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["run", "stream", "path", "bytes", "sha256"],
+        "properties": {
+          "run": { "type": "integer", "minimum": 1 },
+          "stream": { "enum": ["stdout", "stderr"] },
+          "path": { "type": "string", "minLength": 1 },
+          "bytes": { "type": "integer", "minimum": 0, "maximum": 16384 },
+          "sha256": { "$ref": "#/$defs/sha256" }
+        }
+      }
+    },
+    "runs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["run", "status", "reaped", "stage_traces", "resize_traces", "error"],
+        "properties": {
+          "run": { "type": "integer", "minimum": 1 },
+          "status": { "enum": ["passed", "failed"] },
+          "reaped": { "type": "boolean" },
+          "stage_traces": { "type": "integer", "minimum": 0, "maximum": 64 },
+          "resize_traces": { "type": "integer", "minimum": 0, "maximum": 64 },
+          "error": { "type": ["string", "null"] }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "gitObjectId": { "type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$" },
+    "hashReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "identity"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["device", "inode", "bytes"],
+          "properties": {
+            "device": { "type": "integer", "minimum": 0 },
+            "inode": { "type": "integer", "minimum": 0 },
+            "bytes": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "testCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "passed", "failed", "ignored", "skipped"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 1 },
+        "passed": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "ignored": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

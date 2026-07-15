@@ -1,5 +1,7 @@
 # FeatherMark RALPLAN Decision Record
 
+> **Status: Historical decision-process record.** Later implementation and release work superseded its execution gate; the record is retained to explain the original planning outcome.
+
 ## BLUF
 
 RALPLAN ended at the five-iteration maximum without consensus. The best available FeatherMark plan is published at [`docs/plan/build-plan.md`](./build-plan.md), but it authorizes no implementation. Architect round 5 found the reviewed revision `SOUND`; Critic round 5 returned `ITERATE`.

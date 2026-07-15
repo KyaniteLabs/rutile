@@ -1,0 +1,300 @@
+# SPDX-License-Identifier: MIT
+#
+# FeatherMark Rutile verify pipeline (Forgejo Actions / GitHub Actions compatible).
+#
+# Every job emits one rutile.gate-result.v1 document beneath
+#   target/evidence/<commit>/<job>/run-<ms>-<pid>-<n>/gate-result.json
+# and uploads the evidence subtree. The final evidence-aggregate job merges all
+# evidence, validates every gate-result (fail-on-skip for the required job set),
+# and emits its own gate-result attesting the whole run.
+#
+# Jobs marked "needs: external" require a provisioned/authenticated runner or a
+# signing identity that Forgejo cannot auto-provision; they are dependencies of
+# the release workflow and must be wired to self-hosted labels before they can
+# execute.
+name: verify
+
+on:
+  workflow_call:
+    inputs:
+      profile:
+        description: "pr or release; release re-runs every gate at ship profile"
+        type: string
+        default: pr
+  push:
+    branches: [main, "codex/**"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: short
+  # pr for normal push/PR runs; release when called from release.yml.
+  PROFILE: ${{ inputs.profile || 'pr' }}
+  # FORGEJO_RUNNER_NAME is set by the runner; xtask/scripts read it for the
+  # gate-result runner identity. Propagate HOSTNAME as a fallback.
+  FORGEJO_RUNNER_NAME: ${{ vars.FORGEJO_RUNNER_NAME || '' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # --- portable, runner-agnostic gates ---------------------------------------
+  portable:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: Swatinem/rust-cache@v2
+      - name: bootstrap toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
+      - name: portable gate (fmt + clippy -D warnings + docs + test)
+        run: bash scripts/ci/portable-gate.sh --stage lint,docs,test --profile "$PROFILE" --job portable
+      - name: retain evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-portable
+          path: target/evidence/
+          if-no-files-found: error
+          retention-days: 30
+
+  production-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: Swatinem/rust-cache@v2
+      - name: bootstrap toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
+      - name: production build (no test-control, separate target root)
+        # Emits gate-result; the clean artifact lands in target/prod/release/.
+        run: bash scripts/ci/portable-gate.sh --stage build --profile "$PROFILE" --job production-build
+      - name: retain clean production binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-binary
+          path: target/prod/release/feathermark
+          if-no-files-found: error
+          retention-days: 30
+      - name: retain evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-production-build
+          path: target/evidence/
+          if-no-files-found: error
+          retention-days: 30
+
+  dependency-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: Swatinem/rust-cache@v2
+      - name: bootstrap toolchain + cargo-deny (pinned)
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --no-self-update
+          cargo install --locked cargo-deny --version 0.20.2 --locked
+      - name: workspace dependency policy (cargo-deny check, deny warnings)
+        run: bash scripts/ci/portable-gate.sh --stage deny --profile "$PROFILE" --job dependency-policy
+      - name: retain evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-dependency-policy
+          path: target/evidence/
+          if-no-files-found: error
+          retention-days: 30
+
+  fuzz-dependency-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: Swatinem/rust-cache@v2
+      - name: bootstrap toolchain + cargo-deny (pinned)
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --no-self-update
+          cargo install --locked cargo-deny --version 0.20.2 --locked
+      - name: fuzz crate dependency policy (cargo-deny check, deny warnings)
+        run: bash scripts/ci/portable-gate.sh --stage fuzz-deny --profile "$PROFILE" --job fuzz-dependency-policy
+      - name: retain evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-fuzz-dependency-policy
+          path: target/evidence/
+          if-no-files-found: error
+          retention-days: 30
+
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: Swatinem/rust-cache@v2
+      - name: bootstrap toolchains + cargo-fuzz (pinned)
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --no-self-upgrade
+          rustup toolchain install nightly-2026-07-01 --profile minimal --component llvm-tools-preview
+          cargo install --locked cargo-fuzz --version 0.13.2
+      - name: bounded fuzz smoke (60s/target)
+        # Each of the five fuzz targets runs for max_total_time=60s; the libFuzzer
+        # harness is the oracle. Emits one gate-result across all targets.
+        run: bash scripts/ci/portable-gate.sh --stage fuzz --profile "$PROFILE" --job fuzz-smoke
+      - name: retain evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-fuzz-smoke
+          path: target/evidence/
+          if-no-files-found: error
+          retention-days: 30
+
+  # --- native gates (provisioned / authenticated runners) --------------------
+  # needs: external -- requires a self-hosted macOS arm64 runner.
+  macos-native-smoke:
+    # needs: external — self-hosted macOS arm64 runner with a display session.
+    runs-on: [self-hosted, macos, arm64]
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: Swatinem/rust-cache@v2
+      - name: bootstrap toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
+      - name: macOS feature suite (macos-shell) + supervised native smoke
+        # xtask native-smoke is the canonical gate-result producer here (the
+        # macOS adapter is the only path emitting the success marker).
+        run: bash scripts/ci/macos-native-gate.sh --profile "$PROFILE"
+      - name: retain evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-macos-native-smoke
+          path: target/evidence/
+          if-no-files-found: error
+          retention-days: 30
+
+  # needs: external -- requires a self-hosted Linux x86_64 runner with Xvfb + dbus.
+  linux-native-smoke:
+    # needs: external — self-hosted Linux x86_64 runner providing Xvfb + dbus-run-session.
+    runs-on: [self-hosted, linux, x11]
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: Swatinem/rust-cache@v2
+      - name: bootstrap toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
+      - name: install native deps (Xvfb + D-Bus)
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb dbus
+          fi
+      - name: Linux feature suite (linux-gtk) under isolated Xvfb/D-Bus
+        # Private dynamic display + isolated dbus-run-session; emits its own
+        # gate-result (xtask native-smoke is macOS-only pending Linux marker).
+        run: bash scripts/ci/linux-native-gate.sh --profile "$PROFILE"
+      - name: retain evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-linux-native-smoke
+          path: target/evidence/
+          if-no-files-found: error
+          retention-days: 30
+
+  # --- packaging + inspection (provisioned runners, signing external) --------
+  # needs: external — produces platform packages; install/open/uninstall smoke
+  # and provenance binding are wired in Phase B/C.
+  package:
+    # needs: external — packaging runner per kind (macOS .dmg / Linux .deb+.rpm).
+    needs: production-build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - kind: macos
+            features: macos-shell
+            runs-on: [self-hosted, macos, arm64]
+          - kind: linux
+            features: linux-gtk
+            runs-on: [self-hosted, linux, x11]
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: Swatinem/rust-cache@v2
+      - name: bootstrap toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
+      - name: install native deps (linux only)
+        if: matrix.kind == 'linux'
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb dbus
+          fi
+      - name: build featured release candidate
+        run: cargo build --locked --release -p feathermark-app --features ${{ matrix.features }} --bin feathermark
+      - name: package + inspect + SBOM + evidence
+        # Candidate leak audit (artifact inspect --mode candidate); package-mode
+        # publication authorization + install/open/uninstall + provenance are
+        # Phase B/C and recorded as outstanding by the script.
+        run: |
+          bash scripts/ci/package-inspect.sh \
+            --candidate target/release/feathermark \
+            --kind ${{ matrix.kind }} \
+            --profile "$PROFILE" \
+            --job package-${{ matrix.kind }}
+      - name: retain packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.kind }}
+          path: target/evidence/**/packages/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: retain evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-package-${{ matrix.kind }}
+          path: target/evidence/
+          if-no-files-found: error
+          retention-days: 30
+
+  # --- evidence fan-in / final gate ------------------------------------------
+  evidence-aggregate:
+    needs:
+      - portable
+      - production-build
+      - dependency-policy
+      - fuzz-dependency-policy
+      - fuzz-smoke
+      - macos-native-smoke
+      - linux-native-smoke
+      - package
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: merge per-job evidence
+        uses: actions/download-artifact@v4
+        with:
+          path: target/evidence
+          pattern: evidence-*
+          merge-multiple: true
+      - name: finalize + validate (fail-on-skip required rows)
+        # Validates every gate-result; fails closed if any required job is
+        # missing, failed, or structurally invalid.
+        run: |
+          bash scripts/ci/evidence-finalize.sh \
+            --required portable,production-build,dependency-policy,fuzz-dependency-policy,fuzz-smoke,macos-native-smoke,linux-native-smoke,package-macos,package-linux \
+            --job evidence-aggregate
+      - name: retain final evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-final
+          path: target/evidence/
+          if-no-files-found: error
+          retention-days: 30

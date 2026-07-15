@@ -2,11 +2,12 @@
 
 use std::sync::{Arc, Mutex};
 
+use feathermark_app::actions::SessionRestore;
 use feathermark_app::app::{CloseDecision, CloseOutcome};
 use feathermark_app::platform::macos::{
-    AppKitMainThread, EditorVisualReceipt, IcedEditorAdapter, MacError, MacScrollController,
-    MacScrollDispatch, MacShell, PreviewIpcFatal, PreviewIpcOutcome, ProductSession,
-    preview_ipc_channel, split_panes,
+    AppKitMainThread, EditorVisualReceipt, IcedEditorAdapter, MacError, MacExternalOutcome,
+    MacOpenRequest, MacSaveAction, MacScrollController, MacScrollDispatch, MacShell,
+    PreviewIpcFatal, PreviewIpcOutcome, ProductSession, preview_ipc_channel, split_panes,
 };
 use feathermark_core::{
     Document, Edit, EditTransaction, EditorAdapter, EditorCommit, EditorEvent, FindDirection,
@@ -709,4 +710,148 @@ fn session_state_round_trips_last_file_selection_and_window() {
     assert_eq!(restore.window, Some(window));
 
     let _ = std::fs::remove_dir_all(dir);
+}
+
+// ---------------------------------------------------------------------------
+// Wave 2-B: shared open/save/conflict/restore/render/clipboard contracts.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn classify_open_urls_rejects_empty_malformed_and_multi_file() {
+    assert!(matches!(
+        ProductSession::classify_open_urls(&[]),
+        MacOpenRequest::Malformed { .. }
+    ));
+    assert!(matches!(
+        ProductSession::classify_open_urls(&["https://example.com/doc.md".into()]),
+        MacOpenRequest::Malformed { .. }
+    ));
+    assert!(matches!(
+        ProductSession::classify_open_urls(&["a.md".into(), "b.md".into()]),
+        MacOpenRequest::UnsupportedMulti { count: 2 }
+    ));
+    assert!(matches!(
+        ProductSession::classify_open_urls(&["file:///tmp/note.md".into()]),
+        MacOpenRequest::File(_)
+    ));
+}
+
+#[test]
+fn untitled_save_requested_surfaces_save_as() {
+    let mut session = ProductSession::new_in_memory("draft").unwrap();
+    edit_session(&mut session, "dirty");
+    assert_eq!(session.request_save().unwrap(), MacSaveAction::NeedSaveAs);
+}
+
+#[test]
+fn save_failure_keeps_dirty_without_exiting() {
+    let dir = unique_dir("save-fail");
+    let locked_dir = dir.join("locked");
+    std::fs::create_dir(&locked_dir).unwrap();
+    let path = locked_dir.join("note.md");
+    std::fs::write(&path, "original").unwrap();
+
+    let mut session = ProductSession::open(&path).unwrap();
+    edit_session(&mut session, "edited");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut dir_perms = std::fs::metadata(&locked_dir).unwrap().permissions();
+        dir_perms.set_mode(0o555);
+        std::fs::set_permissions(&locked_dir, dir_perms).unwrap();
+    }
+
+    assert!(session.request_save().is_err());
+    assert!(session.app_state().dirty());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut writable = std::fs::metadata(&locked_dir).unwrap().permissions();
+        writable.set_mode(0o755);
+        let _ = std::fs::set_permissions(&locked_dir, writable);
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn external_change_conflict_blocks_save_until_resolved() {
+    let dir = unique_dir("conflict");
+    let path = dir.join("note.md");
+    std::fs::write(&path, "v1").unwrap();
+
+    let mut session = ProductSession::open(&path).unwrap();
+    edit_session(&mut session, "v2-local");
+    std::fs::write(&path, "v2-remote").unwrap();
+
+    assert_eq!(
+        session.inspect_external_change().unwrap(),
+        MacExternalOutcome::Conflict
+    );
+    assert!(session.has_external_conflict());
+    assert!(matches!(
+        session.ensure_no_external_conflict_before_save(),
+        Err(MacError::ExternalConflict)
+    ));
+
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn session_restore_degrades_invalid_selection_nonfatally() {
+    let dir = unique_dir("restore-degraded");
+    let path = dir.join("note.md");
+    std::fs::write(&path, "hello").unwrap();
+
+    let mut session = ProductSession::open(&path).unwrap();
+    let restore = SessionRestore {
+        last_file: Some(path),
+        selection: Some(Selection {
+            anchor: 0,
+            head: 999,
+        }),
+        top_visible_byte: Some(0),
+        window: None,
+    };
+    let report = session.apply_session_restore(&restore).unwrap();
+    assert!(report.opened_last_file);
+    assert!(!report.selection_applied);
+    assert_eq!(report.notices.len(), 1);
+
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn bounded_render_discards_stale_completions() {
+    let mut session = ProductSession::new_in_memory("# one\n").unwrap();
+    session.pump_render_start(50).unwrap();
+    edit_session(&mut session, "# two\n");
+
+    for _ in 0..500 {
+        let _ = session.pump_render_completions().unwrap();
+        if session.scheduler_stats().stale_results == 1 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert_eq!(session.scheduler_stats().stale_results, 1);
+
+    session.pump_render_start(100).unwrap();
+    let mut accepted = false;
+    for _ in 0..500 {
+        if session.pump_render_completions().unwrap().is_some() {
+            accepted = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(accepted, "latest revision never rendered");
+}
+
+#[test]
+fn clipboard_round_trip_reports_success() {
+    ProductSession::write_clipboard_html("<p>clip</p>").unwrap();
+    let text = ProductSession::read_clipboard_paste_text().unwrap();
+    assert!(text.contains("clip"));
 }

@@ -1,5 +1,7 @@
 # FeatherMark Side-by-Side Editor Implementation Plan
 
+> **Status: Historical planning record.** The BUILD decision informed the shipped implementation, but this document's gates and commands are no longer operational authority. Use `docs/handoff/current-state.md` and `docs/architecture.md`.
+
 > **BEST AVAILABLE PLAN — MAX ITERATIONS, ARCHITECT R5 SOUND, CRITIC R5 ITERATE, CONSENSUS NOT COMPLETE, NO EXECUTION AUTHORIZED.**
 >
 > **Planning state:** RALPLAN reached its five-iteration maximum. This artifact records the best available revision after terminal mechanical cleanup of the three Critic-r5 defects; that cleanup was not re-reviewed and does not convert the final Critic verdict into approval. This artifact authorizes no application implementation, commit, push, or release. A future execution handoff requires an approving Architect review followed by an approving Critic review of the same artifact SHA-256. During any later authorized execution, Task 1 remains a second stop gate: Tasks 2-8 may not begin until Task 1 evidence and ADR 0001 receive another Architect -> Critic approval.

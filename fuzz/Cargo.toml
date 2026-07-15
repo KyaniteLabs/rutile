@@ -42,6 +42,27 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "export_page"
+path = "fuzz_targets/export_page.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "autosave_session"
+path = "fuzz_targets/autosave_session.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "file_save_state"
+path = "fuzz_targets/file_save_state.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]
 members = []
 

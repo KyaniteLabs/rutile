@@ -1,5 +1,7 @@
 # FeatherMark Markdown Editor Landscape
 
+> **Status: Historical research snapshot.** The comparisons below are frozen to the stated snapshot date and are not current recommendations.
+
 **Snapshot date:** 2026-07-09
 **Scope:** open-source Rust desktop editors closest to FeatherMark's mandatory shape: macOS + Linux, a source editor beside a literal browser-rendered HTML/CSS preview, low weight, and no IDE or notes-platform surface.
 

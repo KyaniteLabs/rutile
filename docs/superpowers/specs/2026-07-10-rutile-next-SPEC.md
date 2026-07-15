@@ -1,5 +1,7 @@
 # Rutile Next (post-0.1.0) — SPEC (living draft)
 
+> **Status: Historical 0.2 input, no longer a living current-state spec.** Formatting, export, find/replace, counts, autosave/recovery, session restore, and shell integration shipped in 0.2.0; unresolved 0.3 ideas remain non-authoritative.
+
 ## §1 Context (as of 2026-07-10)
 
 - 0.1.0 local beta shipped: single-document Markdown editor, macOS arm64 (Iced+Wry/WKWebView) + Linux (GTK3+Wry/WebKitGTK), bounded render/preview protocol, 20 MiB doc cap, hard security walls (no link opening, no HTTP, no raw HTML execution).
@@ -9,11 +11,11 @@
 
 ## §2 What it is
 
-- Simon's personal daily markdown editor (market of one). Security posture (provably-inert hostile docs) is a kept benefit, not the product pitch.
+- A personal daily Markdown editor (market of one). Security posture (provably-inert hostile docs) is a kept benefit, not the product pitch.
 
 ## §3 Goals / Non-goals
 
-- Goal: win Simon's actual daily .md workflow (notes, handoffs, specs, memory files across many repos).
+- Goal: win the owner's actual daily `.md` workflow (notes, handoffs, specs, and memory files across many repositories).
 - Non-goal: competing feature-for-feature with Obsidian/Typora; public product positioning (for now).
 - Feature growth is expected — 0.1.0's minimalism was a milestone scope, not the product ceiling.
 
@@ -29,7 +31,7 @@
 
 - §5.1 RESOLVED → LD-3 (auto-formatting layer over the existing split view; see §6).
 - §5.2 RESOLVED → LD-4 (recipient-grade self-contained export; see §7).
-- §5.3 Aesthetic direction: needs its own interview (typography-first; light/dark; density; personality). Constraint from LD-4: the theme must survive other people's browsers/screens, not just Simon's.
+- §5.3 Aesthetic direction: needs its own interview (typography-first; light/dark; density; personality). Constraint from LD-4: the theme must survive other people's browsers/screens, not just the development machine.
 
 ## §7 Instant HTML (0.2 core, per LD-4)
 
@@ -55,7 +57,7 @@
   - C3 Ghost completion: inline continuation, tab-to-accept (latency-critical → served by the on-device tier).
   - C4 Reading aids: summarize, TL;DR block, Q&A over the open doc.
   - C7 AI-steered export design: natural-language steering of the HTML export's look ("more formal", "Kyanite brand", "denser") — the model adjusts **design tokens/theme parameters within the design system**, not free-form CSS, so exports stay beautiful, coherent, and inert. (Free-form CSS generation explicitly rejected as a default; revisit only if token steering proves too constraining.)
-  - C8 (EXPERIMENTAL) Chance-styled notes: a one-click dice button next to the C7 design-agent affordance. It draws multi-source randomness from Simon's `chance` project (~/workspaces/chance, Rust RNG), uses the draws to answer the tastecheck design-interview questions automatically (each answer a random pick from that skill's valid option space), runs the tastecheck pipeline on those answers, and applies the resulting theme to the exported HTML note. Zero user thought; every note different-but-tasteful. Scope: self-contained HTML NOTES — relaxed strictness (see LD-8 split).
+  - C8 (EXPERIMENTAL) Chance-styled notes: a one-click dice button next to the C7 design-agent affordance. It draws from a local seeded-randomness provider, uses the draws to answer the design-interview questions automatically (each answer a random pick from the valid option space), runs the design pipeline on those answers, and applies the resulting theme to the exported HTML note. Zero user thought; every note different-but-tasteful. Scope: self-contained HTML NOTES — relaxed strictness (see LD-8 split).
   - Deferred: C5 dictation, C6 auto-metadata (0.3+ candidates; C5 composes with C1 later).
 - §8.2 Runtime = HYBRID: small on-device model for quick transforms (Apple Foundation Models on macOS 26 where available; small embedded GGUF on Linux), automatic upgrade to Niko's GPU over tailnet when reachable for big transforms (C1 on large docs, C4, C7).
 - §8.3 Degradation contract: writing/reading NEVER blocks on a model. Off-tailnet → on-device tier only; no model at all → AI affordances grey out. No cloud calls, ever. The inference seam is a bounded, typed protocol like PreviewHost — the app's zero-public-network posture is preserved (tailnet is the only permitted egress, feature-flagged).

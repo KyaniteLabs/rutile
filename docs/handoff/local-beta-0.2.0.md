@@ -1,5 +1,9 @@
 # Rutile / FeatherMark 0.2.0 — Release Handoff
 
+> **Status: Current release receipt.** This is an immutable release snapshot; live repository state is summarized in `docs/handoff/current-state.md`.
+
+> **Post-release audit annotation — 2026-07-12:** Keep the artifacts below as historical evidence only. The Linux packages were built with `test-control`, and both platform binaries embed absolute builder paths. Do not redistribute them; replace them with feature-clean, path-remapped, leak-audited builds.
+
 **Date:** 2026-07-11
 **Release branch (merged):** `release/0.2.0` → `main` via PR #24 (merge `b69035a`)
 **Release commit (version bump):** `119c02c` — `release: bump workspace version to 0.2.0`
@@ -51,7 +55,7 @@ macOS build-input `948befb4…`; Linux build-input `ed9e387f…`. Artifacts live
 
 No Intel macOS build; no native Wayland verification; RPM built but not install-verified (no RPM host); no Developer ID signing / notarization; no GPG / package signing; no independent-builder reproduction. See `docs/evidence/local-beta-0.1.0/evidence-debt.md`.
 
-## 7. Not Done (deliberately)
+## 7. Post-release annotation
 
-- **No git tag.** The project has never tagged a release (0.1.0/0.1.1 shipped untagged); 0.2.0 follows suit. Tagging `v0.2.0` on `b69035a` is a one-liner if the convention changes.
+- **Git tag added:** `v0.2.0` now points to release merge `b69035a`. The original release handoff was written before the tag existed.
 - **0.3 scope** (locked non-goals for 0.2, per the plan): AI features, chance styling, native chrome redesign, multi-file/tabs, PDF export, sync, Typora-style in-place rendering.

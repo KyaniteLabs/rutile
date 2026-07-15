@@ -1,0 +1,14 @@
+# FeatherMark
+
+This seed doubles as a save payload: a longer markdown document so the
+fuzzer explores save-state transitions with non-trivial bodies.
+
+## Section
+
+| a | b |
+|---|---|
+| 1 | 2 |
+
+- lists
+- **bold** and *italic*
+- `code spans`

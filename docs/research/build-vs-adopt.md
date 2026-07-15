@@ -1,5 +1,7 @@
 # FeatherMark Build vs Adopt Decision
 
+> **Status: Historical research snapshot (2026-07-09).** Its BUILD verdict was implemented; competitor and dependency-currentness claims were not refreshed for this documentation pass.
+
 **Decision date:** 2026-07-09
 **Verdict:** **BUILD**
 **Confidence:** high on product-fit, medium on the final GUI toolkit and achievable webview memory floor.

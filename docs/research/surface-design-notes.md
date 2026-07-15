@@ -1,7 +1,9 @@
 # SURFACE_ design notes — lineage reference for Rutile chrome
 
+> **Status: Historical private-observation summary (2026-07-10).** Retained only as design lineage; `DESIGN-SYSTEM.md` is authoritative.
+
 **Source:** live observation of Ari's SURFACE_ (agent-terminal cockpit, AppKit +
-SwiftTerm), launched from the installed copy on Simon's MacBook Air, 2026-07-10;
+SwiftTerm), launched from an installed copy on a local Apple Silicon laptop, 2026-07-10;
 RC build `SURFACE_RC_fixed_2026-07-03_v2`. Chrome composed by `GlyphFieldView` /
 `ChromeComposer` / `PageTabStrip` per its handoff guide. Screenshots not committed
 (captures included unrelated desktop content); observations recorded instead.

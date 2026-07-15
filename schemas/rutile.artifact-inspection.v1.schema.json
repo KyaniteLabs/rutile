@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.kyanitelabs.example/rutile.artifact-inspection.v1.schema.json",
+  "title": "Rutile artifact inspection result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "inspector_version",
+    "inspection_mode",
+    "artifact_kind",
+    "policy_sha256",
+    "quarantine_sha256",
+    "artifact_sha256",
+    "production_provenance_sha256",
+    "complete_scan",
+    "accepted",
+    "publication_authorized",
+    "entries_scanned",
+    "uncompressed_bytes_scanned",
+    "findings"
+  ],
+  "properties": {
+    "schema": { "const": "rutile.artifact-inspection.v1" },
+    "inspector_version": { "const": "artifact-inspect-v1" },
+    "inspection_mode": { "enum": ["candidate", "package"] },
+    "artifact_kind": { "enum": ["unknown", "regular_file", "directory"] },
+    "policy_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "quarantine_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "artifact_sha256": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      ]
+    },
+    "production_provenance_sha256": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      ]
+    },
+    "complete_scan": { "type": "boolean" },
+    "accepted": { "type": "boolean" },
+    "publication_authorized": { "const": false },
+    "entries_scanned": { "type": "integer", "minimum": 0, "maximum": 256 },
+    "uncompressed_bytes_scanned": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 67108864
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "subject"],
+        "properties": {
+          "code": { "type": "string" },
+          "subject": { "type": "string" }
+        }
+      }
+    }
+  }
+}

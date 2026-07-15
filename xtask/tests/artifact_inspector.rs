@@ -1,0 +1,368 @@
+#![allow(clippy::disallowed_methods)] // Integration test launches only the built xtask binary.
+
+use sha2::{Digest, Sha256};
+use std::fs;
+use tempfile::tempdir;
+use xtask::artifact_inspector::{ArtifactInspector, FindingCode, InspectionMode, PolicyPaths};
+use xtask::local_package_cli::enforce_inspection;
+
+#[test]
+fn artifact_inspect_cli_emits_json_and_rejects_forbidden_input() {
+    let root = tempdir().unwrap();
+    let artifact = root.path().join("candidate");
+    fs::write(&artifact, b"RUTILE_TEST_CONTROL").unwrap();
+    let paths = write_policy(root.path(), &[]);
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(["artifact", "inspect", "--artifact"])
+        .arg(&artifact)
+        .arg("--quarantine")
+        .arg(&paths.quarantine)
+        .arg("--policy")
+        .arg(&paths.policy)
+        .args(["--mode", "candidate"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["schema"], "rutile.artifact-inspection.v1");
+    assert_eq!(report["inspector_version"], "artifact-inspect-v1");
+    assert_eq!(report["inspection_mode"], "candidate");
+    assert!(report["policy_sha256"].as_str().unwrap().len() == 64);
+    assert!(report["quarantine_sha256"].as_str().unwrap().len() == 64);
+    assert_eq!(report["publication_authorized"], false);
+    assert_eq!(report["accepted"], false);
+    assert_eq!(report["findings"][0]["code"], "test_control_marker");
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
+
+fn write_policy(root: &std::path::Path, quarantined: &[(&str, &str)]) -> PolicyPaths {
+    let quarantine = root.join("quarantine.json");
+    let entries: Vec<_> = quarantined
+        .iter()
+        .map(|(hash, name)| {
+            serde_json::json!({
+                "sha256": hash,
+                "artifact": name,
+                "reason": "synthetic test quarantine",
+                "discovered_at": "2026-07-12"
+            })
+        })
+        .collect();
+    fs::write(
+        &quarantine,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema": "rutile.artifact-quarantine.v1",
+            "version": 1,
+            "entries": entries
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let policy = root.join("policy.toml");
+    fs::write(
+        &policy,
+        r#"schema = "rutile.artifact-inspector-policy.v1"
+version = 1
+max_entries = 256
+max_uncompressed_bytes = 67108864
+expected_license = "MIT"
+expected_version = "0.2.0"
+expected_source_commit = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+forbidden_patterns = [
+  "RUTILE_TEST_CONTROL",
+  "FEATHERMARK_TEST_CONTROL",
+  "/home/build-user/",
+  "token=synthetic-secret"
+]
+test_control_environment = ["RUTILE_TEST_CONTROL", "FEATHERMARK_TEST_CONTROL"]
+"#,
+    )
+    .unwrap();
+    PolicyPaths { quarantine, policy }
+}
+
+#[test]
+fn quarantined_hash_is_rejected_before_content_is_trusted() {
+    let root = tempdir().unwrap();
+    let artifact = root.path().join("old-package.bin");
+    fs::write(&artifact, b"opaque historical package").unwrap();
+    let paths = write_policy(
+        root.path(),
+        &[(&sha256(b"opaque historical package"), "old-package.bin")],
+    );
+
+    let report = ArtifactInspector::load(&paths)
+        .unwrap()
+        .inspect(&artifact, InspectionMode::Package);
+
+    assert!(!report.accepted);
+    assert_eq!(report.findings[0].code, FindingCode::QuarantinedHash);
+}
+
+#[test]
+fn binary_scan_reports_test_control_and_private_build_markers() {
+    let root = tempdir().unwrap();
+    let artifact = root.path().join("candidate");
+    fs::write(
+        &artifact,
+        b"ELF RUTILE_TEST_CONTROL /home/build-user/private token=synthetic-secret",
+    )
+    .unwrap();
+    let paths = write_policy(root.path(), &[]);
+
+    let report = ArtifactInspector::load(&paths)
+        .unwrap()
+        .inspect(&artifact, InspectionMode::Candidate);
+
+    assert!(!report.accepted);
+    assert!(report.has(FindingCode::TestControlMarker));
+    assert!(report.has(FindingCode::PrivateBuildPath));
+    assert!(report.has(FindingCode::CredentialMarker));
+}
+
+#[test]
+fn binary_scan_rejects_email_and_common_token_shapes_without_echoing_them() {
+    let root = tempdir().unwrap();
+    let artifact = root.path().join("candidate");
+    fs::write(
+        &artifact,
+        b"contact=builder@example.invalid credential=ghp_SYNTHETIC_PLACEHOLDER",
+    )
+    .unwrap();
+    let paths = write_policy(root.path(), &[]);
+
+    let report = ArtifactInspector::load(&paths)
+        .unwrap()
+        .inspect(&artifact, InspectionMode::Candidate);
+
+    assert!(!report.accepted);
+    assert!(report.has(FindingCode::CredentialMarker));
+    let json = serde_json::to_string(&report).unwrap();
+    assert!(!json.contains("builder@example.invalid"));
+    assert!(!json.contains("ghp_SYNTHETIC_PLACEHOLDER"));
+}
+
+#[test]
+fn binary_scan_ignores_short_token_prefixes_but_rejects_credential_length_tokens() {
+    let root = tempdir().unwrap();
+    let short = root.path().join("short-prefix");
+    fs::write(&short, b"normal text containing sk- only").unwrap();
+    let paths = write_policy(root.path(), &[]);
+
+    let short_report = ArtifactInspector::load(&paths)
+        .unwrap()
+        .inspect(&short, InspectionMode::Candidate);
+    assert!(short_report.accepted);
+
+    let token = root.path().join("credential-shaped");
+    fs::write(&token, b"sk-1234567890abcdefghijklmnopqrstuvwxyz").unwrap();
+    let token_report = ArtifactInspector::load(&paths)
+        .unwrap()
+        .inspect(&token, InspectionMode::Candidate);
+    assert!(token_report.has(FindingCode::CredentialMarker));
+}
+
+#[test]
+fn package_directory_requires_one_expected_executable_and_matching_metadata() {
+    let root = tempdir().unwrap();
+    let package = root.path().join("Rutile-linux-x86_64");
+    fs::create_dir_all(package.join("bin")).unwrap();
+    fs::write(package.join("bin/feathermark"), b"\x7fELF clean production").unwrap();
+    fs::write(
+        package.join("package-manifest-v1.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema": "feathermark-local-package-v1",
+            "architecture": "x86_64-unknown-linux-gnu",
+            "source_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "version": "9.9.9",
+            "license": "Proprietary",
+            "wayland_verified": false,
+            "rpm_runtime_verified": false
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let paths = write_policy(root.path(), &[]);
+
+    let report = ArtifactInspector::load(&paths)
+        .unwrap()
+        .inspect(&package, InspectionMode::Package);
+
+    assert!(!report.accepted);
+    assert!(report.has(FindingCode::VersionMismatch));
+    assert!(report.has(FindingCode::LicenseMismatch));
+    assert!(report.has(FindingCode::SourceCommitMismatch));
+    assert!(report.has(FindingCode::PlatformMetadataMissing));
+}
+
+#[test]
+fn packaging_boundary_rejects_clean_scan_without_publication_authorization() {
+    let root = tempdir().unwrap();
+    let package = root.path().join("Rutile-linux-x86_64");
+    for directory in ["bin", "share/applications", "share/mime/packages"] {
+        fs::create_dir_all(package.join(directory)).unwrap();
+    }
+    fs::write(package.join("bin/feathermark"), b"\x7fELF production").unwrap();
+    fs::write(
+        package.join("share/applications/rutile.desktop"),
+        b"desktop",
+    )
+    .unwrap();
+    fs::write(package.join("share/mime/packages/rutile.xml"), b"mime").unwrap();
+    fs::write(
+        package.join("package-manifest-v1.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema": "feathermark-local-package-v1",
+            "architecture": "x86_64-unknown-linux-gnu",
+            "source_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "version": "0.2.0",
+            "license": "MIT",
+            "wayland_verified": true,
+            "rpm_runtime_verified": true
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let inspector = ArtifactInspector::load(&write_policy(root.path(), &[])).unwrap();
+    let report = inspector.inspect(&package, InspectionMode::Package);
+    assert!(report.accepted);
+    assert!(!report.publication_authorized);
+
+    let error = enforce_inspection(&inspector, &package, InspectionMode::Package).unwrap_err();
+    assert!(error.to_string().contains("publication_not_authorized"));
+}
+
+#[test]
+fn traversal_is_bounded_by_entry_count_and_total_bytes() {
+    let root = tempdir().unwrap();
+    let package = root.path().join("package");
+    fs::create_dir(&package).unwrap();
+    for index in 0..257 {
+        fs::write(package.join(format!("entry-{index}")), b"x").unwrap();
+    }
+    let paths = write_policy(root.path(), &[]);
+
+    let report = ArtifactInspector::load(&paths)
+        .unwrap()
+        .inspect(&package, InspectionMode::Package);
+
+    assert!(!report.accepted);
+    assert!(report.has(FindingCode::EntryLimitExceeded));
+    assert_eq!(report.entries_scanned, 256);
+}
+
+#[test]
+fn traversal_reports_never_claim_more_bytes_than_the_policy_allowed_to_scan() {
+    let root = tempdir().unwrap();
+    let package = root.path().join("package");
+    fs::create_dir(&package).unwrap();
+    fs::write(package.join("first"), b"123456").unwrap();
+    fs::write(package.join("second"), b"789012").unwrap();
+    let paths = write_policy(root.path(), &[]);
+    let policy = fs::read_to_string(&paths.policy).unwrap().replace(
+        "max_uncompressed_bytes = 67108864",
+        "max_uncompressed_bytes = 8",
+    );
+    fs::write(&paths.policy, policy).unwrap();
+
+    let report = ArtifactInspector::load(&paths)
+        .unwrap()
+        .inspect(&package, InspectionMode::Package);
+
+    assert!(report.has(FindingCode::ByteLimitExceeded));
+    assert_eq!(report.uncompressed_bytes_scanned, 8);
+}
+
+#[test]
+fn repository_quarantine_exactly_tracks_the_five_0_2_0_artifacts() {
+    let defaults = PolicyPaths::repository_defaults();
+    let quarantine: serde_json::Value =
+        serde_json::from_slice(&fs::read(defaults.quarantine).unwrap()).unwrap();
+    let evidence: serde_json::Value = serde_json::from_slice(
+        &fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join("docs/evidence/local-beta-0.2.0/manifest-index.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let quarantined: std::collections::BTreeSet<_> = quarantine["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["sha256"].as_str().unwrap())
+        .collect();
+    let evidenced: std::collections::BTreeSet<_> = evidence["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["artifact_sha256"].as_str().unwrap())
+        .collect();
+
+    assert_eq!(quarantined.len(), 5);
+    assert_eq!(quarantined, evidenced);
+
+    let policy: toml::Value =
+        toml::from_str(&fs::read_to_string(PolicyPaths::repository_defaults().policy).unwrap())
+            .unwrap();
+    let patterns: std::collections::BTreeSet<_> = policy["forbidden_patterns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap())
+        .collect();
+    for required in [
+        "--native-smoke",
+        "FEATHERMARK_LIFECYCLE_CYCLE",
+        "FEATHERMARK_PRODUCT_FUNCTIONAL_PATH",
+        "FEATHERMARK_SMOKE_AUTOCLOSE_MS",
+        "FEATHERMARK_STARTUP_TRACE",
+    ] {
+        assert!(
+            patterns.contains(required),
+            "missing production hook {required}"
+        );
+    }
+}
+
+#[test]
+fn production_policy_classifies_native_smoke_argument_as_test_control() {
+    let root = tempdir().unwrap();
+    let artifact = root.path().join("candidate");
+    fs::write(&artifact, b"program --native-smoke").unwrap();
+
+    let report = ArtifactInspector::load(&PolicyPaths::repository_defaults())
+        .unwrap()
+        .inspect(&artifact, InspectionMode::Candidate);
+
+    assert!(report.has(FindingCode::TestControlMarker));
+}
+
+#[test]
+fn malformed_or_duplicate_quarantine_entries_fail_closed() {
+    let root = tempdir().unwrap();
+    let paths = write_policy(
+        root.path(),
+        &[
+            (
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "one.bin",
+            ),
+            (
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "two.bin",
+            ),
+        ],
+    );
+
+    let error = ArtifactInspector::load(&paths).unwrap_err();
+    assert!(error.to_string().contains("duplicate quarantine SHA-256"));
+}

@@ -1,0 +1,53 @@
+# fuzz/deny.toml — cargo-deny policy scoped to the `feathermark-fuzz` workspace.
+#
+# The fuzz workspace (fuzz/Cargo.toml) is a deliberately narrow, 69-package graph
+# that exercises only the protocol / core / types surfaces via libfuzzer-sys. It
+# does NOT pull in the desktop GUI stack — no iced/winit/wry, no GTK3 or
+# WebKitGTK bindings, no clipboard `cookie` -> `time` chain, and no
+# `wayland-scanner` -> `quick-xml` build dependency. Every advisory the root
+# deny.toml ignores is therefore absent from fuzz/Cargo.lock, so none of the
+# root ignores carry over: a separate, stricter policy is both possible and
+# required here.
+#
+# Where the root policy *warns*, this one *denies*. The fuzz harness ingests
+# attacker-controlled bytes; its dependency graph must stay advisory-clean and
+# must fail CI loudly on any new vulnerability, yank, or unmaintained crate.
+#
+# Invoke from the repository root:
+#
+#   cargo deny --manifest-path fuzz/Cargo.toml --config fuzz/deny.toml check
+#
+# (cargo-deny also resolves a deny.toml placed next to --manifest-path, but pass
+# --config explicitly so the enforced policy is unambiguous regardless of CWD
+# and matches the Rutile gate evidence line.)
+#
+# Keep this file structurally aligned with the root deny.toml — same advisory
+# schema, the same license allow-list, the same source-provenance rules — and
+# diverge only where the fuzz graph is genuinely narrower.
+
+[advisories]
+version = 2
+# cargo-deny always errors on vulnerability and unsound advisories: the former
+# `vulnerability` / `unsound` / `notice` severity knobs were removed and now
+# fail unconditionally, so there is no "warn" escape hatch left to close here.
+# The remaining tunable classes are tightened to deny:
+unmaintained = "all" # error on every unmaintained crate, transitive included
+yanked = "deny"      # the root graph leaves this at the default "warn"; fuzz hard-fails
+# Intentionally empty. No fuzz dependency is exempted. If an exemption ever
+# becomes necessary it MUST carry owner / affected-dependency-path /
+# justification / expiry (encoded in the `reason` string), matching the
+# provenance policy the root deny.toml is being brought up to.
+ignore = []
+
+[licenses]
+version = 2
+confidence-threshold = 0.8
+allow = ["Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT", "Unicode-3.0", "Zlib"]
+
+[bans]
+multiple-versions = "deny"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

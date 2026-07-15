@@ -9,6 +9,7 @@ members = [
   "spikes/feathermark-spike-support",
   "spikes/linux-gtk-wry",
   "spikes/macos-iced-wry",
+  "spikes/macos-open-events",
 ]
 
 [profile.release]

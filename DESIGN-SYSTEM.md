@@ -1,14 +1,15 @@
 # Design System — Rutile core HTML surfaces
 
+> **Status: Current.** The document/export system and the native-shell direction below are implemented in Rutile 0.2.0 unless a section explicitly says otherwise.
+
 > **North star (one line):** "Mineral editorial — golden needle on smoky ground: warm,
 > serious-with-one-glint, refined, classic-with-one-experiment; rutile-gold hairline
 > accents on smoky/oatmeal quartz grounds; system-serif documents; sharp 2px; signature =
 > the geniculated underline."
 
-**Scope (per SPEC LD-8a):** the preview base theme and the self-contained HTML export
-template — the strict-gate core surfaces. NOT the native app chrome (separate upcoming
-discussion) and NOT per-note chance styling (LD-8b, relaxed gate, consumes these tokens
-as its option space).
+**Scope (per SPEC LD-8a):** the preview base theme and self-contained HTML export
+template, plus the implemented native-shell direction recorded under “App chrome.”
+Per-note chance styling remains unimplemented historical 0.3 exploration.
 
 **Grounding:** `docs/research/rutile-visual-language.md` (cited mineral/glaze research);
 `docs/superpowers/specs/2026-07-10-rutile-next-SPEC.md` (LD-4 recipient-grade export,
@@ -92,7 +93,7 @@ LD-8 tastecheck gates, C7 AI steering).
 
 ## Language (→ i18n-ready)
 
-- EN + ES first-class (Simon's documents are bilingual); layout holds at +25% string
+- EN + ES first-class; layout holds at +25% string
   length; `lang` attribute set from document metadata when known.
 
 ## Refusals
@@ -125,8 +126,9 @@ ramps/scales from these anchors.
 
 **Scope note:** this section covers the NATIVE app (Iced/macOS, GTK3/Linux). It shares
 tokens with the document surfaces but is implemented per-platform: **same tokens,
-native feel — never pixel-identical twins.** Implementation phase: post-0.2 unless
-pulled forward.
+native feel — never pixel-identical twins.** The 0.2.0 shells implement the specimen-case
+grounds, divider, source styling, default-off toolbar, and native-dialog direction;
+remaining refinements are product work, not a future implementation phase.
 
 - **Philosophy:** the app is the smoky quartz that holds the writing — quiet,
   dark-warm, designed but nearly invisible. Chosen over invisible-chrome (a) by Simon.

@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use feathermark_core::{
     Document, DocumentSnapshot, ExternalChange, ExternalChangeDebouncer, ExternalResolution,
-    FileError, FileService, LocalFileService, MAX_DOCUMENT_BYTES, SaveFault,
+    FileError, FileService, LocalFileService, MAX_DOCUMENT_BYTES, SaveFault, SaveOutcome,
 };
 
 struct TestDir(PathBuf);
@@ -100,9 +100,10 @@ fn atomic_save_replaces_the_file_and_reports_the_committed_version() {
     let path = dir.join("note.md");
     fs::write(&path, "old").unwrap();
 
-    let version = LocalFileService::new()
-        .save_atomic(&path, &snapshot("new \u{1fab6}"))
-        .unwrap();
+    let outcome = LocalFileService::new().save_atomic(&path, &snapshot("new \u{1fab6}"));
+    let SaveOutcome::Committed { disk: version } = outcome else {
+        panic!("expected committed save outcome");
+    };
 
     let bytes = fs::read(&path).unwrap();
     assert_eq!(bytes, "new \u{1fab6}".as_bytes());
@@ -118,17 +119,139 @@ fn injected_pre_rename_failure_preserves_the_original_and_cleans_the_tempfile() 
     fs::write(&path, "original").unwrap();
     let service = LocalFileService::with_fault(SaveFault::BeforeRename);
 
-    let error = service
-        .save_atomic(&path, &snapshot("replacement"))
-        .unwrap_err();
+    let outcome = service.save_atomic(&path, &snapshot("replacement"));
 
-    assert!(matches!(error, FileError::InjectedBeforeRename));
+    assert!(matches!(outcome, SaveOutcome::NotCommitted { .. }));
     assert_eq!(fs::read_to_string(&path).unwrap(), "original");
     let names = fs::read_dir(&dir.0)
         .unwrap()
         .map(|entry| entry.unwrap().file_name())
         .collect::<Vec<_>>();
     assert_eq!(names, vec![path.file_name().unwrap()]);
+}
+
+#[cfg(unix)]
+#[test]
+fn existing_0600_file_remains_0600_after_save() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TestDir::new("mode-existing");
+    let path = dir.join("note.md");
+    fs::write(&path, "old").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let outcome = LocalFileService::new().save_atomic(&path, &snapshot("new"));
+
+    assert!(matches!(outcome, SaveOutcome::Committed { .. }));
+    assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o7777,
+        0o600
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn new_file_is_created_0600() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TestDir::new("mode-new");
+    let path = dir.join("note.md");
+
+    let outcome = LocalFileService::new().save_atomic(&path, &snapshot("new"));
+
+    assert!(matches!(outcome, SaveOutcome::Committed { .. }));
+    assert!(path.exists());
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o7777,
+        0o600
+    );
+    assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+}
+
+#[test]
+fn before_rename_failure_returns_not_committed_and_leaves_original_intact() {
+    let dir = TestDir::new("before-rename");
+    let path = dir.join("note.md");
+    fs::write(&path, "original").unwrap();
+    let service = LocalFileService::with_fault(SaveFault::BeforeRename);
+
+    let outcome = service.save_atomic(&path, &snapshot("replacement"));
+
+    assert!(matches!(outcome, SaveOutcome::NotCommitted { .. }));
+    assert_eq!(fs::read_to_string(&path).unwrap(), "original");
+    let names = fs::read_dir(&dir.0)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    assert_eq!(names, vec![path.file_name().unwrap()]);
+}
+
+#[test]
+fn after_rename_failure_returns_committed_durability_unknown() {
+    let dir = TestDir::new("after-rename");
+    let path = dir.join("note.md");
+    fs::write(&path, "original").unwrap();
+    let service = LocalFileService::with_fault(SaveFault::AfterRename);
+
+    let outcome = service.save_atomic(&path, &snapshot("replacement"));
+
+    assert!(matches!(
+        outcome,
+        SaveOutcome::CommittedDurabilityUnknown { .. }
+    ));
+    assert_eq!(fs::read_to_string(&path).unwrap(), "replacement");
+}
+
+#[cfg(unix)]
+#[test]
+fn symlink_target_is_rejected() {
+    use std::os::unix::fs::symlink;
+
+    let dir = TestDir::new("symlink");
+    let target = dir.join("note.md");
+    let link = dir.join("link.md");
+    fs::write(&target, "original").unwrap();
+    symlink(&target, &link).unwrap();
+
+    let outcome = LocalFileService::new().save_atomic(&link, &snapshot("replacement"));
+
+    assert!(matches!(outcome, SaveOutcome::NotCommitted { .. }));
+    assert_eq!(fs::read_to_string(&target).unwrap(), "original");
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn hard_linked_target_is_rejected() {
+    let dir = TestDir::new("hardlink");
+    let path = dir.join("note.md");
+    let link = dir.join("link.md");
+    fs::write(&path, "original").unwrap();
+    fs::hard_link(&path, &link).unwrap();
+
+    let outcome = LocalFileService::new().save_atomic(&path, &snapshot("replacement"));
+
+    assert!(matches!(outcome, SaveOutcome::NotCommitted { .. }));
+    assert_eq!(fs::read_to_string(&path).unwrap(), "original");
+    assert_eq!(fs::read_to_string(&link).unwrap(), "original");
+}
+
+#[test]
+fn directory_target_is_rejected() {
+    let dir = TestDir::new("directory");
+    let path = dir.join("note.md");
+    fs::create_dir(&path).unwrap();
+
+    let outcome = LocalFileService::new().save_atomic(&path, &snapshot("replacement"));
+
+    assert!(matches!(outcome, SaveOutcome::NotCommitted { .. }));
+    assert!(path.is_dir());
 }
 
 #[test]

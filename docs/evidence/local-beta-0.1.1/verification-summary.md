@@ -19,7 +19,7 @@ The workspace `Cargo.lock` resolves `pulldown-cmark 0.13.4` with no `source` fie
 
 ## Build & Test Receipts
 
-### macOS (Simon's MacBook Air — Apple Silicon, rustc 1.88.0)
+### macOS (Apple Silicon arm64 verification host, rustc 1.88.0)
 
 | Gate | Command | Result |
 |------|---------|--------|

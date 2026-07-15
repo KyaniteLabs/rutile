@@ -404,10 +404,12 @@ fn inspector_rejects_data_html_and_css_obfuscation() {
 
 #[test]
 fn inspector_accepts_data_uri_and_plain_hyperlinks() {
+    use feathermark_core::EXPORT_CSP;
+
     // Self-contained references and inert hyperlinks are allowed.
-    assert!(!inspect_rejects(
-        "<!doctype html><html><body><img src=\"data:image/png;base64,AAAA\"><a href=\"https://ok.example\">x</a></body></html>"
-    ));
+    assert!(!inspect_rejects(&format!(
+        "<!doctype html><html><head><meta http-equiv=\"Content-Security-Policy\" content=\"{EXPORT_CSP}\"></head><body><img src=\"data:image/png;base64,AAAA\"><a href=\"https://ok.example\">x</a></body></html>"
+    )));
 }
 
 // ---------------------------------------------------------------------------
@@ -550,7 +552,7 @@ fn append_journal_line(dir: &std::path::Path, line: &[u8]) {
 fn wrong_schema_journal_entry_is_skipped() {
     let dir = TempDir::new("wrong-schema");
     let store = AutosaveStore::new(dir.0.clone());
-    store.record(0, &snap("good"), None, 1).unwrap();
+    store.record(&snap("good"), None, 1).unwrap();
     append_journal_line(
         &dir.0,
         format!(
@@ -559,7 +561,7 @@ fn wrong_schema_journal_entry_is_skipped() {
         )
         .as_bytes(),
     );
-    let recovered = store.recover().unwrap().unwrap();
+    let recovered = store.recover().unwrap().recovered.unwrap();
     assert_eq!(recovered.entry.sequence, 0);
     assert_eq!(recovered.document.snapshot().to_string(), "good");
 }
@@ -568,7 +570,7 @@ fn wrong_schema_journal_entry_is_skipped() {
 fn unsupported_version_journal_entry_is_skipped() {
     let dir = TempDir::new("bad-version");
     let store = AutosaveStore::new(dir.0.clone());
-    store.record(0, &snap("alive"), None, 1).unwrap();
+    store.record(&snap("alive"), None, 1).unwrap();
     append_journal_line(
         &dir.0,
         format!(
@@ -577,7 +579,7 @@ fn unsupported_version_journal_entry_is_skipped() {
         )
         .as_bytes(),
     );
-    let recovered = store.recover().unwrap().unwrap();
+    let recovered = store.recover().unwrap().recovered.unwrap();
     assert_eq!(recovered.entry.sequence, 0);
 }
 
@@ -595,34 +597,32 @@ fn path_traversal_snapshot_reference_is_unrecoverable() {
         )
         .as_bytes(),
     );
-    assert!(store.recover().unwrap().is_none());
+    assert!(store.recover().unwrap().recovered.is_none());
 }
 
 #[test]
 fn missing_snapshot_file_falls_back_to_lower_sequence() {
     let dir = TempDir::new("missing-snap");
     let store = AutosaveStore::new(dir.0.clone());
-    store.record(0, &snap("keep"), None, 1).unwrap();
-    let latest = store.record(1, &snap("gone"), None, 2).unwrap();
-    std::fs::remove_file(dir.0.join(&latest.snapshot_file)).unwrap();
-    let recovered = store.recover().unwrap().unwrap();
+    store.record(&snap("keep"), None, 1).unwrap();
+    let latest = store.record(&snap("gone"), None, 2).unwrap();
+    std::fs::remove_file(dir.0.join(&latest.entry.snapshot_file)).unwrap();
+    let recovered = store.recover().unwrap().recovered.unwrap();
     assert_eq!(recovered.entry.sequence, 0);
     assert_eq!(recovered.document.snapshot().to_string(), "keep");
 }
 
 #[test]
-fn highest_sequence_wins_under_out_of_order_append() {
-    let dir = TempDir::new("out-of-order");
+fn highest_sequence_wins() {
+    let dir = TempDir::new("highest");
     let store = AutosaveStore::new(dir.0.clone());
-    // Recorded out of order; recovery must still pick the highest sequence.
-    store.record(5, &snap("five"), None, 1).unwrap();
-    store.record(2, &snap("two"), None, 2).unwrap();
-    store.record(9, &snap("nine"), None, 3).unwrap();
-    store.record(3, &snap("three"), None, 4).unwrap();
-    let recovered = store.recover().unwrap().unwrap();
-    assert_eq!(recovered.entry.sequence, 9);
-    assert_eq!(recovered.document.snapshot().to_string(), "nine");
-    assert_eq!(store.next_sequence().unwrap(), 10);
+    // Internal sequence allocation is always ascending.
+    store.record(&snap("first"), None, 1).unwrap();
+    store.record(&snap("second"), None, 2).unwrap();
+    store.record(&snap("third"), None, 3).unwrap();
+    let recovered = store.recover().unwrap().recovered.unwrap();
+    assert_eq!(recovered.entry.sequence, 2);
+    assert_eq!(recovered.document.snapshot().to_string(), "third");
 }
 
 // ---------------------------------------------------------------------------

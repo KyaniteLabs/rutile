@@ -8,7 +8,9 @@ license.workspace = true
 [dependencies]
 blake3.workspace = true
 feathermark-types = { path = "../feathermark-types", version = "=0.2.0" }
+fs2 = "=0.4.3"
 html-escape.workspace = true
+libc.workspace = true
 pulldown-cmark.workspace = true
 ropey.workspace = true
 serde.workspace = true

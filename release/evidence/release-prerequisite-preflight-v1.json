@@ -1,0 +1,120 @@
+{
+  "schema": "rutile.release-prerequisite-preflight.v1",
+  "version": 1,
+  "run_id": "wave0c-20260713-blocked",
+  "generated_at_unix_ms": 1783927691000,
+  "source": {
+    "commit": "d0b73698b35506f23ab5ae9a1bd893ee9102f7c9",
+    "tree": "992d14459a83ce72949beeafc3f52dc3e944c7b6"
+  },
+  "verifier": {
+    "identity": "wave0c-local-inventory",
+    "key_fingerprint": null
+  },
+  "runner_lock": null,
+  "probes": {
+    "macos_arm64": {
+      "runner_id": "forgejo-macos-arm64",
+      "os": "macos",
+      "architecture": "arm64",
+      "display": "none",
+      "clean_install_host": {
+        "state": "unavailable",
+        "observed_at_unix_ms": 1783927691000,
+        "evidence": null
+      },
+      "capability": {
+        "state": "unavailable",
+        "observed_at_unix_ms": 1783927691000,
+        "evidence": null
+      }
+    },
+    "linux_x86_64_x11": {
+      "runner_id": "forgejo-linux-x86-64-x11",
+      "os": "linux",
+      "architecture": "x86_64",
+      "display": "x11",
+      "clean_install_host": {
+        "state": "unavailable",
+        "observed_at_unix_ms": 1783927691000,
+        "evidence": null
+      },
+      "capability": {
+        "state": "unavailable",
+        "observed_at_unix_ms": 1783927691000,
+        "evidence": null
+      }
+    },
+    "macos_x86_64": {
+      "state": "not_required",
+      "observed_at_unix_ms": 1783927691000,
+      "evidence": null
+    },
+    "linux_x86_64_wayland": {
+      "state": "not_required",
+      "observed_at_unix_ms": 1783927691000,
+      "evidence": null
+    },
+    "apple": {
+      "certificate_sha256": null,
+      "team_id": null,
+      "certificate_expires_at_unix_ms": null,
+      "private_key_challenge": {
+        "state": "unavailable",
+        "observed_at_unix_ms": 1783927691000,
+        "evidence": null
+      },
+      "notarization_challenge": {
+        "state": "unavailable",
+        "observed_at_unix_ms": 1783927691000,
+        "evidence": null
+      }
+    },
+    "linux_gpg": {
+      "fingerprint": null,
+      "signing_challenge": {
+        "state": "unavailable",
+        "observed_at_unix_ms": 1783927691000,
+        "evidence": null
+      }
+    },
+    "protected_tag_and_owner_approval": {
+      "protected_pattern": "v*",
+      "manual_owner_approval": {
+        "state": "unavailable",
+        "observed_at_unix_ms": 1783927691000,
+        "evidence": null
+      }
+    },
+    "artifact_retention": {
+      "pr_days": 30,
+      "release_days": 365,
+      "maximum_artifact_bytes": 104857600,
+      "truncation_fails": true,
+      "policy": {
+        "state": "unavailable",
+        "observed_at_unix_ms": 1783927691000,
+        "evidence": null
+      }
+    }
+  },
+  "result": {
+    "ready": false,
+    "hard_blockers": [
+      "trusted preflight verifier is not provisioned",
+      "authenticated Forgejo runner lock is unavailable",
+      "current Apple Developer ID certificate authority is unavailable",
+      "Linux release GPG fingerprint is unavailable",
+      "macos_arm64 runner capability is not independently attested",
+      "macos_arm64 clean install host is not independently attested",
+      "linux_x86_64_x11 runner capability is not independently attested",
+      "linux_x86_64_x11 clean install host is not independently attested",
+      "Apple private-key signing is not independently attested",
+      "Apple notarization is not independently attested",
+      "Linux GPG signing is not independently attested",
+      "protected tag owner approval is not independently attested",
+      "artifact retention is not independently attested",
+      "authenticated release authority has not approved this inventory"
+    ]
+  }
+}

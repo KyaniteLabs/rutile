@@ -2,7 +2,7 @@
 
 The following items are explicitly **not** covered by this local beta evidence bundle. They are recorded here so they cannot be mistaken for completed work.
 
-> **Closure status (2026-07-10):** items 1, 2, 3, 7 (single second builder, path-matched), 8, 9, 11, and 12 are closed with evidence in [`debt-closure/closure-summary.md`](debt-closure/closure-summary.md). The long-fuzz closure (item 8) found and fixed two real render crashes. Items 4, 5, 6, 10, 13, and 14 remain open: signing/notarization and GPG need Simon's credentials/identity decision; five-runner fan-in stays plan-reduced; external audit and public release are separate engagements.
+> **Closure status (2026-07-10):** items 1, 2, 3, 7 (single second builder, path-matched), 8, 9, 11, and 12 are closed with evidence in [`debt-closure/closure-summary.md`](debt-closure/closure-summary.md). The long-fuzz closure (item 8) found and fixed two real render crashes. Items 4, 5, 6, 10, 13, and 14 remain open: signing/notarization and GPG need the owner's credentials/identity decision; five-runner fan-in stays plan-reduced; external audit and public release are separate engagements.
 
 ## Platform / Architecture Coverage
 

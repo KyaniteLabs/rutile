@@ -2,6 +2,7 @@
 
 #[allow(dead_code)] // Task 1C wires the capability boundary to real application launchers.
 mod app_launch;
+pub mod artifact_inspector;
 #[allow(dead_code)] // Task 1C wires the capability boundary to real scenario owners.
 mod candidate;
 pub mod comparator;
@@ -10,7 +11,10 @@ pub mod gui;
 pub mod local_package;
 pub mod local_package_cli;
 pub mod metrics;
+#[cfg(unix)]
+pub mod native_smoke;
 pub mod package;
+pub mod release_preflight;
 pub mod runner;
 #[doc(hidden)]
 pub mod runner_native;
@@ -18,9 +22,12 @@ mod tool_process;
 
 /// Clap-driven CLI surface shared between the xtask binary and its tests.
 pub mod cli {
+    use std::num::NonZeroUsize;
     use std::path::PathBuf;
 
-    use clap::{Parser, Subcommand};
+    #[cfg(unix)]
+    use crate::native_smoke::NativeSmokeProfile;
+    use clap::{Parser, Subcommand, ValueEnum};
 
     #[derive(Parser)]
     #[command(
@@ -35,6 +42,10 @@ pub mod cli {
 
     #[derive(Subcommand)]
     pub enum Command {
+        Artifact {
+            #[command(subcommand)]
+            command: ArtifactCommand,
+        },
         Fixtures {
             #[command(subcommand)]
             command: FixtureCommand,
@@ -51,6 +62,17 @@ pub mod cli {
             #[command(subcommand)]
             command: MetricsCommand,
         },
+        #[cfg(unix)]
+        NativeSmoke {
+            #[arg(long)]
+            binary: PathBuf,
+            #[arg(long, value_enum)]
+            profile: NativeSmokeProfile,
+            #[arg(long)]
+            repeat: Option<NonZeroUsize>,
+            #[arg(long)]
+            evidence_dir: PathBuf,
+        },
         Package {
             #[command(subcommand)]
             command: PackageCommand,
@@ -59,6 +81,32 @@ pub mod cli {
             #[command(subcommand)]
             command: RunnerCommand,
         },
+        ReleasePreflight {
+            #[arg(long)]
+            input: PathBuf,
+            #[arg(long)]
+            out: PathBuf,
+        },
+    }
+
+    #[derive(Subcommand)]
+    pub enum ArtifactCommand {
+        Inspect {
+            #[arg(long)]
+            artifact: PathBuf,
+            #[arg(long)]
+            quarantine: Option<PathBuf>,
+            #[arg(long)]
+            policy: Option<PathBuf>,
+            #[arg(long, value_enum, default_value_t = ArtifactInspectionMode::Package)]
+            mode: ArtifactInspectionMode,
+        },
+    }
+
+    #[derive(Clone, Copy, Debug, ValueEnum)]
+    pub enum ArtifactInspectionMode {
+        Candidate,
+        Package,
     }
 
     #[derive(Subcommand)]

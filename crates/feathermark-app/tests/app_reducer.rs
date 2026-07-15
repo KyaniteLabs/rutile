@@ -1,9 +1,10 @@
 use feathermark_app::actions::ActionError;
-use feathermark_app::app::{AppEffect, AppMessage, AppState, PreviewState};
+use feathermark_app::app::{AppEffect, AppMessage, AppState, NoticeSeverity, PreviewState};
 use feathermark_core::{
-    AutosaveStore, ChangeSet, Document, EditError, EditPlanError, ExternalResolution, FileService,
-    FindDirection, FindQuery, FormatCommand, LocalFileService, MAX_DOCUMENT_BYTES, MatchMode,
-    Selection, SmartEnterAction,
+    AutosaveRecordOutcome, AutosaveStore, ChangeSet, Document, EditError, EditPlanError,
+    ExternalResolution, FileService, FindDirection, FindQuery, FormatCommand, LocalFileService,
+    MAX_DOCUMENT_BYTES, MatchMode, OrphanGcReport, PruneOutcome, Selection, SessionStateV1,
+    SmartEnterAction,
 };
 use feathermark_protocol::PreviewEventV1;
 use feathermark_types::SafeLinkTarget;
@@ -131,9 +132,11 @@ fn disk_version(name: &str, source: &str) -> (std::path::PathBuf, feathermark_co
         std::process::id()
     ));
     let document = Document::new(source).unwrap();
-    let disk = LocalFileService::new()
-        .save_atomic(&path, &document.snapshot())
-        .unwrap();
+    let outcome = LocalFileService::new().save_atomic(&path, &document.snapshot());
+    let disk = match outcome {
+        feathermark_core::SaveOutcome::Committed { disk } => disk,
+        other => panic!("expected committed save, got {other:?}"),
+    };
     (path, disk)
 }
 
@@ -182,6 +185,32 @@ fn open_save_as_stale_save_and_new_document_keep_path_version_paired() {
 
     let _ = std::fs::remove_file(opened_path);
     let _ = std::fs::remove_file(saved_path);
+}
+
+#[test]
+fn durability_unknown_save_records_disk_but_keeps_dirty() {
+    let (path, disk) = disk_version("durability-unknown", "payload");
+    let mut state = AppState::new();
+    state.reduce(AppMessage::DocumentOpened {
+        revision: 1,
+        path: path.clone(),
+        disk: disk.clone(),
+    });
+    state.reduce(AppMessage::DocumentEdited { revision: 2 });
+    let effects = state.reduce(AppMessage::SaveDurabilityUnknown {
+        revision: 2,
+        path: path.clone(),
+        disk: disk.clone(),
+    });
+    assert!(effects.is_empty());
+    assert_eq!(state.path(), Some(path.as_path()));
+    assert_eq!(state.saved_disk(), Some(&disk));
+    assert!(
+        state.dirty(),
+        "durability-unknown save must leave document dirty"
+    );
+
+    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -669,4 +698,449 @@ fn session_state_capture_and_restore_round_trip() {
     assert_eq!(restore.selection, Some(selection));
     assert_eq!(restore.top_visible_byte, Some(5));
     assert_eq!(restore.last_file, None);
+}
+
+// --- Wave 2-A: shared shell-integration command/status bus -------------------
+
+fn sample_autosave_outcome(entry: feathermark_core::AutosaveEntryV1) -> AutosaveRecordOutcome {
+    AutosaveRecordOutcome {
+        entry,
+        prune: PruneOutcome {
+            retained: 1,
+            dropped: 0,
+        },
+        orphan_gc: OrphanGcReport::default(),
+    }
+}
+
+#[test]
+fn open_document_requests_perform_open() {
+    let mut state = AppState::new();
+    let path = std::path::PathBuf::from("/tmp/example.md");
+    let effects = state.reduce(AppMessage::OpenDocument { path: path.clone() });
+
+    assert_eq!(effects, vec![AppEffect::PerformOpen { path }]);
+}
+
+#[test]
+fn open_request_completed_ok_installs_document_and_schedules_render() {
+    let (path, disk) = disk_version("open-completed", "hello");
+    let mut state = AppState::new();
+    let effects = state.reduce(AppMessage::OpenRequestCompleted {
+        result: Ok((3, path.clone(), disk.clone())),
+    });
+
+    assert_eq!(state.revision(), 3);
+    assert!(!state.dirty());
+    assert_eq!(state.path(), Some(path.as_path()));
+    assert_eq!(state.saved_disk(), Some(&disk));
+    assert_eq!(effects, vec![AppEffect::ScheduleRender { revision: 3 }]);
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn open_request_completed_err_pushes_error_notice() {
+    let mut state = AppState::new();
+    let effects = state.reduce(AppMessage::OpenRequestCompleted {
+        result: Err("permission denied".to_owned()),
+    });
+
+    assert_eq!(effects.len(), 1);
+    let AppEffect::PresentNotice { notice } = effects.into_iter().next().unwrap() else {
+        panic!("expected PresentNotice");
+    };
+    assert_eq!(notice.severity, NoticeSeverity::Error);
+    assert!(notice.message.contains("permission denied"));
+    assert_eq!(state.notices(), &[notice]);
+}
+
+#[test]
+fn surface_notice_preserves_severity_and_message_without_open_prefix() {
+    let mut state = AppState::new();
+    let effects = state.reduce(AppMessage::SurfaceNotice {
+        severity: NoticeSeverity::Warning,
+        message: "Save failed: disk full".to_owned(),
+        source_error: "disk full".to_owned(),
+    });
+
+    assert_eq!(effects.len(), 1);
+    let AppEffect::PresentNotice { notice } = effects.into_iter().next().unwrap() else {
+        panic!("expected PresentNotice");
+    };
+    assert_eq!(notice.severity, NoticeSeverity::Warning);
+    assert_eq!(notice.message, "Save failed: disk full");
+    assert!(!notice.message.contains("Could not open document"));
+    assert_eq!(state.notices(), &[notice]);
+}
+
+#[test]
+fn save_requested_with_path_and_dirty_performs_save() {
+    let (path, disk) = disk_version("save-requested", "saved");
+    let mut state = AppState::new();
+    state.reduce(AppMessage::DocumentOpened {
+        revision: 1,
+        path: path.clone(),
+        disk,
+    });
+    state.reduce(AppMessage::DocumentEdited { revision: 2 });
+
+    let effects = state.reduce(AppMessage::SaveRequested);
+
+    assert_eq!(effects, vec![AppEffect::PerformSave { path: path.clone() }]);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn save_requested_without_path_requests_close_decision() {
+    let mut state = AppState::new();
+    state.reduce(AppMessage::DocumentEdited { revision: 2 });
+
+    let effects = state.reduce(AppMessage::SaveRequested);
+
+    assert_eq!(effects, vec![AppEffect::RequestCloseDecision]);
+}
+
+#[test]
+fn save_requested_when_clean_is_noop() {
+    let (path, disk) = disk_version("save-requested-clean", "saved");
+    let mut state = AppState::new();
+    state.reduce(AppMessage::DocumentOpened {
+        revision: 1,
+        path: path.clone(),
+        disk,
+    });
+
+    let effects = state.reduce(AppMessage::SaveRequested);
+
+    assert!(effects.is_empty());
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn save_as_requested_when_dirty_performs_save_as() {
+    let mut state = AppState::new();
+    state.reduce(AppMessage::DocumentEdited { revision: 2 });
+    let path = std::path::PathBuf::from("/tmp/save-as.md");
+
+    let effects = state.reduce(AppMessage::SaveAsRequested { path: path.clone() });
+
+    assert_eq!(effects, vec![AppEffect::PerformSaveAs { path }]);
+}
+
+#[test]
+fn save_as_requested_when_clean_is_noop() {
+    let mut state = AppState::new();
+    let path = std::path::PathBuf::from("/tmp/save-as-clean.md");
+
+    let effects = state.reduce(AppMessage::SaveAsRequested { path });
+
+    assert!(effects.is_empty());
+}
+
+#[test]
+fn close_requested_save_with_dirty_path_performs_save() {
+    let (path, disk) = disk_version("close-save", "dirty");
+    let mut state = AppState::new();
+    state.reduce(AppMessage::DocumentOpened {
+        revision: 1,
+        path: path.clone(),
+        disk,
+    });
+    state.reduce(AppMessage::DocumentEdited { revision: 2 });
+
+    let effects = state.reduce(AppMessage::CloseRequested {
+        decision: feathermark_app::app::CloseDecision::Save {
+            untitled_path: None,
+        },
+    });
+
+    assert_eq!(effects, vec![AppEffect::PerformSave { path: path.clone() }]);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn close_requested_save_without_path_requests_decision() {
+    let mut state = AppState::new();
+    state.reduce(AppMessage::DocumentEdited { revision: 2 });
+
+    let effects = state.reduce(AppMessage::CloseRequested {
+        decision: feathermark_app::app::CloseDecision::Save {
+            untitled_path: None,
+        },
+    });
+
+    assert_eq!(effects, vec![AppEffect::RequestCloseDecision]);
+}
+
+#[test]
+fn close_requested_save_clean_quits() {
+    let (path, disk) = disk_version("close-clean", "clean");
+    let mut state = AppState::new();
+    state.reduce(AppMessage::DocumentOpened {
+        revision: 1,
+        path: path.clone(),
+        disk,
+    });
+
+    let effects = state.reduce(AppMessage::CloseRequested {
+        decision: feathermark_app::app::CloseDecision::Save {
+            untitled_path: None,
+        },
+    });
+
+    assert_eq!(effects, vec![AppEffect::QuitApplication]);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn close_requested_discard_quits() {
+    let mut state = AppState::new();
+    state.reduce(AppMessage::DocumentEdited { revision: 2 });
+
+    let effects = state.reduce(AppMessage::CloseRequested {
+        decision: feathermark_app::app::CloseDecision::Discard,
+    });
+
+    assert_eq!(effects, vec![AppEffect::QuitApplication]);
+}
+
+#[test]
+fn close_requested_cancel_is_noop() {
+    let mut state = AppState::new();
+    state.reduce(AppMessage::DocumentEdited { revision: 2 });
+
+    let effects = state.reduce(AppMessage::CloseRequested {
+        decision: feathermark_app::app::CloseDecision::Cancel,
+    });
+
+    assert!(effects.is_empty());
+    assert!(state.dirty());
+}
+
+#[test]
+fn autosave_tick_when_dirty_and_store_bound_performs_autosave() {
+    let dir = ScratchDir::new("autosave-tick");
+    let mut state = AppState::new();
+    state
+        .bind_autosave(AutosaveStore::new(dir.0.clone()))
+        .unwrap();
+    state.reduce(AppMessage::DocumentEdited { revision: 2 });
+
+    let effects = state.reduce(AppMessage::AutosaveTick);
+
+    assert_eq!(effects, vec![AppEffect::PerformAutosave]);
+}
+
+#[test]
+fn autosave_tick_is_noop_when_clean_or_unbound() {
+    let dir = ScratchDir::new("autosave-tick-clean");
+    let mut bound_clean = AppState::new();
+    bound_clean
+        .bind_autosave(AutosaveStore::new(dir.0.clone()))
+        .unwrap();
+    assert!(bound_clean.reduce(AppMessage::AutosaveTick).is_empty());
+
+    let mut dirty_unbound = AppState::new();
+    dirty_unbound.reduce(AppMessage::DocumentEdited { revision: 2 });
+    assert!(dirty_unbound.reduce(AppMessage::AutosaveTick).is_empty());
+}
+
+#[test]
+fn autosave_completed_ok_records_no_state_change() {
+    let dir = ScratchDir::new("autosave-completed");
+    let mut state = AppState::new();
+    state
+        .bind_autosave(AutosaveStore::new(dir.0.clone()))
+        .unwrap();
+    let document = Document::new("snapshot").unwrap();
+    let entry = state.autosave_tick(&document, 1).unwrap().unwrap();
+
+    let effects = state.reduce(AppMessage::AutosaveCompleted {
+        result: Ok(sample_autosave_outcome(entry)),
+    });
+
+    assert!(effects.is_empty());
+}
+
+#[test]
+fn autosave_completed_err_pushes_warning_notice() {
+    let mut state = AppState::new();
+    let effects = state.reduce(AppMessage::AutosaveCompleted {
+        result: Err("disk full".to_owned()),
+    });
+
+    assert_eq!(effects.len(), 1);
+    let AppEffect::PresentNotice { notice } = effects.into_iter().next().unwrap() else {
+        panic!("expected PresentNotice");
+    };
+    assert_eq!(notice.severity, NoticeSeverity::Warning);
+    assert!(notice.message.contains("disk full"));
+    assert_eq!(state.notices(), &[notice.clone()]);
+}
+
+#[test]
+fn recovery_adopted_installs_recovered_document() {
+    let dir = ScratchDir::new("recovery-adopted");
+    let (path, disk) = disk_version("recovery-adopted-doc", "on disk");
+    let mut state = AppState::new();
+    state
+        .bind_autosave(AutosaveStore::new(dir.0.clone()))
+        .unwrap();
+    state.reduce(AppMessage::DocumentOpened {
+        revision: 0,
+        path: path.clone(),
+        disk,
+    });
+    let document = Document::new("recovered body").unwrap();
+    let _entry = state.autosave_tick(&document, 1).unwrap().unwrap();
+
+    let mut restarted = AppState::new();
+    restarted
+        .bind_autosave(AutosaveStore::new(dir.0.clone()))
+        .unwrap();
+    let recovered = restarted.recover().unwrap().expect("something to recover");
+
+    let effects = restarted.reduce(AppMessage::RecoveryAdopted {
+        document: recovered,
+    });
+
+    assert_eq!(restarted.path(), Some(path.as_path()));
+    assert!(restarted.dirty());
+    assert_eq!(restarted.saved_disk(), None);
+    assert_eq!(effects, vec![AppEffect::ScheduleRender { revision: 0 }]);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn recovery_dismissed_keeps_empty_state() {
+    let mut state = AppState::new();
+    let effects = state.reduce(AppMessage::RecoveryDismissed);
+
+    assert!(effects.is_empty());
+    assert!(!state.dirty());
+    assert_eq!(state.path(), None);
+}
+
+#[test]
+fn session_restored_with_last_file_opens_it() {
+    let mut state = AppState::new();
+    let effects = state.reduce(AppMessage::SessionRestored {
+        state: SessionStateV1 {
+            schema: feathermark_core::SESSION_SCHEMA_V1.to_owned(),
+            v: 1,
+            saved_at_unix_ms: 1,
+            last_file: Some("/tmp/last.md".to_owned()),
+            selection: None,
+            top_visible_byte: None,
+            window: None,
+            recent_files: Vec::new(),
+        },
+    });
+
+    assert_eq!(
+        effects,
+        vec![AppEffect::PerformOpen {
+            path: std::path::PathBuf::from("/tmp/last.md")
+        }]
+    );
+}
+
+#[test]
+fn session_restored_without_last_file_is_noop() {
+    let mut state = AppState::new();
+    let effects = state.reduce(AppMessage::SessionRestored {
+        state: SessionStateV1 {
+            schema: feathermark_core::SESSION_SCHEMA_V1.to_owned(),
+            v: 1,
+            saved_at_unix_ms: 1,
+            last_file: None,
+            selection: None,
+            top_visible_byte: None,
+            window: None,
+            recent_files: Vec::new(),
+        },
+    });
+
+    assert!(effects.is_empty());
+}
+
+#[test]
+fn notice_dismissed_removes_notice() {
+    let mut state = AppState::new();
+    state.reduce(AppMessage::OpenRequestCompleted {
+        result: Err("fail".to_owned()),
+    });
+    let id = state.notices()[0].id;
+
+    let effects = state.reduce(AppMessage::NoticeDismissed { id });
+
+    assert!(effects.is_empty());
+    assert!(state.notices().is_empty());
+}
+
+#[test]
+fn mirror_failed_triggers_one_full_resync() {
+    let mut state = AppState::new();
+    let effects = state.reduce(AppMessage::MirrorFailed {
+        error: "preview crashed".to_owned(),
+    });
+
+    assert_eq!(effects, vec![AppEffect::PerformMirrorResync]);
+    assert!(state.notices().is_empty());
+}
+
+#[test]
+fn mirror_failed_while_resync_pending_pushes_persistent_error() {
+    let mut state = AppState::new();
+    state.reduce(AppMessage::MirrorFailed {
+        error: "first failure".to_owned(),
+    });
+
+    let effects = state.reduce(AppMessage::MirrorFailed {
+        error: "second failure".to_owned(),
+    });
+
+    assert_eq!(effects.len(), 1);
+    let AppEffect::PresentNotice { notice } = effects.into_iter().next().unwrap() else {
+        panic!("expected PresentNotice");
+    };
+    assert_eq!(notice.severity, NoticeSeverity::Error);
+    assert!(notice.message.contains("second failure"));
+}
+
+#[test]
+fn mirror_resync_completed_ok_clears_pending_and_allows_another_resync() {
+    let mut state = AppState::new();
+    state.reduce(AppMessage::MirrorFailed {
+        error: "first failure".to_owned(),
+    });
+
+    let effects = state.reduce(AppMessage::MirrorResyncCompleted { result: Ok(()) });
+    assert!(effects.is_empty());
+    assert!(state.notices().is_empty());
+
+    let effects = state.reduce(AppMessage::MirrorFailed {
+        error: "later failure".to_owned(),
+    });
+    assert_eq!(effects, vec![AppEffect::PerformMirrorResync]);
+}
+
+#[test]
+fn mirror_resync_completed_err_pushes_error_notice() {
+    let mut state = AppState::new();
+    state.reduce(AppMessage::MirrorFailed {
+        error: "preview crashed".to_owned(),
+    });
+
+    let effects = state.reduce(AppMessage::MirrorResyncCompleted {
+        result: Err("adapter timeout".to_owned()),
+    });
+
+    assert_eq!(effects.len(), 1);
+    let AppEffect::PresentNotice { notice } = effects.into_iter().next().unwrap() else {
+        panic!("expected PresentNotice");
+    };
+    assert_eq!(notice.severity, NoticeSeverity::Error);
+    assert!(notice.message.contains("adapter timeout"));
 }
