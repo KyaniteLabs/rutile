@@ -35,10 +35,11 @@ impl ApplicationHandler<MacUserEvent> for ProofRunner {
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: MacUserEvent) {
-        let MacUserEvent::OpenUrls(urls) = event;
-        assert_eq!(urls, vec!["file:///tmp/proof.md".to_owned()]);
-        self.saw_user_event = true;
-        event_loop.exit();
+        if let MacUserEvent::OpenUrls(urls) = event {
+            assert_eq!(urls, vec!["file:///tmp/proof.md".to_owned()]);
+            self.saw_user_event = true;
+            event_loop.exit();
+        }
     }
 
     fn window_event(
