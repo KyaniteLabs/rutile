@@ -299,6 +299,16 @@ pub mod cli {
             output_root: PathBuf,
             #[arg(long)]
             version: String,
+            /// Optional release-authority secret key. When present (with
+            /// --preview-signed-at + --preview-expires-at), bless each produced
+            /// artifact with provenance + a signed preview authorization so the
+            /// inline Package-mode inspection passes at the preview tier.
+            #[arg(long)]
+            release_authority_key: Option<PathBuf>,
+            #[arg(long)]
+            preview_signed_at: Option<String>,
+            #[arg(long)]
+            preview_expires_at: Option<String>,
         },
         Linux {
             #[arg(long)]

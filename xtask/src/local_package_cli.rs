@@ -39,6 +39,8 @@ pub enum LocalPackageCliError {
     Inspector(#[from] InspectorError),
     #[error("artifact policy rejected {path}: {findings}")]
     PolicyRejected { path: PathBuf, findings: String },
+    #[error("preview bless failed: {0}")]
+    Bless(String),
 }
 
 pub enum LocalPackageCliRequest {
@@ -143,6 +145,79 @@ pub fn enforce_inspection(
     })
 }
 
+/// Write a production-provenance sibling for `artifact` (generated from the
+/// candidate), and — when a release-authority key + signing window are provided
+/// — sign a preview-publication authorization sibling so the Package-mode
+/// inspection passes at the preview tier. The operator asserts the candidate
+/// was produced by `reproducible-build`.
+fn bless_macos_artifact(
+    artifact: &Path,
+    request: &MacPackageRequest,
+) -> Result<(), LocalPackageCliError> {
+    use sha2::Digest;
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| LocalPackageCliError::Bless("cannot resolve workspace root".into()))?;
+    let provenance = crate::provenance::generate_with_reproducible_env(
+        &crate::provenance::ProvenanceRequest {
+            candidate: request.candidate.clone(),
+            repo_root,
+            features: vec!["macos-shell".to_string()],
+            target_root: "target/prod".to_string(),
+        },
+        "feathermark-app",
+        &request.version,
+    )
+    .map_err(|error| LocalPackageCliError::Bless(error.to_string()))?;
+    let json = provenance
+        .canonical_json()
+        .map_err(|error| LocalPackageCliError::Bless(error.to_string()))?;
+    let provenance_path = sibling_path(artifact, ".provenance.json");
+    fs::write(&provenance_path, &json)
+        .map_err(|error| LocalPackageCliError::Bless(error.to_string()))?;
+    let provenance_sha = provenance
+        .provenance_sha256()
+        .map_err(|error| LocalPackageCliError::Bless(error.to_string()))?;
+
+    if let (Some(key_path), Some(signed_at), Some(expires_at)) = (
+        request.release_authority_key.as_ref(),
+        request.preview_signed_at.as_ref(),
+        request.preview_expires_at.as_ref(),
+    ) {
+        let signing = crate::release_authority::read_signing_key(key_path)
+            .map_err(|error| LocalPackageCliError::Bless(error.to_string()))?;
+        let artifact_bytes =
+            fs::read(artifact).map_err(|error| LocalPackageCliError::Bless(error.to_string()))?;
+        let statement = crate::release_authority::PreviewAuthorizationStatement {
+            artifact_sha256: hex::encode(sha2::Sha256::digest(&artifact_bytes)),
+            provenance_sha256: provenance_sha,
+            tier: crate::release_authority::PREVIEW_TIER.to_string(),
+            product: "feathermark-app".to_string(),
+            version_label: request.version.clone(),
+            signed_at: signed_at.clone(),
+            expires_at: expires_at.clone(),
+        };
+        let record = crate::release_authority::sign(&statement, &signing)
+            .map_err(|error| LocalPackageCliError::Bless(error.to_string()))?;
+        let auth = serde_json::to_string_pretty(&record)
+            .map_err(|error| LocalPackageCliError::Bless(error.to_string()))?;
+        fs::write(sibling_path(artifact, ".preview-authorization.json"), auth)
+            .map_err(|error| LocalPackageCliError::Bless(error.to_string()))?;
+    }
+    Ok(())
+}
+
+/// `<artifact><suffix>` next to the artifact (e.g. `.provenance.json`).
+fn sibling_path(artifact: &Path, suffix: &str) -> PathBuf {
+    let mut name = artifact
+        .file_name()
+        .map(|file_name| file_name.to_os_string())
+        .unwrap_or_default();
+    name.push(suffix);
+    artifact.with_file_name(name)
+}
+
 fn run_macos(
     request: MacPackageRequest,
     executor: &dyn CommandExecutor,
@@ -197,6 +272,15 @@ fn run_macos(
         &request.source_commit,
         &request.version,
     )?;
+
+    // Bless artifacts (provenance + signed preview authorization) only when the
+    // operator provides a release-authority key — the one-shot preview path. With
+    // no key, artifacts are produced unembellished and the operator runs
+    // `provenance generate` + `release preview-authorize` separately.
+    if request.release_authority_key.is_some() {
+        bless_macos_artifact(&zip, &request)?;
+        bless_macos_artifact(&dmg, &request)?;
+    }
 
     remove_staging(&request.output_root)?;
 

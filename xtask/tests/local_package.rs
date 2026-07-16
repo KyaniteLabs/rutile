@@ -106,6 +106,9 @@ test_control_environment = ["RUTILE_TEST_CONTROL"]
         source_commit: valid_source_commit(),
         output_root: output.clone(),
         version: "0.2.0".into(),
+        release_authority_key: None,
+        preview_signed_at: None,
+        preview_expires_at: None,
     });
 
     let error =
@@ -149,6 +152,9 @@ fn assembles_deterministic_arm64_app_bound_to_candidate_hash() {
         source_commit: valid_source_commit(),
         output_root: output.clone(),
         version: "0.2.0".into(),
+        release_authority_key: None,
+        preview_signed_at: None,
+        preview_expires_at: None,
     })
     .unwrap();
 
@@ -529,6 +535,9 @@ fn rejects_candidate_hash_mismatch_and_symlink_inputs() {
         source_commit: valid_source_commit(),
         output_root: output.join("mismatch-output"),
         version: "0.2.0".into(),
+        release_authority_key: None,
+        preview_signed_at: None,
+        preview_expires_at: None,
     })
     .unwrap_err();
     assert!(
@@ -556,6 +565,9 @@ fn rejects_relative_and_parent_traversal_paths_before_io() {
         source_commit: valid_source_commit(),
         output_root: "relative/output".into(),
         version: "0.2.0".into(),
+        release_authority_key: None,
+        preview_signed_at: None,
+        preview_expires_at: None,
     };
     let error = assemble_macos_app(&request).unwrap_err();
     assert!(error.to_string().contains("absolute normalized path"));
@@ -577,6 +589,9 @@ fn rejects_candidates_whose_binary_architecture_conflicts_with_package_label() {
         source_commit: valid_source_commit(),
         output_root: output.join("macos-output"),
         version: "0.2.0".into(),
+        release_authority_key: None,
+        preview_signed_at: None,
+        preview_expires_at: None,
     })
     .unwrap_err();
 
@@ -656,6 +671,9 @@ fn executable_size_gate_rejects_oversize_candidates() {
         source_commit: valid_source_commit(),
         output_root: output.join("macos-output"),
         version: "0.2.0".into(),
+        release_authority_key: None,
+        preview_signed_at: None,
+        preview_expires_at: None,
     })
     .unwrap_err();
     assert!(err.to_string().contains("executable exceeds maximum size"));
@@ -815,6 +833,9 @@ fn run_local_package_macos_fails_closed_until_archive_traversal_is_supported() {
         source_commit: valid_source_commit(),
         output_root: output.clone(),
         version: "0.2.0".into(),
+        release_authority_key: None,
+        preview_signed_at: None,
+        preview_expires_at: None,
     });
 
     let error = run_local_package(request, &executor).unwrap_err();
@@ -881,6 +902,9 @@ fn run_local_package_retains_staging_on_failure() {
         source_commit: valid_source_commit(),
         output_root: output.clone(),
         version: "0.2.0".into(),
+        release_authority_key: None,
+        preview_signed_at: None,
+        preview_expires_at: None,
     });
 
     assert!(run_local_package(request, &executor).is_err());
@@ -903,6 +927,9 @@ fn no_overwrite_of_existing_output_root_or_artifacts() {
         source_commit: valid_source_commit(),
         output_root: output.clone(),
         version: "0.2.0".into(),
+        release_authority_key: None,
+        preview_signed_at: None,
+        preview_expires_at: None,
     });
 
     let err = run_local_package(request, &RecordingExecutor::default()).unwrap_err();
@@ -941,6 +968,7 @@ fn clap_parses_local_macos_command() {
                 source_commit,
                 output_root,
                 version,
+                ..
             } => {
                 assert_eq!(candidate, PathBuf::from("/build/feathermark"));
                 assert_eq!(build_input_sha256, hash);
@@ -1062,6 +1090,9 @@ fn json_receipt_hashes_bind_to_artifact_bytes() {
         source_commit: valid_source_commit(),
         output_root: output.clone(),
         version: "0.2.0".into(),
+        release_authority_key: None,
+        preview_signed_at: None,
+        preview_expires_at: None,
     });
 
     let error = run_local_package(request, &executor).unwrap_err();
@@ -1204,6 +1235,9 @@ fn rls005_macos_info_plist_has_no_builder_paths() {
         source_commit: valid_source_commit(),
         output_root: output.clone(),
         version: "0.2.0".into(),
+        release_authority_key: None,
+        preview_signed_at: None,
+        preview_expires_at: None,
     })
     .unwrap();
 

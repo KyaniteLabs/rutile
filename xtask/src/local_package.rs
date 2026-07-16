@@ -107,6 +107,13 @@ pub struct MacPackageRequest {
     pub source_commit: String,
     pub output_root: PathBuf,
     pub version: String,
+    /// When set, run_macos signs a preview-publication authorization for each
+    /// produced artifact (after generating provenance), so the inline Package-mode
+    /// inspection passes at the preview tier. None => produce artifacts + provenance
+    /// only (the operator runs `release preview-authorize` separately).
+    pub release_authority_key: Option<PathBuf>,
+    pub preview_signed_at: Option<String>,
+    pub preview_expires_at: Option<String>,
 }
 
 #[derive(Clone, Debug)]

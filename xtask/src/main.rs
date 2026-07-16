@@ -240,12 +240,18 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                         source_commit,
                         output_root,
                         version,
+                        release_authority_key,
+                        preview_signed_at,
+                        preview_expires_at,
                     } => LocalPackageCliRequest::Macos(MacPackageRequest {
                         candidate,
                         build_input_sha256,
                         source_commit,
                         output_root,
                         version,
+                        release_authority_key,
+                        preview_signed_at,
+                        preview_expires_at,
                     }),
                     LocalPackageCommand::Linux {
                         candidate,
@@ -301,28 +307,16 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 product_version,
                 out,
             } => {
-                // Re-derive the same reproducibility controls `reproducible-build`
-                // applies to its cargo subprocess, so `provenance::generate` measures
-                // a coherent build environment without relying on the operator
-                // exporting env across invocations.
-                let source_date_epoch = xtask::reproducible_build::git_commit_date(&repo_root)?;
-                let rustflags = xtask::reproducible_build::reproducible_rustflags(&repo_root);
-                // SAFETY: single-threaded xtask CLI handler; the env reads performed
-                // by `provenance::generate` happen synchronously on this thread after
-                // these sets, with no spawn in between.
-                unsafe {
-                    std::env::set_var("CARGO_PKG_NAME", &product);
-                    std::env::set_var("CARGO_PKG_VERSION", &product_version);
-                    std::env::set_var("SOURCE_DATE_EPOCH", &source_date_epoch);
-                    std::env::set_var("RUSTFLAGS", &rustflags);
-                }
-                let provenance =
-                    xtask::provenance::generate(&xtask::provenance::ProvenanceRequest {
+                let provenance = xtask::provenance::generate_with_reproducible_env(
+                    &xtask::provenance::ProvenanceRequest {
                         candidate,
                         repo_root,
                         features,
                         target_root,
-                    })?;
+                    },
+                    &product,
+                    &product_version,
+                )?;
                 let json = provenance.canonical_json()?;
                 fs::write(&out, &json)?;
                 let sha256 = provenance.provenance_sha256()?;
