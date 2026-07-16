@@ -13,9 +13,19 @@ fn compile_fixture(name: &str, source: &str) -> std::process::Output {
     ));
     fs::create_dir_all(directory.join("src")).unwrap();
     let app = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // The temp crate is its own workspace and does NOT inherit the repo's
+    // [patch.crates-io]. Inject the vendored pulldown-cmark so the fixture is
+    // hermetic on a fresh host (no crates.io tarball fetch needed offline).
+    let workspace_root = app
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("feathermark-app lives under <workspace>/crates/");
+    let vendored_pulldown = workspace_root.join("vendor/pulldown-cmark");
     fs::write(
         directory.join("Cargo.toml"),
-        format!("[package]\nname='compile-contract-{name}'\nversion='0.0.0'\nedition='2024'\n[dependencies]\nfeathermark-app={{path={app:?}}}\n"),
+        format!(
+            "[package]\nname='compile-contract-{name}'\nversion='0.0.0'\nedition='2024'\n[dependencies]\nfeathermark-app={{path={app:?}}}\n[patch.crates-io]\npulldown-cmark={{path={vendored_pulldown:?}}}\n"
+        ),
     )
     .unwrap();
     fs::write(directory.join("src/main.rs"), source).unwrap();

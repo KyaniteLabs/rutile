@@ -276,7 +276,8 @@ fn preview_authorized_succeeds_with_signed_sibling_and_pinned_key() {
 
     // Provenance sibling (bind_provenance checks the schema identifier + hashes bytes).
     let provenance_json =
-        serde_json::json!({"schema": "rutile.production-provenance.v1"}).to_string();
+        serde_json::json!({"schema": "rutile.production-provenance.v1", "source_tree_clean": true})
+            .to_string();
     let provenance_path = root
         .path()
         .join("Rutile-0.2.0-macos-arm64.app.zip.provenance.json");

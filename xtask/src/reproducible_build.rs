@@ -72,7 +72,10 @@ pub fn git_commit_date(root: &Path) -> Result<String, ReproducibleBuildError> {
 }
 
 /// Assemble `RUSTFLAGS` with `--remap-path-prefix` entries for the workspace
-/// root and Cargo home.  Existing `RUSTFLAGS` are preserved and extended.
+/// root, Cargo home, and RUSTUP_HOME. Existing `RUSTFLAGS` are preserved and
+/// extended. (Standard rustup toolchains emit pre-anonymized `/rustc/<hash>/`
+/// paths, so RUSTUP_HOME remap is defense-in-depth for custom/non-standard
+/// toolchains or sysroots that reference RUSTUP_HOME source files.)
 pub fn reproducible_rustflags(workspace: &Path) -> String {
     let mut flags: Vec<String> = Vec::new();
     if let Ok(existing) = std::env::var("RUSTFLAGS") {
@@ -92,6 +95,11 @@ pub fn reproducible_rustflags(workspace: &Path) -> String {
                 "--remap-path-prefix {}=/cargo",
                 default_cargo.display()
             ));
+        }
+    }
+    if let Ok(rustup_home) = std::env::var("RUSTUP_HOME") {
+        if !rustup_home.is_empty() {
+            flags.push(format!("--remap-path-prefix {rustup_home}=/rustup"));
         }
     }
     flags.join(" ")

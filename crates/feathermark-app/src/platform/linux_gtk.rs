@@ -2856,7 +2856,9 @@ fn build_window(
                         }
                     };
                     if let Err(error) = result {
-                        window.set_title(&status_title(&format!("save failed: {error}")));
+                        // Surface the save failure as a durable notice (matching the
+                        // close-path's report_save_failure), not a transient title.
+                        let _ = session.borrow_mut().report_save_failure(&error);
                     }
                     return gtk::glib::Propagation::Stop;
                 }

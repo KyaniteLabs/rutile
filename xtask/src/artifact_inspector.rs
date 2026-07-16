@@ -343,6 +343,25 @@ impl ArtifactInspector {
                 &self.pinned_release_authority_pubkey,
                 &mut report,
             );
+            // Defense-in-depth: scan the sibling evidence files (package manifest,
+            // provenance, preview-authorization) for forbidden patterns/leaks.
+            // They currently carry only hashes/metadata, but a future schema
+            // adding a path field would otherwise ship uninspected.
+            for suffix in [
+                ".manifest-v1.json",
+                ".provenance.json",
+                ".preview-authorization.json",
+            ] {
+                let mut sibling_name = artifact
+                    .file_name()
+                    .map(|name| name.to_os_string())
+                    .unwrap_or_default();
+                sibling_name.push(suffix);
+                let sibling = artifact.with_file_name(sibling_name);
+                if let Ok(bytes) = fs::read(&sibling) {
+                    self.scan_bytes(&bytes, &mut report);
+                }
+            }
         }
         report.complete_scan = !report.has(FindingCode::EntryLimitExceeded)
             && !report.has(FindingCode::ByteLimitExceeded)
@@ -1206,22 +1225,51 @@ fn bind_provenance(report: &mut InspectionReport, artifact: &Path, provenance: O
         }
     };
 
-    // Validate that the file is JSON with the expected schema identifier.
-    let schema_ok = serde_json::from_slice::<serde_json::Value>(&bytes)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("schema")
-                .and_then(|v| v.as_str())
-                .map(|s| s == "rutile.production-provenance.v1")
-        })
-        .unwrap_or(false);
-
-    if !schema_ok {
+    // Validate that the file is JSON with the expected schema identifier, then
+    // enforce the provenance keystone's integrity constraints (not just the
+    // schema string): a dirty source tree or a test-control feature makes the
+    // record invalid, not merely unbound.
+    let value: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(value) => value,
+        Err(error) => {
+            push(
+                report,
+                FindingCode::ProvenanceInvalid,
+                format!("provenance is not valid JSON: {error}"),
+            );
+            return;
+        }
+    };
+    if value.get("schema").and_then(|v| v.as_str()) != Some("rutile.production-provenance.v1") {
         push(
             report,
             FindingCode::ProvenanceInvalid,
-            "provenance is not a valid rutile.production-provenance.v1 record",
+            "provenance is not a rutile.production-provenance.v1 record",
+        );
+        return;
+    }
+    if value.get("source_tree_clean").and_then(|v| v.as_bool()) != Some(true) {
+        push(
+            report,
+            FindingCode::ProvenanceInvalid,
+            "provenance does not attest a clean source tree",
+        );
+        return;
+    }
+    let has_test_control = value
+        .get("features")
+        .and_then(|v| v.as_array())
+        .map(|features| {
+            features
+                .iter()
+                .any(|feature| feature.as_str() == Some("test-control"))
+        })
+        .unwrap_or(false);
+    if has_test_control {
+        push(
+            report,
+            FindingCode::ProvenanceInvalid,
+            "provenance records the test-control feature",
         );
         return;
     }
