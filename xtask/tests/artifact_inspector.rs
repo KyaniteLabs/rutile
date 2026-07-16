@@ -250,6 +250,68 @@ fn dmg_reader_inspects_a_real_hdiutil_dmg() {
 }
 
 #[test]
+fn preview_authorized_succeeds_with_signed_sibling_and_pinned_key() {
+    use ed25519_dalek::SigningKey;
+
+    // Deterministic release-authority key for this test.
+    let signing = SigningKey::from_bytes(&[9u8; 32]);
+    let pub_hex = hex::encode(signing.verifying_key().to_bytes());
+
+    let root = tempdir().unwrap();
+    // Pin the public key via the env override (avoids touching the repo key file).
+    let pubkey_path = root.path().join("release-authority.pub.hex");
+    fs::write(&pubkey_path, &pub_hex).unwrap();
+    // SAFETY: this test is the sole reader/writer of this env var.
+    unsafe {
+        std::env::set_var("FEATHERMARK_RELEASE_AUTHORITY_PUBKEY", &pubkey_path);
+    }
+
+    let zip_path = root.path().join("Rutile-0.2.0-macos-arm64.app.zip");
+    write_zip(&zip_path, &clean_app_zip_entries());
+    let artifact_sha = hex::encode(Sha256::digest(fs::read(&zip_path).unwrap()));
+
+    // Provenance sibling (bind_provenance checks the schema identifier + hashes bytes).
+    let provenance_json =
+        serde_json::json!({"schema": "rutile.production-provenance.v1"}).to_string();
+    let provenance_path = root
+        .path()
+        .join("Rutile-0.2.0-macos-arm64.app.zip.provenance.json");
+    fs::write(&provenance_path, &provenance_json).unwrap();
+    let provenance_sha = hex::encode(Sha256::digest(provenance_json.as_bytes()));
+
+    // Signed preview-authorization sibling.
+    let statement = xtask::release_authority::PreviewAuthorizationStatement {
+        artifact_sha256: artifact_sha,
+        provenance_sha256: provenance_sha,
+        tier: xtask::release_authority::PREVIEW_TIER.into(),
+        product: "feathermark".into(),
+        version_label: "0.2.0".into(),
+        signed_at: "2026-01-01T00:00:00Z".into(),
+        expires_at: "2099-01-01T00:00:00Z".into(),
+    };
+    let record = xtask::release_authority::sign(&statement, &signing).unwrap();
+    let auth_path = root
+        .path()
+        .join("Rutile-0.2.0-macos-arm64.app.zip.preview-authorization.json");
+    fs::write(&auth_path, serde_json::to_string(&record).unwrap()).unwrap();
+
+    let paths = write_policy(root.path(), &[]);
+    let report =
+        ArtifactInspector::load(&paths)
+            .unwrap()
+            .inspect(&zip_path, InspectionMode::Package, None);
+
+    // SAFETY: sole writer of this env var.
+    unsafe {
+        std::env::remove_var("FEATHERMARK_RELEASE_AUTHORITY_PUBKEY");
+    }
+
+    assert!(report.accepted);
+    assert!(report.preview_authorized);
+    assert!(!report.publication_authorized);
+}
+
+#[test]
 fn quarantined_hash_is_rejected_before_content_is_trusted() {
     let root = tempdir().unwrap();
     let artifact = root.path().join("old-package.bin");

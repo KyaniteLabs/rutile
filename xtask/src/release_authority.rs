@@ -239,8 +239,13 @@ pub fn keygen() -> Result<(String, String, String), ReleaseAuthorityError> {
     ))
 }
 
-/// Resolve the pinned public key path relative to the workspace root.
+/// Resolve the pinned public key path: the `FEATHERMARK_RELEASE_AUTHORITY_PUBKEY`
+/// env var if set (used by tests), else `release/keys/release-authority-v1.pub.hex`
+/// relative to the workspace root.
 pub fn pinned_public_key_path() -> Result<PathBuf, ReleaseAuthorityError> {
+    if let Ok(path) = std::env::var("FEATHERMARK_RELEASE_AUTHORITY_PUBKEY") {
+        return Ok(PathBuf::from(path));
+    }
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .ok_or_else(|| ReleaseAuthorityError::Crypto("cannot resolve workspace root".into()))?;

@@ -16,6 +16,7 @@
     "complete_scan",
     "accepted",
     "publication_authorized",
+    "preview_authorized",
     "entries_scanned",
     "uncompressed_bytes_scanned",
     "findings"
@@ -24,7 +25,9 @@
     "schema": { "const": "rutile.artifact-inspection.v1" },
     "inspector_version": { "const": "artifact-inspect-v1" },
     "inspection_mode": { "enum": ["candidate", "package"] },
-    "artifact_kind": { "enum": ["unknown", "regular_file", "directory"] },
+    "artifact_kind": {
+      "enum": ["unknown", "regular_file", "directory", "zip_archive", "dmg_image"]
+    },
     "policy_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "quarantine_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "artifact_sha256": {
@@ -42,6 +45,7 @@
     "complete_scan": { "type": "boolean" },
     "accepted": { "type": "boolean" },
     "publication_authorized": { "const": false },
+    "preview_authorized": { "type": "boolean" },
     "entries_scanned": { "type": "integer", "minimum": 0, "maximum": 256 },
     "uncompressed_bytes_scanned": {
       "type": "integer",

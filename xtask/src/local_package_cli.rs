@@ -117,7 +117,11 @@ pub fn enforce_inspection(
     provenance: Option<&Path>,
 ) -> Result<(), LocalPackageCliError> {
     let report = inspector.inspect(path, mode, provenance);
-    if report.accepted && (mode == InspectionMode::Candidate || report.publication_authorized) {
+    if report.accepted
+        && (mode == InspectionMode::Candidate
+            || report.publication_authorized
+            || report.preview_authorized)
+    {
         return Ok(());
     }
     let mut findings = report
@@ -126,7 +130,11 @@ pub fn enforce_inspection(
         .map(|finding| finding.code.as_str())
         .collect::<Vec<_>>()
         .join(",");
-    if report.accepted && mode == InspectionMode::Package && !report.publication_authorized {
+    if report.accepted
+        && mode == InspectionMode::Package
+        && !report.publication_authorized
+        && !report.preview_authorized
+    {
         findings = "publication_not_authorized".into();
     }
     Err(LocalPackageCliError::PolicyRejected {

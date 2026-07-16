@@ -51,7 +51,11 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 };
                 let report = inspector.inspect(&artifact, mode, provenance.as_deref());
                 println!("{}", serde_json::to_string_pretty(&report)?);
-                if !report.accepted || (requires_authorization && !report.publication_authorized) {
+                if !report.accepted
+                    || (requires_authorization
+                        && !report.publication_authorized
+                        && !report.preview_authorized)
+                {
                     return Err("artifact inspection rejected candidate".into());
                 }
             }

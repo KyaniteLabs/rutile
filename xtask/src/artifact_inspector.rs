@@ -65,6 +65,11 @@ pub enum FindingCode {
     PlatformMetadataMissing,
     ProvenanceMissing,
     ProvenanceInvalid,
+    PreviewAuthorizationMissing,
+    PreviewAuthorizationInvalid,
+    PreviewAuthorizationBindingMismatch,
+    PreviewAuthorizationExpired,
+    PreviewAuthorityUntrusted,
 }
 
 impl FindingCode {
@@ -88,6 +93,11 @@ impl FindingCode {
             Self::PlatformMetadataMissing => "platform_metadata_missing",
             Self::ProvenanceMissing => "provenance_missing",
             Self::ProvenanceInvalid => "provenance_invalid",
+            Self::PreviewAuthorizationMissing => "preview_authorization_missing",
+            Self::PreviewAuthorizationInvalid => "preview_authorization_invalid",
+            Self::PreviewAuthorizationBindingMismatch => "preview_authorization_binding_mismatch",
+            Self::PreviewAuthorizationExpired => "preview_authorization_expired",
+            Self::PreviewAuthorityUntrusted => "preview_authority_untrusted",
         }
     }
 }
@@ -111,6 +121,7 @@ pub struct InspectionReport {
     pub complete_scan: bool,
     pub accepted: bool,
     pub publication_authorized: bool,
+    pub preview_authorized: bool,
     pub entries_scanned: u64,
     pub uncompressed_bytes_scanned: u64,
     pub findings: Vec<InspectionFinding>,
@@ -222,6 +233,7 @@ impl ArtifactInspector {
             complete_scan: false,
             accepted: false,
             publication_authorized: false,
+            preview_authorized: false,
             entries_scanned: 0,
             uncompressed_bytes_scanned: 0,
             findings: Vec::new(),
@@ -319,27 +331,39 @@ impl ArtifactInspector {
         // artifact (any mode), missing or invalid provenance is a fail-closed
         // finding — production_provenance_sha256 is never silently None.
         bind_provenance(&mut report, artifact, provenance);
+        if mode == InspectionMode::Package {
+            verify_preview_authorization(artifact, &mut report);
+        }
         report.complete_scan = !report.has(FindingCode::EntryLimitExceeded)
             && !report.has(FindingCode::ByteLimitExceeded)
             && !report.has(FindingCode::UnsupportedArchive)
             && !report.has(FindingCode::ManifestMalformed);
-        // `accepted` reflects scan completeness and content safety.  Provenance
-        // findings (missing/invalid) are fail-closed evidence findings — they
-        // are always recorded so production_provenance_sha256 is never silently
-        // None — but they do not block scan acceptance.  Publication is gated
-        // separately by `publication_authorized`, which Wave 0 cannot set.
+        // `accepted` reflects scan completeness and content safety. Provenance
+        // and preview-authorization findings are fail-closed evidence findings
+        // — always recorded — but they do not block scan acceptance. Publication
+        // is gated separately by publication_authorized / preview_authorized.
         report.accepted = report.complete_scan
             && !report.findings.iter().any(|f| {
                 !matches!(
                     f.code,
-                    FindingCode::ProvenanceMissing | FindingCode::ProvenanceInvalid
+                    FindingCode::ProvenanceMissing
+                        | FindingCode::ProvenanceInvalid
+                        | FindingCode::PreviewAuthorizationMissing
+                        | FindingCode::PreviewAuthorizationInvalid
+                        | FindingCode::PreviewAuthorizationBindingMismatch
+                        | FindingCode::PreviewAuthorizationExpired
+                        | FindingCode::PreviewAuthorityUntrusted
                 )
             });
-        // Wave 0 deliberately cannot authorize publication: production
-        // provenance and bounded readers for every emitted archive format are
-        // Wave 3 prerequisites. Callers must not equate a clean scan with an
-        // authorization receipt.
+        // Wave 0 deliberately cannot authorize full publication: the trusted
+        // external verifier + clean-install attestation + signing are release
+        // prerequisites that remain out of scope. preview_authorized is the
+        // narrow, separately-signed preview tier (release-authority ed25519);
+        // it additionally requires a clean scan and bound production provenance.
         report.publication_authorized = false;
+        report.preview_authorized = report.preview_authorized
+            && report.accepted
+            && report.production_provenance_sha256.is_some();
         report
     }
 
@@ -866,6 +890,120 @@ fn is_dmg_archive(path: &Path) -> bool {
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.eq_ignore_ascii_case("dmg"))
         .unwrap_or(false)
+}
+
+/// Verify a sibling preview-publication authorization (if present) and set
+/// report.preview_authorized when the release-authority signature is valid,
+/// bound to this artifact + its provenance, and not expired. Findings are
+/// provenance-class: recorded for evidence but do not block scan acceptance.
+fn verify_preview_authorization(artifact: &Path, report: &mut InspectionReport) {
+    let sibling = preview_authorization_sibling(artifact);
+    if !sibling.is_file() {
+        push(
+            report,
+            FindingCode::PreviewAuthorizationMissing,
+            "no preview-authorization sibling",
+        );
+        return;
+    }
+    let bytes = match fs::read(&sibling) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            push(
+                report,
+                FindingCode::PreviewAuthorizationInvalid,
+                error.to_string(),
+            );
+            return;
+        }
+    };
+    let record: crate::release_authority::PreviewAuthorization =
+        match serde_json::from_slice(&bytes) {
+            Ok(record) => record,
+            Err(error) => {
+                push(
+                    report,
+                    FindingCode::PreviewAuthorizationInvalid,
+                    error.to_string(),
+                );
+                return;
+            }
+        };
+    let pinned_path = match crate::release_authority::pinned_public_key_path() {
+        Ok(path) => path,
+        Err(_) => {
+            push(
+                report,
+                FindingCode::PreviewAuthorityUntrusted,
+                "cannot resolve pinned release-authority key path",
+            );
+            return;
+        }
+    };
+    let pinned = match crate::release_authority::read_pinned_public_key(&pinned_path) {
+        Ok(key) => key,
+        Err(_) => {
+            push(
+                report,
+                FindingCode::PreviewAuthorityUntrusted,
+                "pinned release-authority public key not provisioned",
+            );
+            return;
+        }
+    };
+    if let Err(error) = crate::release_authority::verify(&record, &pinned) {
+        push(
+            report,
+            FindingCode::PreviewAuthorizationInvalid,
+            error.to_string(),
+        );
+        return;
+    }
+    let artifact_ok = report
+        .artifact_sha256
+        .as_deref()
+        .map(|sha| sha == record.artifact_sha256)
+        .unwrap_or(false);
+    let provenance_ok = report
+        .production_provenance_sha256
+        .as_deref()
+        .map(|sha| sha == record.provenance_sha256)
+        .unwrap_or(false);
+    if !artifact_ok || !provenance_ok {
+        push(
+            report,
+            FindingCode::PreviewAuthorizationBindingMismatch,
+            "artifact or provenance sha256",
+        );
+        return;
+    }
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(i64::MAX);
+    let expired = match crate::release_authority::iso8601_to_unix(&record.expires_at) {
+        Some(expiry) => expiry < now_unix,
+        None => true,
+    };
+    if expired {
+        push(
+            report,
+            FindingCode::PreviewAuthorizationExpired,
+            record.expires_at.clone(),
+        );
+        return;
+    }
+    report.preview_authorized = true;
+}
+
+/// Resolve `<artifact>.preview-authorization.json` next to the artifact.
+fn preview_authorization_sibling(artifact: &Path) -> PathBuf {
+    let mut name = artifact
+        .file_name()
+        .map(|file_name| file_name.to_os_string())
+        .unwrap_or_default();
+    name.push(".preview-authorization.json");
+    artifact.with_file_name(name)
 }
 
 /// RAII guard that detaches a mounted DMG and removes the mountpoint directory
