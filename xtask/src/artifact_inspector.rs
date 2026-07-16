@@ -276,6 +276,13 @@ impl ArtifactInspector {
                 // extracted to disk) and owns its own entry/byte accounting.
                 report.artifact_kind = "zip_archive";
                 self.inspect_zip(artifact, mode, &mut report);
+            } else if mode == InspectionMode::Package && is_dmg_archive(artifact) {
+                // Bounded DMG reader: mounts read-only on macOS and delegates to
+                // inspect_directory on the single mounted .app. Non-macOS falls
+                // back to UnsupportedArchive (a macOS DMG is not meaningfully
+                // inspectable elsewhere; the macOS packaging path is macOS-only).
+                report.artifact_kind = "dmg_image";
+                self.inspect_dmg(artifact, mode, &mut report);
             } else {
                 report.entries_scanned = 1;
                 if bytes > self.policy.max_uncompressed_bytes {
@@ -521,6 +528,71 @@ impl ArtifactInspector {
         plist.contains("CFBundleIdentifier")
             && plist.contains("CFBundleDocumentTypes")
             && plist.contains("UTTypeConformsTo")
+    }
+
+    /// Bounded DMG reader. On macOS, mounts the image read-only (`hdiutil
+    /// attach -readonly -nobrowse`) and delegates to `inspect_directory` on the
+    /// single mounted `.app`, reusing the directory scan exactly. The mount is
+    /// cleaned up by `DmgMountGuard` on every path (including panic). On other
+    /// platforms, reports UnsupportedArchive (a macOS DMG is only meaningfully
+    /// inspectable on macOS, and the macOS packaging path is macOS-only).
+    #[cfg(target_os = "macos")]
+    #[allow(clippy::disallowed_methods)]
+    fn inspect_dmg(&self, artifact: &Path, mode: InspectionMode, report: &mut InspectionReport) {
+        use std::process::Command;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let mount_path = std::env::temp_dir().join(format!(
+            "feathermark-dmg-inspect-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        if let Err(error) = fs::create_dir(&mount_path) {
+            push(report, FindingCode::ManifestMalformed, error.to_string());
+            return;
+        }
+        let _guard = DmgMountGuard {
+            mountpoint: mount_path.clone(),
+            detached: false,
+        };
+        let attached = match Command::new("hdiutil")
+            .args(["attach", "-readonly", "-nobrowse", "-mountpoint"])
+            .arg(&mount_path)
+            .arg(artifact)
+            .output()
+        {
+            Ok(out) => out.status.success(),
+            Err(error) => {
+                push(report, FindingCode::ManifestMalformed, error.to_string());
+                return;
+            }
+        };
+        if !attached {
+            push(
+                report,
+                FindingCode::UnsupportedArchive,
+                "hdiutil attach failed",
+            );
+            return;
+        }
+        if let Some(app) = find_single_app(&mount_path) {
+            self.inspect_directory(&app, mode, report);
+        } else {
+            push(
+                report,
+                FindingCode::ManifestMalformed,
+                "DMG has no single top-level .app",
+            );
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn inspect_dmg(&self, _artifact: &Path, _mode: InspectionMode, report: &mut InspectionReport) {
+        push(
+            report,
+            FindingCode::UnsupportedArchive,
+            "dmg inspection requires macOS",
+        );
     }
 
     /// Bounded reader for a ditto-produced `.app.zip`. Decompresses each entry
@@ -785,6 +857,58 @@ fn is_zip_archive(path: &Path) -> bool {
     }
     buf[..2] == [b'P', b'K']
         && ((buf[2] == 0x03 && buf[3] == 0x04) || (buf[2] == 0x05 && buf[3] == 0x06))
+}
+
+/// Identify a macOS DMG by its `.dmg` extension. The bounded reader mounts it
+/// read-only on macOS; on other platforms the reader reports UnsupportedArchive.
+fn is_dmg_archive(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("dmg"))
+        .unwrap_or(false)
+}
+
+/// RAII guard that detaches a mounted DMG and removes the mountpoint directory
+/// on drop, on every path (including panic via unwind).
+#[cfg(target_os = "macos")]
+struct DmgMountGuard {
+    mountpoint: PathBuf,
+    detached: bool,
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for DmgMountGuard {
+    fn drop(&mut self) {
+        if !self.detached {
+            #[allow(clippy::disallowed_methods)]
+            let _ = std::process::Command::new("hdiutil")
+                .args(["detach", "-force"])
+                .arg(&self.mountpoint)
+                .status();
+        }
+        let _ = fs::remove_dir(&self.mountpoint);
+    }
+}
+
+/// Return the single top-level `.app` directory at a DMG mount point, or None if
+/// the layout is not exactly one `.app`.
+#[cfg(target_os = "macos")]
+fn find_single_app(mount: &Path) -> Option<PathBuf> {
+    let entries: Vec<_> = fs::read_dir(mount)
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .collect();
+    if entries.len() != 1 {
+        return None;
+    }
+    let path = entries[0].path();
+    let is_app_dir = entries[0]
+        .file_type()
+        .ok()
+        .map(|file_type| file_type.is_dir())
+        .unwrap_or(false)
+        && path.extension().and_then(|ext| ext.to_str()) == Some("app");
+    is_app_dir.then_some(path)
 }
 
 fn classify_pattern(pattern: &str, test_env: &[String]) -> FindingCode {

@@ -198,6 +198,57 @@ fn zip_reader_skips_macosx_appledouble_metadata() {
     assert!(report.accepted);
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn dmg_reader_inspects_a_real_hdiutil_dmg() {
+    use std::process::Command;
+    let root = tempdir().unwrap();
+    let app = root.path().join("Rutile.app");
+    let contents = app.join("Contents");
+    fs::create_dir_all(contents.join("MacOS")).unwrap();
+    fs::create_dir_all(contents.join("Resources")).unwrap();
+    fs::write(
+        contents.join("MacOS/FeatherMark"),
+        b"#!/bin/sh\necho Rutile",
+    )
+    .unwrap();
+    fs::write(
+        contents.join("Info.plist"),
+        b"<?xml version=\"1.0\"?><plist version=\"1.0\"><dict>
+<key>CFBundleIdentifier</key><string>x</string>
+<key>CFBundleDocumentTypes</key><array/>
+<key>UTTypeConformsTo</key><array/>
+</dict></plist>",
+    )
+    .unwrap();
+    fs::write(
+        contents.join("Resources/package-manifest-v1.json"),
+        serde_json::json!({"license":"MIT","version":"0.2.0","source_commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}).to_string(),
+    )
+    .unwrap();
+    let dmg = root.path().join("Rutile.dmg");
+    let status = Command::new("hdiutil")
+        .args(["create", "-volname", "Rutile", "-srcfolder"])
+        .arg(&app)
+        .args(["-format", "UDZO"])
+        .arg(&dmg)
+        .status()
+        .unwrap();
+    assert!(status.success(), "hdiutil create failed");
+
+    let paths = write_policy(root.path(), &[]);
+    let report =
+        ArtifactInspector::load(&paths)
+            .unwrap()
+            .inspect(&dmg, InspectionMode::Package, None);
+
+    assert_eq!(report.artifact_kind, "dmg_image");
+    assert!(!report.has(FindingCode::UnsupportedArchive));
+    assert!(report.complete_scan);
+    assert!(report.has(FindingCode::ProvenanceMissing));
+    assert!(report.accepted);
+}
+
 #[test]
 fn quarantined_hash_is_rejected_before_content_is_trusted() {
     let root = tempdir().unwrap();
