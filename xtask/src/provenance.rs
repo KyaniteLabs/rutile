@@ -1,6 +1,15 @@
 //! Production provenance keystone — fail-closed build-evidence measurement.
 //!
-//! Every field is MEASURED from the build environment, never caller-asserted.
+//! Source identity (commit, tree-cleanliness, toolchain, features) and the
+//! candidate hash are MEASURED from the build environment, never caller-asserted.
+//! The reproducibility controls (SOURCE_DATE_EPOCH + --remap-path-prefix) are an
+//! exception: [`generate_with_reproducible_env`] re-derives them from the repo so
+//! a separate `provenance generate`/bless invocation (which does not inherit
+//! `reproducible-build`'s subprocess env) can record them. This means the
+//! reproducibility *controls* are operator-asserted (the operator must have run
+//! `reproducible-build`); the **candidate_sha256 is genuinely measured** and is
+//! the verification anchor — a reviewer rebuilds via `reproducible-build` and
+//! byte-compares candidate_sha256 to confirm reproducibility independently.
 //! A production candidate must originate from a clean git tree, must not enable
 //! the test-control feature, and must use reproducible-build controls
 //! (SOURCE_DATE_EPOCH + --remap-path-prefix + a separate prod target root).
