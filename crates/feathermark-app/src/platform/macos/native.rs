@@ -106,6 +106,7 @@ struct ProductRunner {
     webview: Option<WebView>,
     web_context: Option<WebContext>,
     window: Option<Arc<Window>>,
+    window_title: Option<String>,
     session: ProductSession,
     preview_host: Arc<Mutex<PreviewHost>>,
     ipc_receiver: Receiver<String>,
@@ -185,6 +186,7 @@ impl ProductRunner {
             webview: None,
             web_context: Some(WebContext::new(None)),
             window: None,
+            window_title: None,
             session,
             preview_host,
             ipc_receiver,
@@ -367,12 +369,16 @@ impl ProductRunner {
     }
 
     fn sync_window_title(&mut self) {
+        let title = self
+            .active_status()
+            .map_or_else(|| PRODUCT_NAME.to_owned(), |status| status_title(&status));
+        if self.window_title.as_deref() == Some(title.as_str()) {
+            return;
+        }
         if let Some(window) = &self.window {
-            match self.active_status() {
-                Some(status) => window.set_title(&status_title(&status)),
-                None => window.set_title(PRODUCT_NAME),
-            }
+            window.set_title(&title);
             window.request_redraw();
+            self.window_title = Some(title);
         }
     }
 

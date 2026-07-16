@@ -107,3 +107,6 @@ cargo run --locked -p xtask --bin xtask -- native-smoke \
   --profile "$profile" \
   --repeat "$repeat" \
   --evidence-dir "$evidence_dir"
+
+echo "=== macos-native-gate: idle RSS/CPU soak (180 seconds) ==="
+python3 scripts/ci/macos-idle-soak.py --binary "$bin_path"
