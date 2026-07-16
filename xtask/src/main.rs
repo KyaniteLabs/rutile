@@ -1,11 +1,12 @@
 use std::fs;
 
 use clap::Parser;
+use sha2::Digest;
 use xtask::artifact_inspector::{ArtifactInspector, InspectionMode, PolicyPaths};
 use xtask::cli::{
     ArtifactCommand, ArtifactInspectionMode, Cli, Command, ComparatorCommand, EvidenceCommand,
     FixtureCommand, GuiCommand, LocalPackageCommand, MetricsCommand, PackageCommand,
-    ProvenanceCommand, RunnerCommand, ScaffoldCommand,
+    ProvenanceCommand, ReleaseCommand, RunnerCommand, ScaffoldCommand,
 };
 use xtask::comparator::{ScaffoldCreate, create_scaffold, verify_scaffold};
 use xtask::fixtures::{generate_fixtures, verify_fixtures};
@@ -322,6 +323,67 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 fs::write(&out, &json)?;
                 let sha256 = provenance.provenance_sha256()?;
                 println!("provenance {} sha256={}", out.display(), sha256);
+            }
+        },
+        Command::Release { command } => match command {
+            ReleaseCommand::Keygen { public_out } => {
+                let (secret_hex, public_hex, fingerprint) = xtask::release_authority::keygen()?;
+                if let Some(parent) = public_out.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::write(&public_out, &public_hex)?;
+                eprintln!(
+                    "release-authority public key -> {} (fingerprint {fingerprint})",
+                    public_out.display()
+                );
+                eprintln!(
+                    "release-authority SECRET hex below — install privately at 0600, NEVER commit:"
+                );
+                println!("{secret_hex}");
+            }
+            ReleaseCommand::PreviewAuthorize {
+                artifact,
+                provenance,
+                product,
+                version_label,
+                signed_at,
+                expires_at,
+                key_path,
+                out,
+            } => {
+                let signing = xtask::release_authority::read_signing_key(&key_path)?;
+                let artifact_bytes = fs::read(&artifact)?;
+                let artifact_sha256 = hex::encode(sha2::Sha256::digest(&artifact_bytes));
+                let provenance_bytes = fs::read(&provenance)?;
+                let provenance_value: serde_json::Value =
+                    serde_json::from_slice(&provenance_bytes)?;
+                if provenance_value
+                    .get("schema")
+                    .and_then(|value| value.as_str())
+                    != Some("rutile.production-provenance.v1")
+                {
+                    return Err(
+                        "provenance file is not a rutile.production-provenance.v1 record".into(),
+                    );
+                }
+                let provenance_sha256 = hex::encode(sha2::Sha256::digest(&provenance_bytes));
+                let statement = xtask::release_authority::PreviewAuthorizationStatement {
+                    artifact_sha256,
+                    provenance_sha256,
+                    tier: xtask::release_authority::PREVIEW_TIER.to_string(),
+                    product,
+                    version_label,
+                    signed_at,
+                    expires_at,
+                };
+                let record = xtask::release_authority::sign(&statement, &signing)?;
+                fs::write(&out, serde_json::to_string_pretty(&record)?)?;
+                println!(
+                    "preview-authorization {} artifact={} fingerprint={}",
+                    out.display(),
+                    record.artifact_sha256,
+                    record.release_authority_key_fingerprint
+                );
             }
         },
     }

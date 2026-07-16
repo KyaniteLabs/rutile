@@ -76,7 +76,7 @@ rust-version = "1.88"
 license = "MIT"
 
 [workspace.dependencies]
-clap = { version = "=4.5.41", features = ["derive"] }
+clap = { version = "=4.5.41", features = ["derive", "env"] }
 ed25519-dalek = "=2.1.1"
 feathermark-protocol = { path = "../contracts/feathermark-protocol" }
 getrandom = "=0.3.3"

@@ -18,6 +18,7 @@ pub mod metrics;
 pub mod native_smoke;
 pub mod package;
 pub mod provenance;
+pub mod release_authority;
 pub mod release_preflight;
 pub mod reproducible_build;
 pub mod runner;
@@ -128,6 +129,41 @@ pub mod cli {
         Provenance {
             #[command(subcommand)]
             command: ProvenanceCommand,
+        },
+        Release {
+            #[command(subcommand)]
+            command: ReleaseCommand,
+        },
+    }
+
+    #[derive(Subcommand)]
+    pub enum ReleaseCommand {
+        /// Generate a fresh release-authority ed25519 keypair. Writes the public
+        /// key to --public-out (committed as the pinned trust anchor) and prints
+        /// the secret hex to stdout for the operator to install privately (0600).
+        Keygen {
+            #[arg(long)]
+            public_out: PathBuf,
+        },
+        /// Sign a preview-publication authorization binding an artifact to its
+        /// production provenance, using the release-authority secret key.
+        PreviewAuthorize {
+            #[arg(long)]
+            artifact: PathBuf,
+            #[arg(long)]
+            provenance: PathBuf,
+            #[arg(long)]
+            product: String,
+            #[arg(long)]
+            version_label: String,
+            #[arg(long)]
+            signed_at: String,
+            #[arg(long)]
+            expires_at: String,
+            #[arg(long, env = "FEATHERMARK_RELEASE_AUTHORITY_KEY")]
+            key_path: PathBuf,
+            #[arg(long)]
+            out: PathBuf,
         },
     }
 
