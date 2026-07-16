@@ -1,10 +1,10 @@
 [package]
 name = "feathermark-spike-support"
-version = "0.2.1"
+version = "0.2.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-feathermark-protocol = { path = "../../crates/feathermark-protocol", version = "=0.2.1" }
-feathermark-types = { path = "../../crates/feathermark-types", version = "=0.2.1" }
+feathermark-protocol = { path = "../../crates/feathermark-protocol", version = "=0.2.2" }
+feathermark-types = { path = "../../crates/feathermark-types", version = "=0.2.2" }

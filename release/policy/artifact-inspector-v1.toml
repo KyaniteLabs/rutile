@@ -3,7 +3,7 @@ version = 1
 max_entries = 256
 max_uncompressed_bytes = 67108864
 expected_license = "MIT"
-expected_version = "0.2.1"
+expected_version = "0.2.2"
 expected_source_commit = "04203c39097d283a20411ad65b7b1f9b0e82e5bc"
 
 test_control_environment = [
