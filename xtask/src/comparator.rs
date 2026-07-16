@@ -53,6 +53,7 @@ sha2.workspace = true
 thiserror.workspace = true
 toml.workspace = true
 walkdir.workspace = true
+zip.workspace = true
 
 [build-dependencies]
 hex.workspace = true
@@ -75,7 +76,7 @@ rust-version = "1.88"
 license = "MIT"
 
 [workspace.dependencies]
-clap = { version = "=4.5.41", features = ["derive"] }
+clap = { version = "=4.5.41", features = ["derive", "env"] }
 ed25519-dalek = "=2.1.1"
 feathermark-protocol = { path = "../contracts/feathermark-protocol" }
 getrandom = "=0.3.3"
@@ -90,6 +91,7 @@ thiserror = "=2.0.12"
 toml = "=0.8.23"
 trybuild = "=1.0.104"
 walkdir = "=2.5.0"
+zip = "=2.4.2"
 "#;
 
 #[derive(Clone, Debug)]

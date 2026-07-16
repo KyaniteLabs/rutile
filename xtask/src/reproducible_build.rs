@@ -52,7 +52,7 @@ fn workspace_root() -> Result<PathBuf, ReproducibleBuildError> {
 
 /// Capture `SOURCE_DATE_EPOCH` from `git log -1 --format=%ct HEAD` using the
 /// audited tool-process owner (trusted git path, hermetic config).
-fn git_commit_date(root: &Path) -> Result<String, ReproducibleBuildError> {
+pub fn git_commit_date(root: &Path) -> Result<String, ReproducibleBuildError> {
     let output =
         tool_process::git(root, &["log", "-1", "--format=%ct", "HEAD"], &[]).map_err(|e| {
             ReproducibleBuildError::GitDate {
@@ -75,7 +75,7 @@ fn git_commit_date(root: &Path) -> Result<String, ReproducibleBuildError> {
 
 /// Assemble `RUSTFLAGS` with `--remap-path-prefix` entries for the workspace
 /// root and Cargo home.  Existing `RUSTFLAGS` are preserved and extended.
-fn reproducible_rustflags(workspace: &Path) -> String {
+pub fn reproducible_rustflags(workspace: &Path) -> String {
     let mut flags: Vec<String> = Vec::new();
     if let Ok(existing) = std::env::var("RUSTFLAGS") {
         if !existing.is_empty() {

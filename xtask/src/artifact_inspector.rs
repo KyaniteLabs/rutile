@@ -2,8 +2,10 @@
 //!
 //! The inspector never mutates or extracts an artifact. Regular files are
 //! scanned as bounded streams. Directory packages are walked without following
-//! links and with fixed entry/byte ceilings. Opaque archive formats remain
-//! publication-ineligible until a bounded format reader is available.
+//! links and with fixed entry/byte ceilings. ditto-produced `.app.zip` archives
+//! are scanned via a bounded zip reader that decompresses each entry to a
+//! bounded in-memory buffer (never to disk). Other opaque archive formats
+//! remain publication-ineligible until a bounded format reader is available.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -13,6 +15,7 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 use walkdir::WalkDir;
+use zip::ZipArchive;
 
 const MAX_POLICY_BYTES: u64 = 1024 * 1024;
 
@@ -62,6 +65,11 @@ pub enum FindingCode {
     PlatformMetadataMissing,
     ProvenanceMissing,
     ProvenanceInvalid,
+    PreviewAuthorizationMissing,
+    PreviewAuthorizationInvalid,
+    PreviewAuthorizationBindingMismatch,
+    PreviewAuthorizationExpired,
+    PreviewAuthorityUntrusted,
 }
 
 impl FindingCode {
@@ -85,6 +93,11 @@ impl FindingCode {
             Self::PlatformMetadataMissing => "platform_metadata_missing",
             Self::ProvenanceMissing => "provenance_missing",
             Self::ProvenanceInvalid => "provenance_invalid",
+            Self::PreviewAuthorizationMissing => "preview_authorization_missing",
+            Self::PreviewAuthorizationInvalid => "preview_authorization_invalid",
+            Self::PreviewAuthorizationBindingMismatch => "preview_authorization_binding_mismatch",
+            Self::PreviewAuthorizationExpired => "preview_authorization_expired",
+            Self::PreviewAuthorityUntrusted => "preview_authority_untrusted",
         }
     }
 }
@@ -108,6 +121,7 @@ pub struct InspectionReport {
     pub complete_scan: bool,
     pub accepted: bool,
     pub publication_authorized: bool,
+    pub preview_authorized: bool,
     pub entries_scanned: u64,
     pub uncompressed_bytes_scanned: u64,
     pub findings: Vec<InspectionFinding>,
@@ -219,6 +233,7 @@ impl ArtifactInspector {
             complete_scan: false,
             accepted: false,
             publication_authorized: false,
+            preview_authorized: false,
             entries_scanned: 0,
             uncompressed_bytes_scanned: 0,
             findings: Vec::new(),
@@ -267,30 +282,45 @@ impl ArtifactInspector {
                 push(&mut report, FindingCode::QuarantinedHash, digest);
                 return report;
             }
-            report.entries_scanned = 1;
-            if bytes > self.policy.max_uncompressed_bytes {
-                report.uncompressed_bytes_scanned = self.policy.max_uncompressed_bytes;
-                push(
-                    &mut report,
-                    FindingCode::ByteLimitExceeded,
-                    bytes.to_string(),
-                );
+            if mode == InspectionMode::Package && is_zip_archive(artifact) {
+                // Bounded zip reader: scans each decompressed entry to a bounded
+                // in-memory buffer (never the compressed whole-file stream, never
+                // extracted to disk) and owns its own entry/byte accounting.
+                report.artifact_kind = "zip_archive";
+                self.inspect_zip(artifact, mode, &mut report);
+            } else if mode == InspectionMode::Package && is_dmg_archive(artifact) {
+                // Bounded DMG reader: mounts read-only on macOS and delegates to
+                // inspect_directory on the single mounted .app. Non-macOS falls
+                // back to UnsupportedArchive (a macOS DMG is not meaningfully
+                // inspectable elsewhere; the macOS packaging path is macOS-only).
+                report.artifact_kind = "dmg_image";
+                self.inspect_dmg(artifact, mode, &mut report);
             } else {
-                report.uncompressed_bytes_scanned = bytes;
-                if let Err(error) = self.scan_file(artifact, &mut report) {
+                report.entries_scanned = 1;
+                if bytes > self.policy.max_uncompressed_bytes {
+                    report.uncompressed_bytes_scanned = self.policy.max_uncompressed_bytes;
                     push(
                         &mut report,
-                        FindingCode::ManifestMalformed,
-                        error.to_string(),
+                        FindingCode::ByteLimitExceeded,
+                        bytes.to_string(),
+                    );
+                } else {
+                    report.uncompressed_bytes_scanned = bytes;
+                    if let Err(error) = self.scan_file(artifact, &mut report) {
+                        push(
+                            &mut report,
+                            FindingCode::ManifestMalformed,
+                            error.to_string(),
+                        );
+                    }
+                }
+                if mode == InspectionMode::Package {
+                    push(
+                        &mut report,
+                        FindingCode::UnsupportedArchive,
+                        "opaque package requires a bounded format reader",
                     );
                 }
-            }
-            if mode == InspectionMode::Package {
-                push(
-                    &mut report,
-                    FindingCode::UnsupportedArchive,
-                    "opaque package requires a bounded format reader",
-                );
             }
         } else {
             report.artifact_kind = "directory";
@@ -301,27 +331,39 @@ impl ArtifactInspector {
         // artifact (any mode), missing or invalid provenance is a fail-closed
         // finding — production_provenance_sha256 is never silently None.
         bind_provenance(&mut report, artifact, provenance);
+        if mode == InspectionMode::Package {
+            verify_preview_authorization(artifact, &mut report);
+        }
         report.complete_scan = !report.has(FindingCode::EntryLimitExceeded)
             && !report.has(FindingCode::ByteLimitExceeded)
             && !report.has(FindingCode::UnsupportedArchive)
             && !report.has(FindingCode::ManifestMalformed);
-        // `accepted` reflects scan completeness and content safety.  Provenance
-        // findings (missing/invalid) are fail-closed evidence findings — they
-        // are always recorded so production_provenance_sha256 is never silently
-        // None — but they do not block scan acceptance.  Publication is gated
-        // separately by `publication_authorized`, which Wave 0 cannot set.
+        // `accepted` reflects scan completeness and content safety. Provenance
+        // and preview-authorization findings are fail-closed evidence findings
+        // — always recorded — but they do not block scan acceptance. Publication
+        // is gated separately by publication_authorized / preview_authorized.
         report.accepted = report.complete_scan
             && !report.findings.iter().any(|f| {
                 !matches!(
                     f.code,
-                    FindingCode::ProvenanceMissing | FindingCode::ProvenanceInvalid
+                    FindingCode::ProvenanceMissing
+                        | FindingCode::ProvenanceInvalid
+                        | FindingCode::PreviewAuthorizationMissing
+                        | FindingCode::PreviewAuthorizationInvalid
+                        | FindingCode::PreviewAuthorizationBindingMismatch
+                        | FindingCode::PreviewAuthorizationExpired
+                        | FindingCode::PreviewAuthorityUntrusted
                 )
             });
-        // Wave 0 deliberately cannot authorize publication: production
-        // provenance and bounded readers for every emitted archive format are
-        // Wave 3 prerequisites. Callers must not equate a clean scan with an
-        // authorization receipt.
+        // Wave 0 deliberately cannot authorize full publication: the trusted
+        // external verifier + clean-install attestation + signing are release
+        // prerequisites that remain out of scope. preview_authorized is the
+        // narrow, separately-signed preview tier (release-authority ed25519);
+        // it additionally requires a clean scan and bound production provenance.
         report.publication_authorized = false;
+        report.preview_authorized = report.preview_authorized
+            && report.accepted
+            && report.production_provenance_sha256.is_some();
         report
     }
 
@@ -412,20 +454,27 @@ impl ArtifactInspector {
         File::open(path)?
             .take(self.policy.max_uncompressed_bytes.saturating_add(1))
             .read_to_end(&mut bytes)?;
+        self.scan_bytes(&bytes, report);
+        Ok(())
+    }
+
+    /// Forbidden-pattern + credential-shape scan over in-memory bytes. Shared by
+    /// the regular-file scan and the bounded archive readers (which decompress
+    /// each entry to a bounded buffer before calling this).
+    fn scan_bytes(&self, bytes: &[u8], report: &mut InspectionReport) {
         for pattern in &self.policy.forbidden_patterns {
-            if contains(&bytes, pattern.as_bytes()) {
+            if contains(bytes, pattern.as_bytes()) {
                 let code = classify_pattern(pattern, &self.policy.test_control_environment);
                 push(report, code, redact_pattern(pattern));
             }
         }
-        if contains_sensitive_shape(&bytes) {
+        if contains_sensitive_shape(bytes) {
             push(
                 report,
                 FindingCode::CredentialMarker,
                 "credential or email shape matched",
             );
         }
-        Ok(())
     }
 
     fn inspect_manifest(&self, root: &Path, path: &Path, report: &mut InspectionReport) {
@@ -439,37 +488,12 @@ impl ArtifactInspector {
                 return;
             }
         };
-        if value.get("license").and_then(|value| value.as_str())
-            != Some(self.policy.expected_license.as_str())
-        {
-            push(report, FindingCode::LicenseMismatch, "package manifest");
-        }
-        if let Some(expected) = &self.policy.expected_version {
-            if value.get("version").and_then(|value| value.as_str()) != Some(expected.as_str()) {
-                push(report, FindingCode::VersionMismatch, "package manifest");
-            }
-        }
-        if let Some(expected) = &self.policy.expected_source_commit {
-            if value.get("source_commit").and_then(|value| value.as_str())
-                != Some(expected.as_str())
-            {
-                push(
-                    report,
-                    FindingCode::SourceCommitMismatch,
-                    "package manifest",
-                );
-            }
-        }
+        self.check_manifest_json(&value, report);
 
         let is_macos = root.join("Contents/MacOS/FeatherMark").is_file();
         let platform_ok = if is_macos {
-            fs::read_to_string(root.join("Contents/Info.plist"))
-                .map(|plist| {
-                    plist.contains("CFBundleIdentifier")
-                        && plist.contains("CFBundleDocumentTypes")
-                        && plist.contains("UTTypeConformsTo")
-                })
-                .unwrap_or(false)
+            let info = fs::read(root.join("Contents/Info.plist")).unwrap_or_default();
+            Self::check_macos_info_plist(&info)
         } else {
             value
                 .get("wayland_verified")
@@ -492,6 +516,265 @@ impl ArtifactInspector {
                 FindingCode::PlatformMetadataMissing,
                 "package integration",
             );
+        }
+    }
+
+    /// License / version / source-commit checks on a parsed package manifest.
+    /// Shared by the directory and bounded-zip inspection paths.
+    fn check_manifest_json(&self, value: &serde_json::Value, report: &mut InspectionReport) {
+        if value.get("license").and_then(|value| value.as_str())
+            != Some(self.policy.expected_license.as_str())
+        {
+            push(report, FindingCode::LicenseMismatch, "package manifest");
+        }
+        if let Some(expected) = &self.policy.expected_version {
+            if value.get("version").and_then(|value| value.as_str()) != Some(expected.as_str()) {
+                push(report, FindingCode::VersionMismatch, "package manifest");
+            }
+        }
+        if let Some(expected) = &self.policy.expected_source_commit {
+            if value.get("source_commit").and_then(|value| value.as_str())
+                != Some(expected.as_str())
+            {
+                push(
+                    report,
+                    FindingCode::SourceCommitMismatch,
+                    "package manifest",
+                );
+            }
+        }
+    }
+
+    /// macOS platform-metadata check on Info.plist bytes: CFBundleIdentifier,
+    /// CFBundleDocumentTypes, and UTTypeConformsTo must all be present.
+    fn check_macos_info_plist(info: &[u8]) -> bool {
+        let plist = std::str::from_utf8(info).unwrap_or("");
+        plist.contains("CFBundleIdentifier")
+            && plist.contains("CFBundleDocumentTypes")
+            && plist.contains("UTTypeConformsTo")
+    }
+
+    /// Bounded DMG reader. On macOS, mounts the image read-only (`hdiutil
+    /// attach -readonly -nobrowse`) and delegates to `inspect_directory` on the
+    /// single mounted `.app`, reusing the directory scan exactly. The mount is
+    /// cleaned up by `DmgMountGuard` on every path (including panic). On other
+    /// platforms, reports UnsupportedArchive (a macOS DMG is only meaningfully
+    /// inspectable on macOS, and the macOS packaging path is macOS-only).
+    #[cfg(target_os = "macos")]
+    #[allow(clippy::disallowed_methods)]
+    fn inspect_dmg(&self, artifact: &Path, mode: InspectionMode, report: &mut InspectionReport) {
+        use std::process::Command;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let mount_path = std::env::temp_dir().join(format!(
+            "feathermark-dmg-inspect-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        if let Err(error) = fs::create_dir(&mount_path) {
+            push(report, FindingCode::ManifestMalformed, error.to_string());
+            return;
+        }
+        let _guard = DmgMountGuard {
+            mountpoint: mount_path.clone(),
+            detached: false,
+        };
+        let attached = match Command::new("hdiutil")
+            .args(["attach", "-readonly", "-nobrowse", "-mountpoint"])
+            .arg(&mount_path)
+            .arg(artifact)
+            .output()
+        {
+            Ok(out) => out.status.success(),
+            Err(error) => {
+                push(report, FindingCode::ManifestMalformed, error.to_string());
+                return;
+            }
+        };
+        if !attached {
+            push(
+                report,
+                FindingCode::UnsupportedArchive,
+                "hdiutil attach failed",
+            );
+            return;
+        }
+        if let Some(app) = find_single_app(&mount_path) {
+            self.inspect_directory(&app, mode, report);
+        } else {
+            push(
+                report,
+                FindingCode::ManifestMalformed,
+                "DMG has no single top-level .app",
+            );
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn inspect_dmg(&self, _artifact: &Path, _mode: InspectionMode, report: &mut InspectionReport) {
+        push(
+            report,
+            FindingCode::UnsupportedArchive,
+            "dmg inspection requires macOS",
+        );
+    }
+
+    /// Bounded reader for a ditto-produced `.app.zip`. Decompresses each entry
+    /// to a bounded in-memory buffer (never to disk), strips the single
+    /// top-level `.app/` directory, skips `__MACOSX/` + `._*` AppleDouble
+    /// metadata, and applies the same accounting + scan + manifest checks as
+    /// `inspect_directory`. Owns its own entry/byte accounting.
+    fn inspect_zip(&self, artifact: &Path, mode: InspectionMode, report: &mut InspectionReport) {
+        let file = match File::open(artifact) {
+            Ok(file) => file,
+            Err(error) => {
+                push(report, FindingCode::ManifestMalformed, error.to_string());
+                return;
+            }
+        };
+        let mut archive = match ZipArchive::new(file) {
+            Ok(archive) => archive,
+            Err(error) => {
+                push(report, FindingCode::ManifestMalformed, error.to_string());
+                return;
+            }
+        };
+
+        let mut manifests: Vec<Vec<u8>> = Vec::new();
+        let mut info_plist: Option<Vec<u8>> = None;
+        let mut executables = 0_u64;
+        let mut top_prefix: Option<String> = None;
+
+        for index in 0..archive.len() {
+            if report.entries_scanned == self.policy.max_entries {
+                push(
+                    report,
+                    FindingCode::EntryLimitExceeded,
+                    self.policy.max_entries.to_string(),
+                );
+                break;
+            }
+            let entry = match archive.by_index(index) {
+                Ok(entry) => entry,
+                Err(error) => {
+                    push(report, FindingCode::ManifestMalformed, error.to_string());
+                    break;
+                }
+            };
+            let name = entry.name().to_string();
+            if entry.is_dir() {
+                continue;
+            }
+            // Skip AppleDouble / __MACOSX metadata ditto emits alongside the app.
+            if name.starts_with("__MACOSX/") {
+                continue;
+            }
+            if name
+                .rsplit('/')
+                .next()
+                .map(|base| base.starts_with("._"))
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            if entry.is_symlink() {
+                push(report, FindingCode::LinkRejected, name.clone());
+                continue;
+            }
+
+            // Strip the single top-level dir prefix (e.g. "Rutile.app/") so the
+            // relative predicates match inspect_directory (Contents/MacOS/...).
+            let relative = {
+                if top_prefix.is_none() {
+                    if let Some(seg) = name.split('/').next().filter(|seg| !seg.is_empty()) {
+                        top_prefix = Some(format!("{seg}/"));
+                    }
+                }
+                top_prefix
+                    .as_deref()
+                    .and_then(|prefix| name.strip_prefix(prefix))
+                    .unwrap_or(&name)
+                    .to_string()
+            };
+
+            report.entries_scanned += 1;
+
+            // Zip-bomb heuristic: reject extreme compression ratios.
+            let uncompressed = entry.size();
+            let compressed = entry.compressed_size();
+            if compressed > 0 && uncompressed / compressed > 1000 {
+                push(
+                    report,
+                    FindingCode::ByteLimitExceeded,
+                    format!("compression ratio {uncompressed}/{compressed}"),
+                );
+                break;
+            }
+            let attempted = report
+                .uncompressed_bytes_scanned
+                .saturating_add(uncompressed);
+            if attempted > self.policy.max_uncompressed_bytes {
+                report.uncompressed_bytes_scanned = self.policy.max_uncompressed_bytes;
+                push(
+                    report,
+                    FindingCode::ByteLimitExceeded,
+                    attempted.to_string(),
+                );
+                break;
+            }
+            report.uncompressed_bytes_scanned = attempted;
+
+            let mut buf = Vec::new();
+            if let Err(error) = entry
+                .take(self.policy.max_uncompressed_bytes.saturating_add(1))
+                .read_to_end(&mut buf)
+            {
+                push(report, FindingCode::ManifestMalformed, error.to_string());
+                continue;
+            }
+            self.scan_bytes(&buf, report);
+
+            if relative == "Contents/MacOS/FeatherMark" {
+                executables += 1;
+            }
+            if relative == "Contents/Resources/package-manifest-v1.json" {
+                manifests.push(buf);
+            } else if relative == "Contents/Info.plist" {
+                info_plist = Some(buf);
+            }
+        }
+
+        if mode == InspectionMode::Package {
+            if executables != 1 {
+                push(
+                    report,
+                    FindingCode::ExecutableCountMismatch,
+                    executables.to_string(),
+                );
+            }
+            if manifests.is_empty() {
+                push(report, FindingCode::ManifestMissing, "0");
+            } else {
+                for manifest_bytes in &manifests {
+                    match serde_json::from_slice::<serde_json::Value>(manifest_bytes) {
+                        Ok(value) => self.check_manifest_json(&value, report),
+                        Err(error) => {
+                            push(report, FindingCode::ManifestMalformed, error.to_string())
+                        }
+                    }
+                }
+                let platform_ok = info_plist
+                    .as_deref()
+                    .map(Self::check_macos_info_plist)
+                    .unwrap_or(false);
+                if !platform_ok {
+                    push(
+                        report,
+                        FindingCode::PlatformMetadataMissing,
+                        "package integration",
+                    );
+                }
+            }
         }
     }
 }
@@ -583,6 +866,187 @@ fn hash_regular_file(path: &Path) -> io::Result<(String, u64)> {
         total = total.saturating_add(read as u64);
     }
     Ok((hex::encode(hasher.finalize()), total))
+}
+
+/// Sniff whether a regular file is a zip archive by its local-file-header or
+/// empty-archive magic bytes (`PK\x03\x04` / `PK\x05\x06`). Used to dispatch the
+/// bounded zip reader in Package mode.
+fn is_zip_archive(path: &Path) -> bool {
+    let mut buf = [0u8; 4];
+    let Ok(mut file) = File::open(path) else {
+        return false;
+    };
+    if file.read_exact(&mut buf).is_err() {
+        return false;
+    }
+    buf[..2] == [b'P', b'K']
+        && ((buf[2] == 0x03 && buf[3] == 0x04) || (buf[2] == 0x05 && buf[3] == 0x06))
+}
+
+/// Identify a macOS DMG by its `.dmg` extension. The bounded reader mounts it
+/// read-only on macOS; on other platforms the reader reports UnsupportedArchive.
+fn is_dmg_archive(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("dmg"))
+        .unwrap_or(false)
+}
+
+/// Verify a sibling preview-publication authorization (if present) and set
+/// report.preview_authorized when the release-authority signature is valid,
+/// bound to this artifact + its provenance, and not expired. Findings are
+/// provenance-class: recorded for evidence but do not block scan acceptance.
+fn verify_preview_authorization(artifact: &Path, report: &mut InspectionReport) {
+    let sibling = preview_authorization_sibling(artifact);
+    if !sibling.is_file() {
+        push(
+            report,
+            FindingCode::PreviewAuthorizationMissing,
+            "no preview-authorization sibling",
+        );
+        return;
+    }
+    let bytes = match fs::read(&sibling) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            push(
+                report,
+                FindingCode::PreviewAuthorizationInvalid,
+                error.to_string(),
+            );
+            return;
+        }
+    };
+    let record: crate::release_authority::PreviewAuthorization =
+        match serde_json::from_slice(&bytes) {
+            Ok(record) => record,
+            Err(error) => {
+                push(
+                    report,
+                    FindingCode::PreviewAuthorizationInvalid,
+                    error.to_string(),
+                );
+                return;
+            }
+        };
+    let pinned_path = match crate::release_authority::pinned_public_key_path() {
+        Ok(path) => path,
+        Err(_) => {
+            push(
+                report,
+                FindingCode::PreviewAuthorityUntrusted,
+                "cannot resolve pinned release-authority key path",
+            );
+            return;
+        }
+    };
+    let pinned = match crate::release_authority::read_pinned_public_key(&pinned_path) {
+        Ok(key) => key,
+        Err(_) => {
+            push(
+                report,
+                FindingCode::PreviewAuthorityUntrusted,
+                "pinned release-authority public key not provisioned",
+            );
+            return;
+        }
+    };
+    if let Err(error) = crate::release_authority::verify(&record, &pinned) {
+        push(
+            report,
+            FindingCode::PreviewAuthorizationInvalid,
+            error.to_string(),
+        );
+        return;
+    }
+    let artifact_ok = report
+        .artifact_sha256
+        .as_deref()
+        .map(|sha| sha == record.artifact_sha256)
+        .unwrap_or(false);
+    let provenance_ok = report
+        .production_provenance_sha256
+        .as_deref()
+        .map(|sha| sha == record.provenance_sha256)
+        .unwrap_or(false);
+    if !artifact_ok || !provenance_ok {
+        push(
+            report,
+            FindingCode::PreviewAuthorizationBindingMismatch,
+            "artifact or provenance sha256",
+        );
+        return;
+    }
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(i64::MAX);
+    let expired = match crate::release_authority::iso8601_to_unix(&record.expires_at) {
+        Some(expiry) => expiry < now_unix,
+        None => true,
+    };
+    if expired {
+        push(
+            report,
+            FindingCode::PreviewAuthorizationExpired,
+            record.expires_at.clone(),
+        );
+        return;
+    }
+    report.preview_authorized = true;
+}
+
+/// Resolve `<artifact>.preview-authorization.json` next to the artifact.
+fn preview_authorization_sibling(artifact: &Path) -> PathBuf {
+    let mut name = artifact
+        .file_name()
+        .map(|file_name| file_name.to_os_string())
+        .unwrap_or_default();
+    name.push(".preview-authorization.json");
+    artifact.with_file_name(name)
+}
+
+/// RAII guard that detaches a mounted DMG and removes the mountpoint directory
+/// on drop, on every path (including panic via unwind).
+#[cfg(target_os = "macos")]
+struct DmgMountGuard {
+    mountpoint: PathBuf,
+    detached: bool,
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for DmgMountGuard {
+    fn drop(&mut self) {
+        if !self.detached {
+            #[allow(clippy::disallowed_methods)]
+            let _ = std::process::Command::new("hdiutil")
+                .args(["detach", "-force"])
+                .arg(&self.mountpoint)
+                .status();
+        }
+        let _ = fs::remove_dir(&self.mountpoint);
+    }
+}
+
+/// Return the single top-level `.app` directory at a DMG mount point, or None if
+/// the layout is not exactly one `.app`.
+#[cfg(target_os = "macos")]
+fn find_single_app(mount: &Path) -> Option<PathBuf> {
+    let entries: Vec<_> = fs::read_dir(mount)
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .collect();
+    if entries.len() != 1 {
+        return None;
+    }
+    let path = entries[0].path();
+    let is_app_dir = entries[0]
+        .file_type()
+        .ok()
+        .map(|file_type| file_type.is_dir())
+        .unwrap_or(false)
+        && path.extension().and_then(|ext| ext.to_str()) == Some("app");
+    is_app_dir.then_some(path)
 }
 
 fn classify_pattern(pattern: &str, test_env: &[String]) -> FindingCode {

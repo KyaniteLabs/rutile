@@ -2,9 +2,13 @@
 
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::Write;
+use std::path::Path;
 use tempfile::tempdir;
 use xtask::artifact_inspector::{ArtifactInspector, FindingCode, InspectionMode, PolicyPaths};
 use xtask::local_package_cli::enforce_inspection;
+use zip::ZipWriter;
+use zip::write::SimpleFileOptions;
 
 #[test]
 fn artifact_inspect_cli_emits_json_and_rejects_forbidden_input() {
@@ -85,6 +89,226 @@ test_control_environment = ["RUTILE_TEST_CONTROL", "FEATHERMARK_TEST_CONTROL"]
     )
     .unwrap();
     PolicyPaths { quarantine, policy }
+}
+
+/// Write a zip archive at `path` containing the given `(entry-name, bytes)` pairs.
+fn write_zip(path: &Path, entries: &[(&str, Vec<u8>)]) {
+    let file = fs::File::create(path).unwrap();
+    let mut zip = ZipWriter::new(file);
+    let options = SimpleFileOptions::default();
+    for (name, data) in entries {
+        zip.start_file(name, options).unwrap();
+        zip.write_all(data).unwrap();
+    }
+    zip.finish().unwrap();
+}
+
+/// A minimal clean `.app`-layout zip matching the inspector policy's expected
+/// license/version/source-commit. Baseline for the zip-reader tests.
+fn clean_app_zip_entries() -> Vec<(&'static str, Vec<u8>)> {
+    let manifest = serde_json::json!({
+        "license": "MIT",
+        "version": "0.2.0",
+        "source_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    })
+    .to_string()
+    .into_bytes();
+    let info_plist = b"<?xml version=\"1.0\"?><plist version=\"1.0\"><dict>
+<key>CFBundleIdentifier</key><string>x</string>
+<key>CFBundleDocumentTypes</key><array/>
+<key>UTTypeConformsTo</key><array/>
+</dict></plist>"
+        .to_vec();
+    vec![
+        ("Rutile.app/Contents/MacOS/FeatherMark", b"Mach-O".to_vec()),
+        ("Rutile.app/Contents/Info.plist", info_plist),
+        (
+            "Rutile.app/Contents/Resources/package-manifest-v1.json",
+            manifest,
+        ),
+        (
+            "Rutile.app/Contents/Resources/sbom.spdx.json",
+            b"{}".to_vec(),
+        ),
+    ]
+}
+
+#[test]
+fn zip_reader_accepts_clean_app_layout_without_unsupported_archive() {
+    let root = tempdir().unwrap();
+    let zip_path = root.path().join("Rutile-0.2.0-macos-arm64.app.zip");
+    write_zip(&zip_path, &clean_app_zip_entries());
+    let paths = write_policy(root.path(), &[]);
+
+    let report =
+        ArtifactInspector::load(&paths)
+            .unwrap()
+            .inspect(&zip_path, InspectionMode::Package, None);
+
+    assert_eq!(report.artifact_kind, "zip_archive");
+    assert!(!report.has(FindingCode::UnsupportedArchive));
+    assert!(report.has(FindingCode::ProvenanceMissing));
+    // Clean bounded scan: provenance findings do not block acceptance.
+    assert!(report.accepted);
+}
+
+#[test]
+fn zip_reader_rejects_forbidden_pattern_in_a_zipped_entry() {
+    let root = tempdir().unwrap();
+    let zip_path = root.path().join("Rutile-0.2.0-macos-arm64.app.zip");
+    let mut entries = clean_app_zip_entries();
+    entries.push((
+        "Rutile.app/Contents/Resources/leaked.txt",
+        b"RUTILE_TEST_CONTROL leak".to_vec(),
+    ));
+    write_zip(&zip_path, &entries);
+    let paths = write_policy(root.path(), &[]);
+
+    let report =
+        ArtifactInspector::load(&paths)
+            .unwrap()
+            .inspect(&zip_path, InspectionMode::Package, None);
+
+    assert!(!report.has(FindingCode::UnsupportedArchive));
+    assert!(report.has(FindingCode::TestControlMarker));
+    assert!(!report.accepted);
+}
+
+#[test]
+fn zip_reader_skips_macosx_appledouble_metadata() {
+    let root = tempdir().unwrap();
+    let zip_path = root.path().join("Rutile-0.2.0-macos-arm64.app.zip");
+    let mut entries = clean_app_zip_entries();
+    // ditto emits __MACOSX/._* AppleDouble metadata; a forbidden pattern there
+    // must NOT be flagged (archive-level metadata, not app content).
+    entries.push((
+        "__MACOSX/Rutile.app/Contents/Resources/._leaked.txt",
+        b"RUTILE_TEST_CONTROL".to_vec(),
+    ));
+    write_zip(&zip_path, &entries);
+    let paths = write_policy(root.path(), &[]);
+
+    let report =
+        ArtifactInspector::load(&paths)
+            .unwrap()
+            .inspect(&zip_path, InspectionMode::Package, None);
+
+    assert!(!report.has(FindingCode::TestControlMarker));
+    assert!(report.has(FindingCode::ProvenanceMissing));
+    assert!(report.accepted);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn dmg_reader_inspects_a_real_hdiutil_dmg() {
+    use std::process::Command;
+    let root = tempdir().unwrap();
+    let app = root.path().join("Rutile.app");
+    let contents = app.join("Contents");
+    fs::create_dir_all(contents.join("MacOS")).unwrap();
+    fs::create_dir_all(contents.join("Resources")).unwrap();
+    fs::write(
+        contents.join("MacOS/FeatherMark"),
+        b"#!/bin/sh\necho Rutile",
+    )
+    .unwrap();
+    fs::write(
+        contents.join("Info.plist"),
+        b"<?xml version=\"1.0\"?><plist version=\"1.0\"><dict>
+<key>CFBundleIdentifier</key><string>x</string>
+<key>CFBundleDocumentTypes</key><array/>
+<key>UTTypeConformsTo</key><array/>
+</dict></plist>",
+    )
+    .unwrap();
+    fs::write(
+        contents.join("Resources/package-manifest-v1.json"),
+        serde_json::json!({"license":"MIT","version":"0.2.0","source_commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}).to_string(),
+    )
+    .unwrap();
+    let dmg = root.path().join("Rutile.dmg");
+    let status = Command::new("hdiutil")
+        .args(["create", "-volname", "Rutile", "-srcfolder"])
+        .arg(&app)
+        .args(["-format", "UDZO"])
+        .arg(&dmg)
+        .status()
+        .unwrap();
+    assert!(status.success(), "hdiutil create failed");
+
+    let paths = write_policy(root.path(), &[]);
+    let report =
+        ArtifactInspector::load(&paths)
+            .unwrap()
+            .inspect(&dmg, InspectionMode::Package, None);
+
+    assert_eq!(report.artifact_kind, "dmg_image");
+    assert!(!report.has(FindingCode::UnsupportedArchive));
+    assert!(report.complete_scan);
+    assert!(report.has(FindingCode::ProvenanceMissing));
+    assert!(report.accepted);
+}
+
+#[test]
+fn preview_authorized_succeeds_with_signed_sibling_and_pinned_key() {
+    use ed25519_dalek::SigningKey;
+
+    // Deterministic release-authority key for this test.
+    let signing = SigningKey::from_bytes(&[9u8; 32]);
+    let pub_hex = hex::encode(signing.verifying_key().to_bytes());
+
+    let root = tempdir().unwrap();
+    // Pin the public key via the env override (avoids touching the repo key file).
+    let pubkey_path = root.path().join("release-authority.pub.hex");
+    fs::write(&pubkey_path, &pub_hex).unwrap();
+    // SAFETY: this test is the sole reader/writer of this env var.
+    unsafe {
+        std::env::set_var("FEATHERMARK_RELEASE_AUTHORITY_PUBKEY", &pubkey_path);
+    }
+
+    let zip_path = root.path().join("Rutile-0.2.0-macos-arm64.app.zip");
+    write_zip(&zip_path, &clean_app_zip_entries());
+    let artifact_sha = hex::encode(Sha256::digest(fs::read(&zip_path).unwrap()));
+
+    // Provenance sibling (bind_provenance checks the schema identifier + hashes bytes).
+    let provenance_json =
+        serde_json::json!({"schema": "rutile.production-provenance.v1"}).to_string();
+    let provenance_path = root
+        .path()
+        .join("Rutile-0.2.0-macos-arm64.app.zip.provenance.json");
+    fs::write(&provenance_path, &provenance_json).unwrap();
+    let provenance_sha = hex::encode(Sha256::digest(provenance_json.as_bytes()));
+
+    // Signed preview-authorization sibling.
+    let statement = xtask::release_authority::PreviewAuthorizationStatement {
+        artifact_sha256: artifact_sha,
+        provenance_sha256: provenance_sha,
+        tier: xtask::release_authority::PREVIEW_TIER.into(),
+        product: "feathermark".into(),
+        version_label: "0.2.0".into(),
+        signed_at: "2026-01-01T00:00:00Z".into(),
+        expires_at: "2099-01-01T00:00:00Z".into(),
+    };
+    let record = xtask::release_authority::sign(&statement, &signing).unwrap();
+    let auth_path = root
+        .path()
+        .join("Rutile-0.2.0-macos-arm64.app.zip.preview-authorization.json");
+    fs::write(&auth_path, serde_json::to_string(&record).unwrap()).unwrap();
+
+    let paths = write_policy(root.path(), &[]);
+    let report =
+        ArtifactInspector::load(&paths)
+            .unwrap()
+            .inspect(&zip_path, InspectionMode::Package, None);
+
+    // SAFETY: sole writer of this env var.
+    unsafe {
+        std::env::remove_var("FEATHERMARK_RELEASE_AUTHORITY_PUBKEY");
+    }
+
+    assert!(report.accepted);
+    assert!(report.preview_authorized);
+    assert!(!report.publication_authorized);
 }
 
 #[test]

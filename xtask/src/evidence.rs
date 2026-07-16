@@ -14,6 +14,7 @@ pub const KNOWN_SCHEMA_KINDS: &[&str] = &[
     "w0b-stage0-blocked-receipt",
     "accessibility-attestation",
     "performance-evidence",
+    "preview-publication-authorization",
 ];
 
 /// Resolve a schema kind string (e.g. "production-provenance") to the

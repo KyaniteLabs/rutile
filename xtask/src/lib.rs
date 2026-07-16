@@ -18,6 +18,7 @@ pub mod metrics;
 pub mod native_smoke;
 pub mod package;
 pub mod provenance;
+pub mod release_authority;
 pub mod release_preflight;
 pub mod reproducible_build;
 pub mod runner;
@@ -124,6 +125,71 @@ pub mod cli {
             bin: String,
             #[arg(long)]
             features: Option<String>,
+        },
+        Provenance {
+            #[command(subcommand)]
+            command: ProvenanceCommand,
+        },
+        Release {
+            #[command(subcommand)]
+            command: ReleaseCommand,
+        },
+    }
+
+    #[derive(Subcommand)]
+    pub enum ReleaseCommand {
+        /// Generate a fresh release-authority ed25519 keypair. Writes the public
+        /// key to --public-out (committed as the pinned trust anchor) and prints
+        /// the secret hex to stdout for the operator to install privately (0600).
+        Keygen {
+            #[arg(long)]
+            public_out: PathBuf,
+        },
+        /// Sign a preview-publication authorization binding an artifact to its
+        /// production provenance, using the release-authority secret key.
+        PreviewAuthorize {
+            #[arg(long)]
+            artifact: PathBuf,
+            #[arg(long)]
+            provenance: PathBuf,
+            #[arg(long)]
+            product: String,
+            #[arg(long)]
+            version_label: String,
+            #[arg(long)]
+            signed_at: String,
+            #[arg(long)]
+            expires_at: String,
+            #[arg(long, env = "FEATHERMARK_RELEASE_AUTHORITY_KEY")]
+            key_path: PathBuf,
+            #[arg(long)]
+            out: PathBuf,
+        },
+    }
+
+    #[derive(Subcommand)]
+    pub enum ProvenanceCommand {
+        /// Generate a production-provenance record for a candidate produced by
+        /// `reproducible-build`. Re-derives SOURCE_DATE_EPOCH + the
+        /// --remap-path-prefix RUSTFLAGS from the same sources reproducible-build
+        /// uses, so the command is self-contained. The operator asserts the
+        /// candidate was built reproducibly; the record anchors the candidate
+        /// SHA-256 so a reviewer can rebuild and compare.
+        Generate {
+            #[arg(long)]
+            candidate: PathBuf,
+            #[arg(long)]
+            repo_root: PathBuf,
+            #[arg(long, value_delimiter = ',')]
+            features: Vec<String>,
+            #[arg(long, default_value = "target/prod")]
+            target_root: String,
+            #[arg(long)]
+            product: String,
+            #[arg(long)]
+            product_version: String,
+            #[arg(long)]
+            out: PathBuf,
         },
     }
 
@@ -233,6 +299,16 @@ pub mod cli {
             output_root: PathBuf,
             #[arg(long)]
             version: String,
+            /// Optional release-authority secret key. When present (with
+            /// --preview-signed-at + --preview-expires-at), bless each produced
+            /// artifact with provenance + a signed preview authorization so the
+            /// inline Package-mode inspection passes at the preview tier.
+            #[arg(long)]
+            release_authority_key: Option<PathBuf>,
+            #[arg(long)]
+            preview_signed_at: Option<String>,
+            #[arg(long)]
+            preview_expires_at: Option<String>,
         },
         Linux {
             #[arg(long)]

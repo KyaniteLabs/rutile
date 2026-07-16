@@ -163,6 +163,30 @@ pub fn generate(request: &ProvenanceRequest) -> Result<ProductionProvenance, Pro
     })
 }
 
+/// Generate provenance with the reproducibility controls re-derived from the
+/// repository (`SOURCE_DATE_EPOCH` from the commit date, `--remap-path-prefix`
+/// RUSTFLAGS) and product identity set by the caller. Shared by the `provenance
+/// generate` CLI and the local-packaging bless step. The operator asserts the
+/// candidate was produced by `reproducible-build`.
+pub fn generate_with_reproducible_env(
+    request: &ProvenanceRequest,
+    product: &str,
+    product_version: &str,
+) -> Result<ProductionProvenance, ProvenanceError> {
+    let source_date_epoch = crate::reproducible_build::git_commit_date(&request.repo_root)
+        .map_err(|error| ProvenanceError::GitMeasurement(error.to_string()))?;
+    let rustflags = crate::reproducible_build::reproducible_rustflags(&request.repo_root);
+    // SAFETY: single-threaded xtask CLI/packaging path; `generate` reads these
+    // env vars synchronously on this thread, with no spawn in between.
+    unsafe {
+        std::env::set_var("CARGO_PKG_NAME", product);
+        std::env::set_var("CARGO_PKG_VERSION", product_version);
+        std::env::set_var("SOURCE_DATE_EPOCH", &source_date_epoch);
+        std::env::set_var("RUSTFLAGS", &rustflags);
+    }
+    generate(request)
+}
+
 impl ProductionProvenance {
     /// Canonical JSON serialization with deterministic (alphabetically sorted)
     /// key order at every nesting level.  This is the canonical form over which
