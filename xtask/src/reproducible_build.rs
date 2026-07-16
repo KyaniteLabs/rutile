@@ -116,6 +116,10 @@ pub fn run(
         .arg(&request.bin)
         .env("CARGO_TARGET_DIR", &prod_target)
         .env("SOURCE_DATE_EPOCH", &source_date_epoch)
+        // CARGO_ENCODED_RUSTFLAGS takes precedence over RUSTFLAGS — clear it so the
+        // remap flags below are always applied (otherwise a set encoded-var silently
+        // bypasses all path remapping and leaks builder paths into the binary).
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env("RUSTFLAGS", &rustflags);
 
     if let Some(features) = &request.features {
