@@ -125,6 +125,36 @@ pub mod cli {
             #[arg(long)]
             features: Option<String>,
         },
+        Provenance {
+            #[command(subcommand)]
+            command: ProvenanceCommand,
+        },
+    }
+
+    #[derive(Subcommand)]
+    pub enum ProvenanceCommand {
+        /// Generate a production-provenance record for a candidate produced by
+        /// `reproducible-build`. Re-derives SOURCE_DATE_EPOCH + the
+        /// --remap-path-prefix RUSTFLAGS from the same sources reproducible-build
+        /// uses, so the command is self-contained. The operator asserts the
+        /// candidate was built reproducibly; the record anchors the candidate
+        /// SHA-256 so a reviewer can rebuild and compare.
+        Generate {
+            #[arg(long)]
+            candidate: PathBuf,
+            #[arg(long)]
+            repo_root: PathBuf,
+            #[arg(long, value_delimiter = ',')]
+            features: Vec<String>,
+            #[arg(long, default_value = "target/prod")]
+            target_root: String,
+            #[arg(long)]
+            product: String,
+            #[arg(long)]
+            product_version: String,
+            #[arg(long)]
+            out: PathBuf,
+        },
     }
 
     #[derive(Subcommand)]

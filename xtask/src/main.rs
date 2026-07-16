@@ -4,8 +4,8 @@ use clap::Parser;
 use xtask::artifact_inspector::{ArtifactInspector, InspectionMode, PolicyPaths};
 use xtask::cli::{
     ArtifactCommand, ArtifactInspectionMode, Cli, Command, ComparatorCommand, EvidenceCommand,
-    FixtureCommand, GuiCommand, LocalPackageCommand, MetricsCommand, PackageCommand, RunnerCommand,
-    ScaffoldCommand,
+    FixtureCommand, GuiCommand, LocalPackageCommand, MetricsCommand, PackageCommand,
+    ProvenanceCommand, RunnerCommand, ScaffoldCommand,
 };
 use xtask::comparator::{ScaffoldCreate, create_scaffold, verify_scaffold};
 use xtask::fixtures::{generate_fixtures, verify_fixtures};
@@ -286,6 +286,44 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 result.source_date_epoch,
             );
         }
+        Command::Provenance { command } => match command {
+            ProvenanceCommand::Generate {
+                candidate,
+                repo_root,
+                features,
+                target_root,
+                product,
+                product_version,
+                out,
+            } => {
+                // Re-derive the same reproducibility controls `reproducible-build`
+                // applies to its cargo subprocess, so `provenance::generate` measures
+                // a coherent build environment without relying on the operator
+                // exporting env across invocations.
+                let source_date_epoch = xtask::reproducible_build::git_commit_date(&repo_root)?;
+                let rustflags = xtask::reproducible_build::reproducible_rustflags(&repo_root);
+                // SAFETY: single-threaded xtask CLI handler; the env reads performed
+                // by `provenance::generate` happen synchronously on this thread after
+                // these sets, with no spawn in between.
+                unsafe {
+                    std::env::set_var("CARGO_PKG_NAME", &product);
+                    std::env::set_var("CARGO_PKG_VERSION", &product_version);
+                    std::env::set_var("SOURCE_DATE_EPOCH", &source_date_epoch);
+                    std::env::set_var("RUSTFLAGS", &rustflags);
+                }
+                let provenance =
+                    xtask::provenance::generate(&xtask::provenance::ProvenanceRequest {
+                        candidate,
+                        repo_root,
+                        features,
+                        target_root,
+                    })?;
+                let json = provenance.canonical_json()?;
+                fs::write(&out, &json)?;
+                let sha256 = provenance.provenance_sha256()?;
+                println!("provenance {} sha256={}", out.display(), sha256);
+            }
+        },
     }
     Ok(())
 }
