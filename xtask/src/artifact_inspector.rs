@@ -2,8 +2,10 @@
 //!
 //! The inspector never mutates or extracts an artifact. Regular files are
 //! scanned as bounded streams. Directory packages are walked without following
-//! links and with fixed entry/byte ceilings. Opaque archive formats remain
-//! publication-ineligible until a bounded format reader is available.
+//! links and with fixed entry/byte ceilings. ditto-produced `.app.zip` archives
+//! are scanned via a bounded zip reader that decompresses each entry to a
+//! bounded in-memory buffer (never to disk). Other opaque archive formats
+//! remain publication-ineligible until a bounded format reader is available.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -13,6 +15,7 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 use walkdir::WalkDir;
+use zip::ZipArchive;
 
 const MAX_POLICY_BYTES: u64 = 1024 * 1024;
 
@@ -267,30 +270,38 @@ impl ArtifactInspector {
                 push(&mut report, FindingCode::QuarantinedHash, digest);
                 return report;
             }
-            report.entries_scanned = 1;
-            if bytes > self.policy.max_uncompressed_bytes {
-                report.uncompressed_bytes_scanned = self.policy.max_uncompressed_bytes;
-                push(
-                    &mut report,
-                    FindingCode::ByteLimitExceeded,
-                    bytes.to_string(),
-                );
+            if mode == InspectionMode::Package && is_zip_archive(artifact) {
+                // Bounded zip reader: scans each decompressed entry to a bounded
+                // in-memory buffer (never the compressed whole-file stream, never
+                // extracted to disk) and owns its own entry/byte accounting.
+                report.artifact_kind = "zip_archive";
+                self.inspect_zip(artifact, mode, &mut report);
             } else {
-                report.uncompressed_bytes_scanned = bytes;
-                if let Err(error) = self.scan_file(artifact, &mut report) {
+                report.entries_scanned = 1;
+                if bytes > self.policy.max_uncompressed_bytes {
+                    report.uncompressed_bytes_scanned = self.policy.max_uncompressed_bytes;
                     push(
                         &mut report,
-                        FindingCode::ManifestMalformed,
-                        error.to_string(),
+                        FindingCode::ByteLimitExceeded,
+                        bytes.to_string(),
+                    );
+                } else {
+                    report.uncompressed_bytes_scanned = bytes;
+                    if let Err(error) = self.scan_file(artifact, &mut report) {
+                        push(
+                            &mut report,
+                            FindingCode::ManifestMalformed,
+                            error.to_string(),
+                        );
+                    }
+                }
+                if mode == InspectionMode::Package {
+                    push(
+                        &mut report,
+                        FindingCode::UnsupportedArchive,
+                        "opaque package requires a bounded format reader",
                     );
                 }
-            }
-            if mode == InspectionMode::Package {
-                push(
-                    &mut report,
-                    FindingCode::UnsupportedArchive,
-                    "opaque package requires a bounded format reader",
-                );
             }
         } else {
             report.artifact_kind = "directory";
@@ -412,20 +423,27 @@ impl ArtifactInspector {
         File::open(path)?
             .take(self.policy.max_uncompressed_bytes.saturating_add(1))
             .read_to_end(&mut bytes)?;
+        self.scan_bytes(&bytes, report);
+        Ok(())
+    }
+
+    /// Forbidden-pattern + credential-shape scan over in-memory bytes. Shared by
+    /// the regular-file scan and the bounded archive readers (which decompress
+    /// each entry to a bounded buffer before calling this).
+    fn scan_bytes(&self, bytes: &[u8], report: &mut InspectionReport) {
         for pattern in &self.policy.forbidden_patterns {
-            if contains(&bytes, pattern.as_bytes()) {
+            if contains(bytes, pattern.as_bytes()) {
                 let code = classify_pattern(pattern, &self.policy.test_control_environment);
                 push(report, code, redact_pattern(pattern));
             }
         }
-        if contains_sensitive_shape(&bytes) {
+        if contains_sensitive_shape(bytes) {
             push(
                 report,
                 FindingCode::CredentialMarker,
                 "credential or email shape matched",
             );
         }
-        Ok(())
     }
 
     fn inspect_manifest(&self, root: &Path, path: &Path, report: &mut InspectionReport) {
@@ -439,37 +457,12 @@ impl ArtifactInspector {
                 return;
             }
         };
-        if value.get("license").and_then(|value| value.as_str())
-            != Some(self.policy.expected_license.as_str())
-        {
-            push(report, FindingCode::LicenseMismatch, "package manifest");
-        }
-        if let Some(expected) = &self.policy.expected_version {
-            if value.get("version").and_then(|value| value.as_str()) != Some(expected.as_str()) {
-                push(report, FindingCode::VersionMismatch, "package manifest");
-            }
-        }
-        if let Some(expected) = &self.policy.expected_source_commit {
-            if value.get("source_commit").and_then(|value| value.as_str())
-                != Some(expected.as_str())
-            {
-                push(
-                    report,
-                    FindingCode::SourceCommitMismatch,
-                    "package manifest",
-                );
-            }
-        }
+        self.check_manifest_json(&value, report);
 
         let is_macos = root.join("Contents/MacOS/FeatherMark").is_file();
         let platform_ok = if is_macos {
-            fs::read_to_string(root.join("Contents/Info.plist"))
-                .map(|plist| {
-                    plist.contains("CFBundleIdentifier")
-                        && plist.contains("CFBundleDocumentTypes")
-                        && plist.contains("UTTypeConformsTo")
-                })
-                .unwrap_or(false)
+            let info = fs::read(root.join("Contents/Info.plist")).unwrap_or_default();
+            Self::check_macos_info_plist(&info)
         } else {
             value
                 .get("wayland_verified")
@@ -492,6 +485,200 @@ impl ArtifactInspector {
                 FindingCode::PlatformMetadataMissing,
                 "package integration",
             );
+        }
+    }
+
+    /// License / version / source-commit checks on a parsed package manifest.
+    /// Shared by the directory and bounded-zip inspection paths.
+    fn check_manifest_json(&self, value: &serde_json::Value, report: &mut InspectionReport) {
+        if value.get("license").and_then(|value| value.as_str())
+            != Some(self.policy.expected_license.as_str())
+        {
+            push(report, FindingCode::LicenseMismatch, "package manifest");
+        }
+        if let Some(expected) = &self.policy.expected_version {
+            if value.get("version").and_then(|value| value.as_str()) != Some(expected.as_str()) {
+                push(report, FindingCode::VersionMismatch, "package manifest");
+            }
+        }
+        if let Some(expected) = &self.policy.expected_source_commit {
+            if value.get("source_commit").and_then(|value| value.as_str())
+                != Some(expected.as_str())
+            {
+                push(
+                    report,
+                    FindingCode::SourceCommitMismatch,
+                    "package manifest",
+                );
+            }
+        }
+    }
+
+    /// macOS platform-metadata check on Info.plist bytes: CFBundleIdentifier,
+    /// CFBundleDocumentTypes, and UTTypeConformsTo must all be present.
+    fn check_macos_info_plist(info: &[u8]) -> bool {
+        let plist = std::str::from_utf8(info).unwrap_or("");
+        plist.contains("CFBundleIdentifier")
+            && plist.contains("CFBundleDocumentTypes")
+            && plist.contains("UTTypeConformsTo")
+    }
+
+    /// Bounded reader for a ditto-produced `.app.zip`. Decompresses each entry
+    /// to a bounded in-memory buffer (never to disk), strips the single
+    /// top-level `.app/` directory, skips `__MACOSX/` + `._*` AppleDouble
+    /// metadata, and applies the same accounting + scan + manifest checks as
+    /// `inspect_directory`. Owns its own entry/byte accounting.
+    fn inspect_zip(&self, artifact: &Path, mode: InspectionMode, report: &mut InspectionReport) {
+        let file = match File::open(artifact) {
+            Ok(file) => file,
+            Err(error) => {
+                push(report, FindingCode::ManifestMalformed, error.to_string());
+                return;
+            }
+        };
+        let mut archive = match ZipArchive::new(file) {
+            Ok(archive) => archive,
+            Err(error) => {
+                push(report, FindingCode::ManifestMalformed, error.to_string());
+                return;
+            }
+        };
+
+        let mut manifests: Vec<Vec<u8>> = Vec::new();
+        let mut info_plist: Option<Vec<u8>> = None;
+        let mut executables = 0_u64;
+        let mut top_prefix: Option<String> = None;
+
+        for index in 0..archive.len() {
+            if report.entries_scanned == self.policy.max_entries {
+                push(
+                    report,
+                    FindingCode::EntryLimitExceeded,
+                    self.policy.max_entries.to_string(),
+                );
+                break;
+            }
+            let entry = match archive.by_index(index) {
+                Ok(entry) => entry,
+                Err(error) => {
+                    push(report, FindingCode::ManifestMalformed, error.to_string());
+                    break;
+                }
+            };
+            let name = entry.name().to_string();
+            if entry.is_dir() {
+                continue;
+            }
+            // Skip AppleDouble / __MACOSX metadata ditto emits alongside the app.
+            if name.starts_with("__MACOSX/") {
+                continue;
+            }
+            if name
+                .rsplit('/')
+                .next()
+                .map(|base| base.starts_with("._"))
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            if entry.is_symlink() {
+                push(report, FindingCode::LinkRejected, name.clone());
+                continue;
+            }
+
+            // Strip the single top-level dir prefix (e.g. "Rutile.app/") so the
+            // relative predicates match inspect_directory (Contents/MacOS/...).
+            let relative = {
+                if top_prefix.is_none() {
+                    if let Some(seg) = name.split('/').next().filter(|seg| !seg.is_empty()) {
+                        top_prefix = Some(format!("{seg}/"));
+                    }
+                }
+                top_prefix
+                    .as_deref()
+                    .and_then(|prefix| name.strip_prefix(prefix))
+                    .unwrap_or(&name)
+                    .to_string()
+            };
+
+            report.entries_scanned += 1;
+
+            // Zip-bomb heuristic: reject extreme compression ratios.
+            let uncompressed = entry.size();
+            let compressed = entry.compressed_size();
+            if compressed > 0 && uncompressed / compressed > 1000 {
+                push(
+                    report,
+                    FindingCode::ByteLimitExceeded,
+                    format!("compression ratio {uncompressed}/{compressed}"),
+                );
+                break;
+            }
+            let attempted = report
+                .uncompressed_bytes_scanned
+                .saturating_add(uncompressed);
+            if attempted > self.policy.max_uncompressed_bytes {
+                report.uncompressed_bytes_scanned = self.policy.max_uncompressed_bytes;
+                push(
+                    report,
+                    FindingCode::ByteLimitExceeded,
+                    attempted.to_string(),
+                );
+                break;
+            }
+            report.uncompressed_bytes_scanned = attempted;
+
+            let mut buf = Vec::new();
+            if let Err(error) = entry
+                .take(self.policy.max_uncompressed_bytes.saturating_add(1))
+                .read_to_end(&mut buf)
+            {
+                push(report, FindingCode::ManifestMalformed, error.to_string());
+                continue;
+            }
+            self.scan_bytes(&buf, report);
+
+            if relative == "Contents/MacOS/FeatherMark" {
+                executables += 1;
+            }
+            if relative == "Contents/Resources/package-manifest-v1.json" {
+                manifests.push(buf);
+            } else if relative == "Contents/Info.plist" {
+                info_plist = Some(buf);
+            }
+        }
+
+        if mode == InspectionMode::Package {
+            if executables != 1 {
+                push(
+                    report,
+                    FindingCode::ExecutableCountMismatch,
+                    executables.to_string(),
+                );
+            }
+            if manifests.is_empty() {
+                push(report, FindingCode::ManifestMissing, "0");
+            } else {
+                for manifest_bytes in &manifests {
+                    match serde_json::from_slice::<serde_json::Value>(manifest_bytes) {
+                        Ok(value) => self.check_manifest_json(&value, report),
+                        Err(error) => {
+                            push(report, FindingCode::ManifestMalformed, error.to_string())
+                        }
+                    }
+                }
+                let platform_ok = info_plist
+                    .as_deref()
+                    .map(Self::check_macos_info_plist)
+                    .unwrap_or(false);
+                if !platform_ok {
+                    push(
+                        report,
+                        FindingCode::PlatformMetadataMissing,
+                        "package integration",
+                    );
+                }
+            }
         }
     }
 }
@@ -583,6 +770,21 @@ fn hash_regular_file(path: &Path) -> io::Result<(String, u64)> {
         total = total.saturating_add(read as u64);
     }
     Ok((hex::encode(hasher.finalize()), total))
+}
+
+/// Sniff whether a regular file is a zip archive by its local-file-header or
+/// empty-archive magic bytes (`PK\x03\x04` / `PK\x05\x06`). Used to dispatch the
+/// bounded zip reader in Package mode.
+fn is_zip_archive(path: &Path) -> bool {
+    let mut buf = [0u8; 4];
+    let Ok(mut file) = File::open(path) else {
+        return false;
+    };
+    if file.read_exact(&mut buf).is_err() {
+        return false;
+    }
+    buf[..2] == [b'P', b'K']
+        && ((buf[2] == 0x03 && buf[3] == 0x04) || (buf[2] == 0x05 && buf[3] == 0x06))
 }
 
 fn classify_pattern(pattern: &str, test_env: &[String]) -> FindingCode {

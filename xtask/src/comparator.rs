@@ -53,6 +53,7 @@ sha2.workspace = true
 thiserror.workspace = true
 toml.workspace = true
 walkdir.workspace = true
+zip.workspace = true
 
 [build-dependencies]
 hex.workspace = true
@@ -90,6 +91,7 @@ thiserror = "=2.0.12"
 toml = "=0.8.23"
 trybuild = "=1.0.104"
 walkdir = "=2.5.0"
+zip = "=2.4.2"
 "#;
 
 #[derive(Clone, Debug)]

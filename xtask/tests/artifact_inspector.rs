@@ -2,9 +2,13 @@
 
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::Write;
+use std::path::Path;
 use tempfile::tempdir;
 use xtask::artifact_inspector::{ArtifactInspector, FindingCode, InspectionMode, PolicyPaths};
 use xtask::local_package_cli::enforce_inspection;
+use zip::ZipWriter;
+use zip::write::SimpleFileOptions;
 
 #[test]
 fn artifact_inspect_cli_emits_json_and_rejects_forbidden_input() {
@@ -85,6 +89,113 @@ test_control_environment = ["RUTILE_TEST_CONTROL", "FEATHERMARK_TEST_CONTROL"]
     )
     .unwrap();
     PolicyPaths { quarantine, policy }
+}
+
+/// Write a zip archive at `path` containing the given `(entry-name, bytes)` pairs.
+fn write_zip(path: &Path, entries: &[(&str, Vec<u8>)]) {
+    let file = fs::File::create(path).unwrap();
+    let mut zip = ZipWriter::new(file);
+    let options = SimpleFileOptions::default();
+    for (name, data) in entries {
+        zip.start_file(name, options).unwrap();
+        zip.write_all(data).unwrap();
+    }
+    zip.finish().unwrap();
+}
+
+/// A minimal clean `.app`-layout zip matching the inspector policy's expected
+/// license/version/source-commit. Baseline for the zip-reader tests.
+fn clean_app_zip_entries() -> Vec<(&'static str, Vec<u8>)> {
+    let manifest = serde_json::json!({
+        "license": "MIT",
+        "version": "0.2.0",
+        "source_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    })
+    .to_string()
+    .into_bytes();
+    let info_plist = b"<?xml version=\"1.0\"?><plist version=\"1.0\"><dict>
+<key>CFBundleIdentifier</key><string>x</string>
+<key>CFBundleDocumentTypes</key><array/>
+<key>UTTypeConformsTo</key><array/>
+</dict></plist>"
+        .to_vec();
+    vec![
+        ("Rutile.app/Contents/MacOS/FeatherMark", b"Mach-O".to_vec()),
+        ("Rutile.app/Contents/Info.plist", info_plist),
+        (
+            "Rutile.app/Contents/Resources/package-manifest-v1.json",
+            manifest,
+        ),
+        (
+            "Rutile.app/Contents/Resources/sbom.spdx.json",
+            b"{}".to_vec(),
+        ),
+    ]
+}
+
+#[test]
+fn zip_reader_accepts_clean_app_layout_without_unsupported_archive() {
+    let root = tempdir().unwrap();
+    let zip_path = root.path().join("Rutile-0.2.0-macos-arm64.app.zip");
+    write_zip(&zip_path, &clean_app_zip_entries());
+    let paths = write_policy(root.path(), &[]);
+
+    let report =
+        ArtifactInspector::load(&paths)
+            .unwrap()
+            .inspect(&zip_path, InspectionMode::Package, None);
+
+    assert_eq!(report.artifact_kind, "zip_archive");
+    assert!(!report.has(FindingCode::UnsupportedArchive));
+    assert!(report.has(FindingCode::ProvenanceMissing));
+    // Clean bounded scan: provenance findings do not block acceptance.
+    assert!(report.accepted);
+}
+
+#[test]
+fn zip_reader_rejects_forbidden_pattern_in_a_zipped_entry() {
+    let root = tempdir().unwrap();
+    let zip_path = root.path().join("Rutile-0.2.0-macos-arm64.app.zip");
+    let mut entries = clean_app_zip_entries();
+    entries.push((
+        "Rutile.app/Contents/Resources/leaked.txt",
+        b"RUTILE_TEST_CONTROL leak".to_vec(),
+    ));
+    write_zip(&zip_path, &entries);
+    let paths = write_policy(root.path(), &[]);
+
+    let report =
+        ArtifactInspector::load(&paths)
+            .unwrap()
+            .inspect(&zip_path, InspectionMode::Package, None);
+
+    assert!(!report.has(FindingCode::UnsupportedArchive));
+    assert!(report.has(FindingCode::TestControlMarker));
+    assert!(!report.accepted);
+}
+
+#[test]
+fn zip_reader_skips_macosx_appledouble_metadata() {
+    let root = tempdir().unwrap();
+    let zip_path = root.path().join("Rutile-0.2.0-macos-arm64.app.zip");
+    let mut entries = clean_app_zip_entries();
+    // ditto emits __MACOSX/._* AppleDouble metadata; a forbidden pattern there
+    // must NOT be flagged (archive-level metadata, not app content).
+    entries.push((
+        "__MACOSX/Rutile.app/Contents/Resources/._leaked.txt",
+        b"RUTILE_TEST_CONTROL".to_vec(),
+    ));
+    write_zip(&zip_path, &entries);
+    let paths = write_policy(root.path(), &[]);
+
+    let report =
+        ArtifactInspector::load(&paths)
+            .unwrap()
+            .inspect(&zip_path, InspectionMode::Package, None);
+
+    assert!(!report.has(FindingCode::TestControlMarker));
+    assert!(report.has(FindingCode::ProvenanceMissing));
+    assert!(report.accepted);
 }
 
 #[test]
