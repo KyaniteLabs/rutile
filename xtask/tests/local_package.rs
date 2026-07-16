@@ -105,14 +105,10 @@ test_control_environment = ["RUTILE_TEST_CONTROL"]
         build_input_sha256: sha256(&bytes),
         source_commit: valid_source_commit(),
         output_root: output.clone(),
-<<<<<<< HEAD
-        version: "0.2.0".into(),
+        version: "0.2.1".into(),
         release_authority_key: None,
         preview_signed_at: None,
         preview_expires_at: None,
-=======
-        version: "0.2.1".into(),
->>>>>>> 6e6e953 (release: bump workspace version to 0.2.1)
     });
 
     let error =
@@ -155,14 +151,10 @@ fn assembles_deterministic_arm64_app_bound_to_candidate_hash() {
         build_input_sha256: sha256(&bytes),
         source_commit: valid_source_commit(),
         output_root: output.clone(),
-<<<<<<< HEAD
-        version: "0.2.0".into(),
+        version: "0.2.1".into(),
         release_authority_key: None,
         preview_signed_at: None,
         preview_expires_at: None,
-=======
-        version: "0.2.1".into(),
->>>>>>> 6e6e953 (release: bump workspace version to 0.2.1)
     })
     .unwrap();
 
@@ -542,14 +534,10 @@ fn rejects_candidate_hash_mismatch_and_symlink_inputs() {
         build_input_sha256: "00".repeat(32),
         source_commit: valid_source_commit(),
         output_root: output.join("mismatch-output"),
-<<<<<<< HEAD
-        version: "0.2.0".into(),
+        version: "0.2.1".into(),
         release_authority_key: None,
         preview_signed_at: None,
         preview_expires_at: None,
-=======
-        version: "0.2.1".into(),
->>>>>>> 6e6e953 (release: bump workspace version to 0.2.1)
     })
     .unwrap_err();
     assert!(
@@ -576,14 +564,10 @@ fn rejects_relative_and_parent_traversal_paths_before_io() {
         build_input_sha256: "00".repeat(32),
         source_commit: valid_source_commit(),
         output_root: "relative/output".into(),
-<<<<<<< HEAD
-        version: "0.2.0".into(),
+        version: "0.2.1".into(),
         release_authority_key: None,
         preview_signed_at: None,
         preview_expires_at: None,
-=======
-        version: "0.2.1".into(),
->>>>>>> 6e6e953 (release: bump workspace version to 0.2.1)
     };
     let error = assemble_macos_app(&request).unwrap_err();
     assert!(error.to_string().contains("absolute normalized path"));
@@ -604,14 +588,10 @@ fn rejects_candidates_whose_binary_architecture_conflicts_with_package_label() {
         build_input_sha256: sha256(&bytes),
         source_commit: valid_source_commit(),
         output_root: output.join("macos-output"),
-<<<<<<< HEAD
-        version: "0.2.0".into(),
+        version: "0.2.1".into(),
         release_authority_key: None,
         preview_signed_at: None,
         preview_expires_at: None,
-=======
-        version: "0.2.1".into(),
->>>>>>> 6e6e953 (release: bump workspace version to 0.2.1)
     })
     .unwrap_err();
 
@@ -690,14 +670,10 @@ fn executable_size_gate_rejects_oversize_candidates() {
         build_input_sha256: sha256(&bytes),
         source_commit: valid_source_commit(),
         output_root: output.join("macos-output"),
-<<<<<<< HEAD
-        version: "0.2.0".into(),
+        version: "0.2.1".into(),
         release_authority_key: None,
         preview_signed_at: None,
         preview_expires_at: None,
-=======
-        version: "0.2.1".into(),
->>>>>>> 6e6e953 (release: bump workspace version to 0.2.1)
     })
     .unwrap_err();
     assert!(err.to_string().contains("executable exceeds maximum size"));
@@ -856,14 +832,10 @@ fn run_local_package_macos_fails_closed_until_archive_traversal_is_supported() {
         build_input_sha256: sha256(&bytes),
         source_commit: valid_source_commit(),
         output_root: output.clone(),
-<<<<<<< HEAD
-        version: "0.2.0".into(),
+        version: "0.2.1".into(),
         release_authority_key: None,
         preview_signed_at: None,
         preview_expires_at: None,
-=======
-        version: "0.2.1".into(),
->>>>>>> 6e6e953 (release: bump workspace version to 0.2.1)
     });
 
     let error = run_local_package(request, &executor).unwrap_err();
@@ -929,14 +901,10 @@ fn run_local_package_retains_staging_on_failure() {
         build_input_sha256: sha256(&bytes),
         source_commit: valid_source_commit(),
         output_root: output.clone(),
-<<<<<<< HEAD
-        version: "0.2.0".into(),
+        version: "0.2.1".into(),
         release_authority_key: None,
         preview_signed_at: None,
         preview_expires_at: None,
-=======
-        version: "0.2.1".into(),
->>>>>>> 6e6e953 (release: bump workspace version to 0.2.1)
     });
 
     assert!(run_local_package(request, &executor).is_err());
@@ -958,14 +926,10 @@ fn no_overwrite_of_existing_output_root_or_artifacts() {
         build_input_sha256: sha256(&bytes),
         source_commit: valid_source_commit(),
         output_root: output.clone(),
-<<<<<<< HEAD
-        version: "0.2.0".into(),
+        version: "0.2.1".into(),
         release_authority_key: None,
         preview_signed_at: None,
         preview_expires_at: None,
-=======
-        version: "0.2.1".into(),
->>>>>>> 6e6e953 (release: bump workspace version to 0.2.1)
     });
 
     let err = run_local_package(request, &RecordingExecutor::default()).unwrap_err();
@@ -1125,14 +1089,10 @@ fn json_receipt_hashes_bind_to_artifact_bytes() {
         build_input_sha256: sha256(&bytes),
         source_commit: valid_source_commit(),
         output_root: output.clone(),
-<<<<<<< HEAD
-        version: "0.2.0".into(),
+        version: "0.2.1".into(),
         release_authority_key: None,
         preview_signed_at: None,
         preview_expires_at: None,
-=======
-        version: "0.2.1".into(),
->>>>>>> 6e6e953 (release: bump workspace version to 0.2.1)
     });
 
     let error = run_local_package(request, &executor).unwrap_err();
@@ -1274,14 +1234,10 @@ fn rls005_macos_info_plist_has_no_builder_paths() {
         build_input_sha256: sha256(&bytes),
         source_commit: valid_source_commit(),
         output_root: output.clone(),
-<<<<<<< HEAD
-        version: "0.2.0".into(),
+        version: "0.2.1".into(),
         release_authority_key: None,
         preview_signed_at: None,
         preview_expires_at: None,
-=======
-        version: "0.2.1".into(),
->>>>>>> 6e6e953 (release: bump workspace version to 0.2.1)
     })
     .unwrap();
 
