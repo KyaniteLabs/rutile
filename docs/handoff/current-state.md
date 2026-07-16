@@ -6,6 +6,11 @@
 
 ## BLUF
 
+> **Safety update (2026-07-16):** 0.2.1 is withdrawn from dogfood. Its macOS
+> event loop continuously redrew at idle (97.7–99.2% CPU) and was observed once
+> at approximately 10 GB RSS. The redraw loop is fixed and a 180-second RSS/CPU
+> soak now gates macOS native verification; a replacement 0.2.2 preview is pending.
+
 Rutile **0.2.1 (internal/preview)** is merged on `main` (`5acb1cf`), tagged
 `v0.2.1`, and published as a Forgejo **pre-release** (id 353) — a macOS arm64
 DMG + `.app.zip`, ad-hoc signed, **unnotarized**. It is

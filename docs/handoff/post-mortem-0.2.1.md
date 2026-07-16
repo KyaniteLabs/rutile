@@ -37,30 +37,39 @@ usable preview and the #1 priority for the next agent.
 - **Dogfood set up**: Rutile installed to `/Applications/Rutile.app`, set as system
   default for `.md/.markdown/.mdown/.mkd` (reader + writer).
 
-## THE CRITICAL BUG — idle memory leak (~10 GB, freezes the machine)
+## THE CRITICAL BUG — pinned and fixed, replacement preview pending
 
-**Symptom:** Rutile, launched and left **idle with no document open** (the recovery
-prompt was showing), climbed to **~10 GB RSS** and froze the host. Reproduced
-during dogfood. A freeze-inducing leak → the preview is **unsafe for any tester**.
+**Observed symptom:** Rutile, launched and left **idle with no document open** (the
+recovery prompt was showing), climbed to **~10 GB RSS** and froze the host during
+dogfood. The 0.2.1 preview remains unsafe and release 353 is flagged
+`KNOWN CRITICAL ISSUE: idle memory leak — DO NOT RUN UNATTENDED`.
 
-**Ruled out** (investigated, not the cause):
-- Not the autosave tick — `AUTOSAVE_INTERVAL = 5s`, `ControlFlow::WaitUntil` (not `Poll`).
-- Not the editor/format/render queues — all drain (`editor_events.drain(..)`,
-  `format_commands.pop_front`, `drain_render_completions`).
-- Not a crash — process stays alive; nothing on stderr / unified log.
+**Pinned idle loop:** the suspected WKWebView render/IPC loop was not present:
+`process_preview_event` never schedules a render and `about_to_wait` only drains
+completed render work. The actual loop was native window redraw:
 
-**Strong suspect (unconfirmed — needs Instruments):** a **WKWebView/preview
-feedback loop** — `drain_render_completions` (`native.rs:236`) calls
-`webview.load_url(receipt.url)` per render receipt; WKWebView leaks on repeated
-loads. If a preview IPC event (`Painted`/`Scroll`/`BridgeReady`) re-triggers a
-render unconditionally (no revision gate on the idle path), the loop runs on every
-event wake and each `load_url` grows the webview heap without bound. **Not pinned**
-— a 10 GB idle leak must be confirmed with an allocation profiler.
+1. `about_to_wait` called `sync_window_title`.
+2. `sync_window_title` unconditionally called `window.request_redraw()`.
+3. `RedrawRequested` painted and returned to `about_to_wait`.
 
-**Why the gates missed it:** the W0-C bar (fmt/clippy/test) is static; the QA
-launch smoke runs **4 seconds**; the adversarial review was **static source
-review**. A leak that manifests over minutes of idle is invisible to all three.
-**Lesson: need a sustained soak/RAM-regression test in the gate.**
+The shipped binary therefore never reached its intended `ControlFlow::WaitUntil`;
+an empty idle launch measured **97.7–99.2% CPU**. Three guarded 180-second runs did
+not reproduce the original 10 GB RSS rise (RSS stayed near 150–160 MiB), so the
+exact allocation path behind that one observation remains unconfirmed. The
+continuous idle redraw defect itself is deterministic and sufficient to keep the
+unsafe preview withdrawn.
+
+**Fix:** cache the synchronized window title and request a redraw only when that
+title changes. Initial and state-change paints still occur; unchanged idle state
+does not enqueue another frame.
+
+**Regression gate:** `scripts/ci/macos-idle-soak.py` launches the real product for
+180 seconds under an isolated `HOME` and fails on RSS above 512 MiB, post-warmup
+growth above 128 MiB, or final idle CPU above 25%. It is part of
+`scripts/ci/macos-native-gate.sh`. The gate rejects shipped 0.2.1 at **97.7% CPU**
+and accepts the fixed release build at **0.0% final CPU**, **121.4 MiB baseline
+RSS**, and **147.5 MiB peak RSS**. The native lifecycle smoke and serialized W0-C
+bar also pass. A replacement 0.2.2 preview is still pending.
 
 ## The benign "error message" (not the freeze)
 
