@@ -4,7 +4,7 @@ max_entries = 256
 max_uncompressed_bytes = 67108864
 expected_license = "MIT"
 expected_version = "0.2.1"
-expected_source_commit = "6e6e953f95c74832feecf3295e930fc7071d7eeb"
+expected_source_commit = "0ab9e1817b296d3981a080c1fce4e09701531cc4"
 
 test_control_environment = [
   "FEATHERMARK_AUTOMATED_TEST",
