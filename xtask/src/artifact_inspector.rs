@@ -23,6 +23,7 @@ const MAX_POLICY_BYTES: u64 = 1024 * 1024;
 pub struct PolicyPaths {
     pub quarantine: PathBuf,
     pub policy: PathBuf,
+    pub pinned_release_authority_pubkey: PathBuf,
 }
 
 impl PolicyPaths {
@@ -33,6 +34,9 @@ impl PolicyPaths {
         Self {
             quarantine: root.join("release/quarantine-v1.json"),
             policy: root.join("release/policy/artifact-inspector-v1.toml"),
+            pinned_release_authority_pubkey:
+                crate::release_authority::default_pinned_public_key_path()
+                    .expect("default pinned public key path resolves under the workspace root"),
         }
     }
 }
@@ -190,6 +194,7 @@ pub struct ArtifactInspector {
     policy: InspectorPolicy,
     policy_sha256: String,
     quarantine_sha256: String,
+    pinned_release_authority_pubkey: PathBuf,
 }
 
 impl ArtifactInspector {
@@ -212,6 +217,7 @@ impl ArtifactInspector {
             policy,
             policy_sha256: hex::encode(Sha256::digest(&policy_bytes)),
             quarantine_sha256: hex::encode(Sha256::digest(&quarantine_bytes)),
+            pinned_release_authority_pubkey: paths.pinned_release_authority_pubkey.clone(),
         })
     }
 
@@ -332,7 +338,11 @@ impl ArtifactInspector {
         // finding — production_provenance_sha256 is never silently None.
         bind_provenance(&mut report, artifact, provenance);
         if mode == InspectionMode::Package {
-            verify_preview_authorization(artifact, &mut report);
+            verify_preview_authorization(
+                artifact,
+                &self.pinned_release_authority_pubkey,
+                &mut report,
+            );
         }
         report.complete_scan = !report.has(FindingCode::EntryLimitExceeded)
             && !report.has(FindingCode::ByteLimitExceeded)
@@ -665,18 +675,6 @@ impl ArtifactInspector {
             if entry.is_dir() {
                 continue;
             }
-            // Skip AppleDouble / __MACOSX metadata ditto emits alongside the app.
-            if name.starts_with("__MACOSX/") {
-                continue;
-            }
-            if name
-                .rsplit('/')
-                .next()
-                .map(|base| base.starts_with("._"))
-                .unwrap_or(false)
-            {
-                continue;
-            }
             if entry.is_symlink() {
                 push(report, FindingCode::LinkRejected, name.clone());
                 continue;
@@ -699,22 +697,32 @@ impl ArtifactInspector {
 
             report.entries_scanned += 1;
 
-            // Zip-bomb heuristic: reject extreme compression ratios.
-            let uncompressed = entry.size();
+            // Decompress into a bounded buffer (cap+1 so an entry exceeding the cap
+            // is DETECTED), then account for ACTUAL decompressed bytes — never the
+            // attacker-controlled zip size headers — and fail-closed on truncation.
+            let cap = self.policy.max_uncompressed_bytes;
+            // Read compressed_size before `take` (which moves the entry handle).
             let compressed = entry.compressed_size();
-            if compressed > 0 && uncompressed / compressed > 1000 {
+            let mut buf = Vec::new();
+            if let Err(error) = entry.take(cap.saturating_add(1)).read_to_end(&mut buf) {
+                push(report, FindingCode::ManifestMalformed, error.to_string());
+                continue;
+            }
+            let actual = buf.len() as u64;
+            if actual > cap {
+                // Entry decompresses past the per-entry cap: it was truncated, so a
+                // forbidden pattern beyond the cap would go unscanned. Fail closed.
+                report.uncompressed_bytes_scanned = cap;
                 push(
                     report,
                     FindingCode::ByteLimitExceeded,
-                    format!("compression ratio {uncompressed}/{compressed}"),
+                    format!("entry exceeds {cap} bytes (truncated)"),
                 );
                 break;
             }
-            let attempted = report
-                .uncompressed_bytes_scanned
-                .saturating_add(uncompressed);
-            if attempted > self.policy.max_uncompressed_bytes {
-                report.uncompressed_bytes_scanned = self.policy.max_uncompressed_bytes;
+            let attempted = report.uncompressed_bytes_scanned.saturating_add(actual);
+            if attempted > cap {
+                report.uncompressed_bytes_scanned = cap;
                 push(
                     report,
                     FindingCode::ByteLimitExceeded,
@@ -724,14 +732,19 @@ impl ArtifactInspector {
             }
             report.uncompressed_bytes_scanned = attempted;
 
-            let mut buf = Vec::new();
-            if let Err(error) = entry
-                .take(self.policy.max_uncompressed_bytes.saturating_add(1))
-                .read_to_end(&mut buf)
-            {
-                push(report, FindingCode::ManifestMalformed, error.to_string());
-                continue;
+            // Zip-bomb heuristic on ACTUAL decompressed bytes vs compressed bytes.
+            if compressed > 0 && actual / compressed > 1000 {
+                push(
+                    report,
+                    FindingCode::ByteLimitExceeded,
+                    format!("compression ratio {actual}/{compressed}"),
+                );
+                break;
             }
+
+            // __MACOSX/._* AppleDouble sidecars are scanned too: they encode xattrs
+            // verbatim and can carry builder paths/secrets, so exempting them would
+            // be a leak blind spot (the 0.2.0 quarantine class).
             self.scan_bytes(&buf, report);
 
             if relative == "Contents/MacOS/FeatherMark" {
@@ -896,7 +909,11 @@ fn is_dmg_archive(path: &Path) -> bool {
 /// report.preview_authorized when the release-authority signature is valid,
 /// bound to this artifact + its provenance, and not expired. Findings are
 /// provenance-class: recorded for evidence but do not block scan acceptance.
-fn verify_preview_authorization(artifact: &Path, report: &mut InspectionReport) {
+fn verify_preview_authorization(
+    artifact: &Path,
+    pinned_pubkey_path: &Path,
+    report: &mut InspectionReport,
+) {
     let sibling = preview_authorization_sibling(artifact);
     if !sibling.is_file() {
         push(
@@ -929,18 +946,10 @@ fn verify_preview_authorization(artifact: &Path, report: &mut InspectionReport) 
                 return;
             }
         };
-    let pinned_path = match crate::release_authority::pinned_public_key_path() {
-        Ok(path) => path,
-        Err(_) => {
-            push(
-                report,
-                FindingCode::PreviewAuthorityUntrusted,
-                "cannot resolve pinned release-authority key path",
-            );
-            return;
-        }
-    };
-    let pinned = match crate::release_authority::read_pinned_public_key(&pinned_path) {
+    // The pinned key is the inspector's committed trust anchor (selected via
+    // PolicyPaths at load time). It is NEVER read from the environment, so an
+    // attacker who controls the verifier process env cannot substitute it.
+    let pinned = match crate::release_authority::read_pinned_public_key(pinned_pubkey_path) {
         Ok(key) => key,
         Err(_) => {
             push(

@@ -44,6 +44,9 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 let inspector = ArtifactInspector::load(&PolicyPaths {
                     quarantine: quarantine.unwrap_or(defaults.quarantine),
                     policy: policy.unwrap_or(defaults.policy),
+                    pinned_release_authority_pubkey: defaults
+                        .pinned_release_authority_pubkey
+                        .clone(),
                 })?;
                 let (mode, requires_authorization) = match mode {
                     ArtifactInspectionMode::Candidate => (InspectionMode::Candidate, false),

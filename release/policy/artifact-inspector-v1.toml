@@ -3,8 +3,8 @@ version = 1
 max_entries = 256
 max_uncompressed_bytes = 67108864
 expected_license = "MIT"
-expected_version = "0.2.0"
-expected_source_commit = "119c02cdb27db01f328224143a8ed7c917a41815"
+expected_version = "0.2.1"
+expected_source_commit = "04203c39097d283a20411ad65b7b1f9b0e82e5bc"
 
 test_control_environment = [
   "FEATHERMARK_AUTOMATED_TEST",
@@ -30,7 +30,12 @@ forbidden_patterns = [
   "/Users/",
   "/home/",
   "/private/tmp/",
+  "/tmp/",
   "/var/folders/",
+  "/build/",
+  "/builder/",
+  "/runner/",
+  "/workspace/",
   "CARGO_MANIFEST_DIR=",
   "BEGIN PRIVATE KEY",
   "Authorization: Bearer ",
