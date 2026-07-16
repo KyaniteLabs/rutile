@@ -8,19 +8,20 @@
 
 > **Safety update (2026-07-16):** 0.2.1 is withdrawn from dogfood. Its macOS
 > event loop continuously redrew at idle (97.7–99.2% CPU) and was observed once
-> at approximately 10 GB RSS. The redraw loop is fixed and a 180-second RSS/CPU
-> soak now gates macOS native verification; a replacement 0.2.2 preview is pending.
+> at approximately 10 GB RSS. The loop is fixed in 0.2.2 and a 180-second
+> RSS/CPU soak now gates macOS native verification.
 
-Rutile **0.2.1 (internal/preview)** is merged on `main` (`5acb1cf`), tagged
-`v0.2.1`, and published as a Forgejo **pre-release** (id 353) — a macOS arm64
-DMG + `.app.zip`, ad-hoc signed, **unnotarized**. It is
-**`preview_authorized`, NOT `publication_authorized`**: the 14 external
-release-prerequisite blockers (`release/evidence/release-prerequisite-preflight-v1.json`,
-`ready:false`) remain out of scope by design.
+Rutile **0.2.2 (internal/preview)** is merged on `main` (`74df96c`), tagged
+`v0.2.2`, and published as Forgejo **pre-release 354** — a macOS arm64 DMG +
+`.app.zip`, ad-hoc signed, **unnotarized**. It is `preview_authorized`, NOT
+`publication_authorized`: the 14 external release-prerequisite blockers
+(`release/evidence/release-prerequisite-preflight-v1.json`, `ready:false`)
+remain out of scope by design. The unsafe 0.2.1 release 353 remains warning-
+flagged and must not be run unattended.
 
 The 0.2.0 packages are **quarantined** (`release/quarantine-v1.json`) — the
 2026-07-12 audit found `test-control` in the Linux binaries and builder paths in
-both. They are historical evidence only; **0.2.1 supersedes them** (path-remapped
+both. They are historical evidence only; **0.2.2 supersedes them** (path-remapped
 via `xtask reproducible-build`, leak-audited by the artifact inspector).
 
 This release also lands the **Wave-3 preview-tier publication pipeline** (PR #36,
@@ -31,13 +32,14 @@ is met. It went through an adversarial triple-check (see debt §C).
 
 ## Repository and release state
 
-- Branch: `main` (`5acb1cf`)
-- Release merge: `5acb1cf` (squash of `release/0.2.1`, PR #37)
+- Branch: `main` (`74df96c`)
+- Idle-loop fix merge: `68a16cb` (PR #41)
+- Release merge: `74df96c` (squash of `release/0.2.2`, PR #42)
 - Pipeline merge: `ec51f53` (PR #36)
-- Release tag: `v0.2.1` → `5acb1cf` (annotated); build source commit `04203c3`
-- Forgejo pre-release: id 353 (`/releases/tag/v0.2.1`, `is_prerelease`); assets
-  `Rutile-0.2.1-macos-arm64.dmg` + `.app.zip` + manifest + provenance + 2 preview-authorizations
-- Workspace/crate version: `0.2.1`
+- Release tag: `v0.2.2` → `74df96c` (annotated); build source commit `6d8f53c`
+- Forgejo pre-release: id 354 (`/releases/tag/v0.2.2`, `prerelease:true`); assets
+  `Rutile-0.2.2-macos-arm64.dmg` + `.app.zip` + manifests + provenance + 2 preview-authorizations
+- Workspace/crate version: `0.2.2`
 - Rust toolchain: `1.88.0`, edition 2024
 - **Release-authority key**: public pinned at `release/keys/release-authority-v1.pub.hex`
   (`8a178c0c…`); **secret is operator-owned, off-repo (0600), never committed.**
@@ -57,20 +59,23 @@ shipped (CY-A11Y-001): window/editor-text/toolbar/notice exposed to VoiceOver.
 
 ## Verification and artifacts
 
-- **0.2.1 preview e2e** (production path, this session): `reproducible-build` →
-  `package local macos --release-authority-key` → `artifact inspect --mode package`
-  = `accepted + preview_authorized:true, publication_authorized:false`, zero
-  findings, leak-clean, on both DMG and `.app.zip`. The shipped DMG **launches**
-  (QA: `open -n` → process alive; `hdiutil verify` VALID; `codesign --verify --strict` passes).
-- **W0-C bar** green on `main`: `cargo fmt --check` / `cargo clippy --workspace
-  --all-targets --locked -- -D warnings` / `cargo test -p xtask --all-targets` (16 suites).
+- **0.2.2 preview e2e** (production path): `reproducible-build` → signed
+  `package local macos` → `artifact inspect --mode package` =
+  `accepted + preview_authorized:true, publication_authorized:false`, zero
+  findings on both DMG and `.app.zip`.
+- **Packaged soak:** 180 seconds idle, 140.0 MiB baseline/peak RSS and 0.0% final
+  CPU. The same gate rejects shipped 0.2.1 at 97.7% final idle CPU.
+- **Native QA:** 50-cycle lifecycle smoke passes; `hdiutil verify` reports VALID;
+  `codesign --verify --deep --strict` passes.
+- **W0-C bar** green for 0.2.2: `cargo fmt --check` / `cargo clippy --workspace
+  --all-targets --locked -- -D warnings` / `cargo test -p xtask --all-targets`.
 - Forgejo CI workflows present: `.forgejo/workflows/{verify,release}.yml`.
 - 0.2.0 receipts remain at `docs/handoff/local-beta-0.2.0.md` + `docs/evidence/local-beta-0.2.0/`
   (historical; their packages are quarantined).
 
 ## Known debt
 
-### A. Product-behavior debt — re-verified 2026-07-16 against 0.2.1 code
+### A. Product-behavior debt — re-verified 2026-07-16 against 0.2.2 code
 
 **Resolved by the remediation** (each backed by file:line evidence + tests):
 - ✅ macOS save semantics (untitled Cmd-S, save-failure exit, swallowed Cmd
