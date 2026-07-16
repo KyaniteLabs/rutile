@@ -88,7 +88,14 @@ test_control_environment = ["RUTILE_TEST_CONTROL", "FEATHERMARK_TEST_CONTROL"]
 "#,
     )
     .unwrap();
-    PolicyPaths { quarantine, policy }
+    PolicyPaths {
+        quarantine,
+        policy,
+        // Default to a non-existent pinned-key path: tests that do not exercise
+        // preview authorization never read it (verify_preview_authorization returns
+        // early on a missing sibling). The preview-authorized test overrides it.
+        pinned_release_authority_pubkey: root.join("release-authority.pub.hex"),
+    }
 }
 
 /// Write a zip archive at `path` containing the given `(entry-name, bytes)` pairs.
@@ -175,12 +182,13 @@ fn zip_reader_rejects_forbidden_pattern_in_a_zipped_entry() {
 }
 
 #[test]
-fn zip_reader_skips_macosx_appledouble_metadata() {
+fn zip_reader_scans_macosx_appledouble_metadata() {
     let root = tempdir().unwrap();
     let zip_path = root.path().join("Rutile-0.2.0-macos-arm64.app.zip");
     let mut entries = clean_app_zip_entries();
-    // ditto emits __MACOSX/._* AppleDouble metadata; a forbidden pattern there
-    // must NOT be flagged (archive-level metadata, not app content).
+    // ditto emits __MACOSX/._* AppleDouble sidecars that encode xattrs verbatim;
+    // a forbidden pattern there (a real leak vector) MUST be flagged and block
+    // acceptance — exempting them would be a leak blind spot.
     entries.push((
         "__MACOSX/Rutile.app/Contents/Resources/._leaked.txt",
         b"RUTILE_TEST_CONTROL".to_vec(),
@@ -193,9 +201,8 @@ fn zip_reader_skips_macosx_appledouble_metadata() {
             .unwrap()
             .inspect(&zip_path, InspectionMode::Package, None);
 
-    assert!(!report.has(FindingCode::TestControlMarker));
-    assert!(report.has(FindingCode::ProvenanceMissing));
-    assert!(report.accepted);
+    assert!(report.has(FindingCode::TestControlMarker));
+    assert!(!report.accepted);
 }
 
 #[cfg(target_os = "macos")]
@@ -258,13 +265,10 @@ fn preview_authorized_succeeds_with_signed_sibling_and_pinned_key() {
     let pub_hex = hex::encode(signing.verifying_key().to_bytes());
 
     let root = tempdir().unwrap();
-    // Pin the public key via the env override (avoids touching the repo key file).
+    // Pin the throwaway public key via PolicyPaths (production reads the committed
+    // key; tests inject an explicit path — never an environment override).
     let pubkey_path = root.path().join("release-authority.pub.hex");
     fs::write(&pubkey_path, &pub_hex).unwrap();
-    // SAFETY: this test is the sole reader/writer of this env var.
-    unsafe {
-        std::env::set_var("FEATHERMARK_RELEASE_AUTHORITY_PUBKEY", &pubkey_path);
-    }
 
     let zip_path = root.path().join("Rutile-0.2.0-macos-arm64.app.zip");
     write_zip(&zip_path, &clean_app_zip_entries());
@@ -295,16 +299,12 @@ fn preview_authorized_succeeds_with_signed_sibling_and_pinned_key() {
         .join("Rutile-0.2.0-macos-arm64.app.zip.preview-authorization.json");
     fs::write(&auth_path, serde_json::to_string(&record).unwrap()).unwrap();
 
-    let paths = write_policy(root.path(), &[]);
+    let mut paths = write_policy(root.path(), &[]);
+    paths.pinned_release_authority_pubkey = pubkey_path;
     let report =
         ArtifactInspector::load(&paths)
             .unwrap()
             .inspect(&zip_path, InspectionMode::Package, None);
-
-    // SAFETY: sole writer of this env var.
-    unsafe {
-        std::env::remove_var("FEATHERMARK_RELEASE_AUTHORITY_PUBKEY");
-    }
 
     assert!(report.accepted);
     assert!(report.preview_authorized);

@@ -53,11 +53,9 @@ fn workspace_root() -> Result<PathBuf, ReproducibleBuildError> {
 /// Capture `SOURCE_DATE_EPOCH` from `git log -1 --format=%ct HEAD` using the
 /// audited tool-process owner (trusted git path, hermetic config).
 pub fn git_commit_date(root: &Path) -> Result<String, ReproducibleBuildError> {
-    let output =
-        tool_process::git(root, &["log", "-1", "--format=%ct", "HEAD"], &[]).map_err(|e| {
-            ReproducibleBuildError::GitDate {
-                detail: e.to_string(),
-            }
+    let output = tool_process::git_isolated(root, &["log", "-1", "--format=%ct", "HEAD"], &[])
+        .map_err(|e| ReproducibleBuildError::GitDate {
+            detail: e.to_string(),
         })?;
     if !output.status.success() {
         return Err(ReproducibleBuildError::GitDate {

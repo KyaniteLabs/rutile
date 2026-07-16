@@ -239,13 +239,12 @@ pub fn keygen() -> Result<(String, String, String), ReleaseAuthorityError> {
     ))
 }
 
-/// Resolve the pinned public key path: the `FEATHERMARK_RELEASE_AUTHORITY_PUBKEY`
-/// env var if set (used by tests), else `release/keys/release-authority-v1.pub.hex`
-/// relative to the workspace root.
-pub fn pinned_public_key_path() -> Result<PathBuf, ReleaseAuthorityError> {
-    if let Ok(path) = std::env::var("FEATHERMARK_RELEASE_AUTHORITY_PUBKEY") {
-        return Ok(PathBuf::from(path));
-    }
+/// Resolve the default pinned public key path: `release/keys/release-authority-v1.pub.hex`
+/// relative to the workspace root. NEVER honors an environment override in production —
+/// the pinned key is a committed trust anchor selected via `PolicyPaths` (tests inject an
+/// explicit path there), so an attacker who controls the verifier process environment
+/// cannot substitute the release-authority root of trust.
+pub fn default_pinned_public_key_path() -> Result<PathBuf, ReleaseAuthorityError> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .ok_or_else(|| ReleaseAuthorityError::Crypto("cannot resolve workspace root".into()))?;
@@ -271,6 +270,10 @@ pub fn iso8601_to_unix(iso: &str) -> Option<i64> {
         || b[13] != b':'
         || b[16] != b':'
         || b[19] != b'Z'
+        || !(b[0].is_ascii_digit()
+            && b[1].is_ascii_digit()
+            && b[2].is_ascii_digit()
+            && b[3].is_ascii_digit())
     {
         return None;
     }

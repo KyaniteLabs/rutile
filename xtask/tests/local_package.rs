@@ -59,7 +59,12 @@ test_control_environment = ["RUTILE_TEST_CONTROL"]
 "#,
     )
     .unwrap();
-    let inspector = ArtifactInspector::load(&PolicyPaths { quarantine, policy }).unwrap();
+    let inspector = ArtifactInspector::load(&PolicyPaths {
+        quarantine,
+        policy,
+        pinned_release_authority_pubkey: temporary.path().join("no-key.pub"),
+    })
+    .unwrap();
 
     let report = inspector.inspect(&candidate, InspectionMode::Candidate, None);
 
@@ -98,7 +103,12 @@ test_control_environment = ["RUTILE_TEST_CONTROL"]
 "#,
     )
     .unwrap();
-    let inspector = ArtifactInspector::load(&PolicyPaths { quarantine, policy }).unwrap();
+    let inspector = ArtifactInspector::load(&PolicyPaths {
+        quarantine,
+        policy,
+        pinned_release_authority_pubkey: temporary.path().join("no-key.pub"),
+    })
+    .unwrap();
     let output = temporary.path().join("must-not-exist");
     let request = LocalPackageCliRequest::Macos(MacPackageRequest {
         candidate,
