@@ -1,6 +1,6 @@
 [package]
 name = "macos-egui-wry-spike"
-version = "0.2.1"
+version = "0.2.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -15,4 +15,4 @@ macos-egui = []
 test-control = []
 
 [dependencies]
-feathermark-spike-support = { path = "../feathermark-spike-support", version = "=0.2.1" }
+feathermark-spike-support = { path = "../feathermark-spike-support", version = "=0.2.2" }

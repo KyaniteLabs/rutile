@@ -314,7 +314,7 @@ mod tests {
             provenance_sha256: "b".repeat(64),
             tier: PREVIEW_TIER.into(),
             product: "feathermark".into(),
-            version_label: "0.2.1".into(),
+            version_label: "0.2.2".into(),
             signed_at: "2026-07-15T00:00:00Z".into(),
             expires_at: "2027-07-15T00:00:00Z".into(),
         }

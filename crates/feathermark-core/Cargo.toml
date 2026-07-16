@@ -1,13 +1,13 @@
 [package]
 name = "feathermark-core"
-version = "0.2.1"
+version = "0.2.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
 blake3.workspace = true
-feathermark-types = { path = "../feathermark-types", version = "=0.2.1" }
+feathermark-types = { path = "../feathermark-types", version = "=0.2.2" }
 fs2 = "=0.4.3"
 html-escape.workspace = true
 libc.workspace = true
