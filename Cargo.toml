@@ -27,7 +27,7 @@ license = "MIT"
 blake3 = "=1.8.2"
 clap = { version = "=4.5.41", features = ["derive", "env"] }
 ed25519-dalek = "=2.1.1"
-feathermark-protocol = { path = "crates/feathermark-protocol", version = "=0.2.0" }
+feathermark-protocol = { path = "crates/feathermark-protocol", version = "=0.2.1" }
 hex = "=0.4.3"
 getrandom = "=0.3.3"
 html-escape = "=0.2.13"
