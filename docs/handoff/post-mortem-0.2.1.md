@@ -67,9 +67,10 @@ does not enqueue another frame.
 180 seconds under an isolated `HOME` and fails on RSS above 512 MiB, post-warmup
 growth above 128 MiB, or final idle CPU above 25%. It is part of
 `scripts/ci/macos-native-gate.sh`. The gate rejects shipped 0.2.1 at **97.7% CPU**
-and accepts the fixed release build at **0.0% final CPU**, **121.4 MiB baseline
-RSS**, and **147.5 MiB peak RSS**. The native lifecycle smoke and serialized W0-C
-bar also pass. A replacement 0.2.2 preview is still pending.
+and accepts the packaged 0.2.2 build at **0.0% final CPU** and **140.0 MiB peak
+RSS**. The native 50-cycle lifecycle smoke, strict codesign check, DMG
+verification, artifact inspection, and serialized W0-C bar also pass. Replacement
+preview 0.2.2 is published as Forgejo pre-release 354.
 
 ## The benign "error message" (not the freeze)
 
@@ -84,19 +85,14 @@ the stale autosaves to dismiss it. **Not related to the leak.**
 
 ## Known debt (prioritized for the next agent)
 
-1. **[CRITICAL] The idle memory leak** — pin with Instruments, fix (likely:
-   revision-gate the preview `load_url`; ensure WKWebView releases between loads),
-   add a soak/RAM regression test, verify RSS stays bounded over minutes.
-2. **Flag/pull Forgejo pre-release 353** — it has the leak; unsafe for testers.
-3. **Clear stale autosaves** (`~/Library/Application Support/Rutile/autosave-*`).
-4. **Deferred in-repo items:** #1 macOS recovery NSAlert/action-dialog (AppKit +
-   headless-test-fragile); #3 macOS `application:openURLs:` second-launch delegate
+1. **Deferred in-repo items:** macOS recovery NSAlert/action-dialog (AppKit +
+   headless-test-fragile); macOS `application:openURLs:` second-launch delegate
    (**winit-blocked** — winit 0.30.13 owns `WinitApplicationDelegate`); ~24 Linux
    transient-title error sites; `candidate_sha256`↔manifest bind (muddied by
    pre/post-codesign hash difference).
-5. **A11y** (evidence-debt): interactive VoiceOver/AT-SPI/keyboard-only validation
+2. **A11y** (evidence-debt): interactive VoiceOver/AT-SPI/keyboard-only validation
    (ED-A11Y-1..4) + residual accesskit gaps.
-6. **14 external release blockers** (`preflight ready:false`): Apple Developer ID +
+3. **14 external release blockers** (`preflight ready:false`): Apple Developer ID +
    notarization, Linux GPG, trusted verifier, dedicated runners + clean-install
    hosts, etc. = the full-public-release effort.
 
@@ -115,7 +111,8 @@ the stale autosaves to dismiss it. **Not related to the leak.**
 
 ## State snapshot
 
-- `main` `6c0363a`; `release/0.2.1` branch preserved; all PRs (#36-#39) merged.
+- `main` `74df96c`; `v0.2.2` and Forgejo pre-release 354 published; PR #40 was
+  superseded by merged PR #41, and release PR #42 is merged.
 - Release-authority key: pubkey committed; secret at `~/.config/feathermark/...` (0600).
 - `publication_authorized` stays `false`; 14 blockers untouched.
-- Rutile currently set as the system `.md` default; **all instances killed** after the freeze.
+- Unsafe 0.2.1 instances were killed; stale autosaves were cleared.
