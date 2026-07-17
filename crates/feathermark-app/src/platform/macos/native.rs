@@ -2473,14 +2473,22 @@ impl IcedSourcePane {
             &mut self.clipboard,
             &mut messages,
         );
+        let ui_requests_redraw = match &ui_state {
+            user_interface::State::Outdated => true,
+            user_interface::State::Updated { redraw_request, .. } => {
+                !matches!(redraw_request, core::window::RedrawRequest::Wait)
+            }
+        };
         self.cache = interface.into_cache();
 
         let mut changed = false;
+        let mut input_method_changed = false;
         let input_commit = events.iter().find_map(|event| match event {
             core::Event::InputMethod(core::input_method::Event::Commit(text)) => Some(text.clone()),
             _ => None,
         });
         for event in events {
+            input_method_changed |= matches!(event, core::Event::InputMethod(_));
             match event {
                 core::Event::InputMethod(core::input_method::Event::Opened) => {
                     if self.state.editor.start_composition().is_err() {
@@ -2554,7 +2562,9 @@ impl IcedSourcePane {
                 }
             }
         }
-        self.request_redraw();
+        if changed || input_method_changed || ui_requests_redraw {
+            self.request_redraw();
+        }
         Ok(changed)
     }
 
