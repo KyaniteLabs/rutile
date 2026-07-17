@@ -74,6 +74,17 @@ pub enum FindingCode {
     PreviewAuthorizationBindingMismatch,
     PreviewAuthorizationExpired,
     PreviewAuthorityUntrusted,
+    BuildInputHashMissing,
+    BuildInputHashMalformed,
+    PackagedExecutableHashMissing,
+    PackagedExecutableHashMalformed,
+    PackagedExecutableHashMismatch,
+    ProvenanceCandidateHashMalformed,
+    ProvenanceCandidateMismatch,
+    ArtifactManifestMissing,
+    ArtifactManifestMalformed,
+    ArtifactManifestArtifactMismatch,
+    ArtifactManifestArtifactHashMismatch,
 }
 
 impl FindingCode {
@@ -102,6 +113,19 @@ impl FindingCode {
             Self::PreviewAuthorizationBindingMismatch => "preview_authorization_binding_mismatch",
             Self::PreviewAuthorizationExpired => "preview_authorization_expired",
             Self::PreviewAuthorityUntrusted => "preview_authority_untrusted",
+            Self::BuildInputHashMissing => "build_input_hash_missing",
+            Self::BuildInputHashMalformed => "build_input_hash_malformed",
+            Self::PackagedExecutableHashMissing => "packaged_executable_hash_missing",
+            Self::PackagedExecutableHashMalformed => "packaged_executable_hash_malformed",
+            Self::PackagedExecutableHashMismatch => "packaged_executable_hash_mismatch",
+            Self::ProvenanceCandidateHashMalformed => "provenance_candidate_hash_malformed",
+            Self::ProvenanceCandidateMismatch => "provenance_candidate_mismatch",
+            Self::ArtifactManifestMissing => "artifact_manifest_missing",
+            Self::ArtifactManifestMalformed => "artifact_manifest_malformed",
+            Self::ArtifactManifestArtifactMismatch => "artifact_manifest_artifact_mismatch",
+            Self::ArtifactManifestArtifactHashMismatch => {
+                "artifact_manifest_artifact_hash_mismatch"
+            }
         }
     }
 }
@@ -122,6 +146,9 @@ pub struct InspectionReport {
     pub quarantine_sha256: String,
     pub artifact_sha256: Option<String>,
     pub production_provenance_sha256: Option<String>,
+    pub manifest_build_input_sha256: Option<String>,
+    pub manifest_packaged_executable_sha256: Option<String>,
+    pub inspected_executable_sha256: Option<String>,
     pub complete_scan: bool,
     pub accepted: bool,
     pub publication_authorized: bool,
@@ -236,6 +263,9 @@ impl ArtifactInspector {
             quarantine_sha256: self.quarantine_sha256.clone(),
             artifact_sha256: None,
             production_provenance_sha256: None,
+            manifest_build_input_sha256: None,
+            manifest_packaged_executable_sha256: None,
+            inspected_executable_sha256: None,
             complete_scan: false,
             accepted: false,
             publication_authorized: false,
@@ -332,12 +362,24 @@ impl ArtifactInspector {
             report.artifact_kind = "directory";
             self.inspect_directory(artifact, mode, &mut report);
         }
+        // Package mode: load the authoritative sibling artifact manifest
+        // BEFORE provenance binding. The sibling manifest is written by the
+        // packaging CLI after signing and carries the authoritative post-sign
+        // packaged_executable_sha256 (the embedded manifest is pre-sign). Both
+        // codesign-aware binding links depend on these sibling-sourced hashes.
+        if mode == InspectionMode::Package {
+            bind_artifact_manifest(&mut report, artifact);
+        }
         // Bind production provenance: load a provided provenance file or look
         // for a sibling (artifact + ".provenance.json").  For a production
         // artifact (any mode), missing or invalid provenance is a fail-closed
         // finding — production_provenance_sha256 is never silently None.
         bind_provenance(&mut report, artifact, provenance);
         if mode == InspectionMode::Package {
+            // Codesign-aware binding chain link 2: the executable hash measured
+            // from the actual package must equal the manifest's claim. This is
+            // a fail-closed package-integrity check that blocks acceptance.
+            verify_packaged_executable_binding(&mut report);
             verify_preview_authorization(
                 artifact,
                 &self.pinned_release_authority_pubkey,
@@ -404,6 +446,7 @@ impl ArtifactInspector {
     ) {
         let mut manifests = Vec::new();
         let mut executables = 0_u64;
+        let mut executable_path: Option<PathBuf> = None;
         for entry in WalkDir::new(artifact).follow_links(false) {
             let entry = match entry {
                 Ok(entry) => entry,
@@ -453,6 +496,9 @@ impl ArtifactInspector {
             let relative = relative_subject(artifact, entry.path());
             if relative == "Contents/MacOS/FeatherMark" || relative == "bin/feathermark" {
                 executables += 1;
+                if executable_path.is_none() {
+                    executable_path = Some(entry.path().to_owned());
+                }
             }
             if let Err(error) = self.scan_file(entry.path(), report) {
                 push(report, FindingCode::ManifestMalformed, error.to_string());
@@ -474,6 +520,14 @@ impl ArtifactInspector {
                 );
             } else {
                 self.inspect_manifest(artifact, &manifests[0], report);
+            }
+            // Measure the actual packaged-executable SHA-256 for the codesign-
+            // aware binding chain (compared to manifest_packaged_executable_sha256
+            // by verify_packaged_executable_binding after the scan completes).
+            if let Some(path) = &executable_path {
+                if let Ok((digest, _)) = hash_regular_file(path) {
+                    report.inspected_executable_sha256 = Some(digest);
+                }
             }
         }
     }
@@ -572,6 +626,13 @@ impl ArtifactInspector {
                 );
             }
         }
+        // NOTE: build_input_sha256 and packaged_executable_sha256 are NOT
+        // sourced from this embedded manifest. On macOS the embedded manifest
+        // is written pre-sign and carries stale executable hashes; the
+        // authoritative post-sign hashes live in the sibling
+        // `<artifact>.manifest-v1.json` (see bind_artifact_manifest). The
+        // embedded manifest is used only for license/version/source-commit
+        // and platform metadata checks.
     }
 
     /// macOS platform-metadata check on Info.plist bytes: CFBundleIdentifier,
@@ -672,6 +733,7 @@ impl ArtifactInspector {
         let mut manifests: Vec<Vec<u8>> = Vec::new();
         let mut info_plist: Option<Vec<u8>> = None;
         let mut executables = 0_u64;
+        let mut executable_bytes: Option<Vec<u8>> = None;
         let mut top_prefix: Option<String> = None;
 
         for index in 0..archive.len() {
@@ -768,6 +830,9 @@ impl ArtifactInspector {
 
             if relative == "Contents/MacOS/FeatherMark" {
                 executables += 1;
+                if executable_bytes.is_none() {
+                    executable_bytes = Some(buf.clone());
+                }
             }
             if relative == "Contents/Resources/package-manifest-v1.json" {
                 manifests.push(buf);
@@ -806,6 +871,12 @@ impl ArtifactInspector {
                         "package integration",
                     );
                 }
+            }
+            // Measure the actual packaged-executable SHA-256 for the codesign-
+            // aware binding chain (compared to manifest_packaged_executable_sha256
+            // by verify_packaged_executable_binding after the scan completes).
+            if let Some(bytes) = &executable_bytes {
+                report.inspected_executable_sha256 = Some(hex::encode(Sha256::digest(bytes)));
             }
         }
     }
@@ -1274,8 +1345,228 @@ fn bind_provenance(report: &mut InspectionReport, artifact: &Path, provenance: O
         return;
     }
 
+    // Require a valid candidate_sha256 — this is the measured hash of the
+    // pre-sign build input and the verification anchor for the codesign-aware
+    // binding chain. A missing or malformed candidate hash means the record
+    // cannot bind to any package, so it is fail-closed unbound.
+    let candidate_sha = value
+        .get("candidate_sha256")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if !valid_sha256(candidate_sha) {
+        push(
+            report,
+            FindingCode::ProvenanceCandidateHashMalformed,
+            "provenance candidate_sha256",
+        );
+        return;
+    }
+
+    // Require the reproducibility assertion boundary to be explicit: the
+    // controls_origin field must be present and one of the enumerated values
+    // so a self-injected re-derivation cannot masquerade as an independent
+    // build-environment measurement.
+    let controls_origin = value
+        .get("reproducibility")
+        .and_then(|r| r.get("controls_origin"))
+        .and_then(|v| v.as_str());
+    if !matches!(
+        controls_origin,
+        Some("ambient_build_env") | Some("operator_re_derivation")
+    ) {
+        push(
+            report,
+            FindingCode::ProvenanceInvalid,
+            "provenance reproducibility.controls_origin must be ambient_build_env or operator_re_derivation",
+        );
+        return;
+    }
+
+    // Codesign-aware binding chain link 1: the provenance candidate (pre-sign
+    // build input) must equal the manifest's build_input_sha256. This link is
+    // only checked in Package mode where a manifest was parsed. NEVER compare
+    // candidate_sha256 directly to packaged_executable_sha256 — on macOS the
+    // signing step mutates the executable, so the two hashes legitimately differ.
+    if let Some(build_input) = &report.manifest_build_input_sha256 {
+        if build_input != candidate_sha {
+            push(
+                report,
+                FindingCode::ProvenanceCandidateMismatch,
+                "provenance candidate_sha256 != manifest build_input_sha256",
+            );
+        }
+    }
+
     let digest = hex::encode(Sha256::digest(&bytes));
     report.production_provenance_sha256 = Some(digest);
+}
+
+/// Load and validate the authoritative sibling artifact manifest
+/// (`<artifact>.manifest-v1.json`). This external manifest is written by the
+/// packaging CLI AFTER signing, so its `packaged_executable_sha256` reflects
+/// the post-sign executable hash. The embedded manifest inside the package is
+/// pre-sign and is kept only for license/version/source/platform checks.
+///
+/// Validates: regular file, valid JSON, expected schema, `artifact` filename
+/// matches the inspected artifact, and `artifact_sha256` matches the inspector's
+/// measured whole-artifact hash (when available). Then sources
+/// `build_input_sha256` and `packaged_executable_sha256` into the report for
+/// the codesign-aware binding chain.
+fn bind_artifact_manifest(report: &mut InspectionReport, artifact: &Path) {
+    let sibling = artifact_manifest_sibling(artifact);
+    if !sibling.is_file() {
+        push(
+            report,
+            FindingCode::ArtifactManifestMissing,
+            "no sibling artifact manifest",
+        );
+        return;
+    }
+    let bytes = match fs::read(&sibling) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            push(
+                report,
+                FindingCode::ArtifactManifestMalformed,
+                error.to_string(),
+            );
+            return;
+        }
+    };
+    let value: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(value) => value,
+        Err(error) => {
+            push(
+                report,
+                FindingCode::ArtifactManifestMalformed,
+                error.to_string(),
+            );
+            return;
+        }
+    };
+    if value.get("schema").and_then(|v| v.as_str()) != Some("feathermark-local-artifact-v1") {
+        push(
+            report,
+            FindingCode::ArtifactManifestMalformed,
+            "sibling manifest is not a feathermark-local-artifact-v1 record",
+        );
+        return;
+    }
+    // The artifact filename in the manifest must match the inspected artifact.
+    let artifact_name = artifact.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let manifest_artifact = value.get("artifact").and_then(|v| v.as_str()).unwrap_or("");
+    if manifest_artifact != artifact_name {
+        push(
+            report,
+            FindingCode::ArtifactManifestArtifactMismatch,
+            "sibling manifest artifact != inspected artifact filename",
+        );
+        return;
+    }
+    // The artifact_sha256 must match the whole-artifact hash the inspector
+    // measured. For regular-file artifacts (zip/dmg) this is always available;
+    // for directory artifacts it is None and the check is skipped.
+    let manifest_artifact_sha = value
+        .get("artifact_sha256")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if let Some(inspected_sha) = &report.artifact_sha256 {
+        if !valid_sha256(manifest_artifact_sha) {
+            push(
+                report,
+                FindingCode::ArtifactManifestMalformed,
+                "sibling manifest artifact_sha256 missing or malformed",
+            );
+            return;
+        }
+        if manifest_artifact_sha != inspected_sha {
+            push(
+                report,
+                FindingCode::ArtifactManifestArtifactHashMismatch,
+                "sibling manifest artifact_sha256 != inspected artifact sha256",
+            );
+            return;
+        }
+    }
+    // Source the codesign-aware binding-chain hashes from the authoritative
+    // sibling manifest (post-sign for macOS packages).
+    let build_input = value
+        .get("build_input_sha256")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if build_input.is_empty() {
+        push(
+            report,
+            FindingCode::BuildInputHashMissing,
+            "sibling artifact manifest",
+        );
+    } else if !valid_sha256(build_input) {
+        push(
+            report,
+            FindingCode::BuildInputHashMalformed,
+            "sibling artifact manifest",
+        );
+    } else {
+        report.manifest_build_input_sha256 = Some(build_input.to_string());
+    }
+    let packaged_exec = value
+        .get("packaged_executable_sha256")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if packaged_exec.is_empty() {
+        push(
+            report,
+            FindingCode::PackagedExecutableHashMissing,
+            "sibling artifact manifest",
+        );
+    } else if !valid_sha256(packaged_exec) {
+        push(
+            report,
+            FindingCode::PackagedExecutableHashMalformed,
+            "sibling artifact manifest",
+        );
+    } else {
+        report.manifest_packaged_executable_sha256 = Some(packaged_exec.to_string());
+    }
+}
+
+/// Construct the sibling artifact-manifest path:
+/// `<artifact>.manifest-v1.json` in the same directory as the artifact.
+fn artifact_manifest_sibling(artifact: &Path) -> PathBuf {
+    let mut name = artifact
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
+    name.push(".manifest-v1.json");
+    artifact
+        .parent()
+        .map(|p| p.join(&name))
+        .unwrap_or_else(|| PathBuf::from(&name))
+}
+
+/// Codesign-aware binding chain link 2: verify that the executable hash measured
+/// by the inspector from the actual package matches the manifest's
+/// `packaged_executable_sha256` claim. This is a fail-closed package-integrity
+/// check — a mismatch means the manifest lied about the packaged executable.
+///
+/// Only runs in Package mode where both the manifest hash and the inspected
+/// executable hash were populated during the scan. If either side is absent
+/// (missing manifest or no executable found), the check is skipped: those
+/// conditions are already flagged by `ManifestMissing` / `ExecutableCountMismatch`.
+fn verify_packaged_executable_binding(report: &mut InspectionReport) {
+    let (Some(manifest_hash), Some(inspected_hash)) = (
+        &report.manifest_packaged_executable_sha256,
+        &report.inspected_executable_sha256,
+    ) else {
+        return;
+    };
+    if manifest_hash != inspected_hash {
+        push(
+            report,
+            FindingCode::PackagedExecutableHashMismatch,
+            "inspected executable sha256 != manifest packaged_executable_sha256",
+        );
+    }
 }
 
 /// Construct the sibling provenance path: `<artifact>.provenance.json` in the

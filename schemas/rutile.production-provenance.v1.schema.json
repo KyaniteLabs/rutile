@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://feathermark.local/schemas/rutile.production-provenance.v1.schema.json",
   "title": "Rutile production provenance v1",
-  "description": "Derived build provenance binding a production candidate to its source tree, toolchain, exact enabled cargo features, reproducibility controls, and candidate artifact hash. Every field is measured from the build environment rather than caller-asserted; a production candidate must originate from a clean tree, must not enable the test-control feature, and must remap path prefixes for reproducibility.",
+  "description": "Derived build provenance binding a production candidate to its source tree, toolchain, exact enabled cargo features, reproducibility controls, and candidate artifact hash. The candidate_sha256 is always measured from the candidate artifact file. The reproducibility controls have an explicit derivation boundary recorded by controls_origin: when it is 'ambient_build_env' the operator asserts the candidate was produced under the recorded controls and the generator measured them from the inherited build environment; when it is 'operator_re_derivation' the controls were re-derived from the repository (commit-date SOURCE_DATE_EPOCH and repo-derived RUSTFLAGS) rather than measured from the candidate build subprocess. A production candidate must originate from a clean tree, must not enable the test-control feature, and must remap path prefixes for reproducibility.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -97,7 +97,7 @@
     "reproducibility": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["source_date_epoch", "remap_path_prefix", "target_root"],
+      "required": ["source_date_epoch", "remap_path_prefix", "target_root", "controls_origin"],
       "properties": {
         "source_date_epoch": {
           "type": "integer",
@@ -113,6 +113,10 @@
           "not": {
             "pattern": "(?i:(^/|\\.\\.|token|secret|credentials|password|/Users/|/home/|/private/|/var/folders/))"
           }
+        },
+        "controls_origin": {
+          "description": "Explicit reproducibility-controls derivation boundary. candidate_sha256 is always measured from the candidate file; this field records whether the reproducibility controls (SOURCE_DATE_EPOCH + --remap-path-prefix + target_root) were measured from the ambient build environment or re-derived from the repository by an operator assertion. A self-injected re-derivation must not be mistaken for an independent build-environment measurement.",
+          "enum": ["ambient_build_env", "operator_re_derivation"]
         }
       }
     }
