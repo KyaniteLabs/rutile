@@ -1695,6 +1695,27 @@ impl LinuxProductSession {
         })
     }
 
+    /// Surfaces a generic, non-save product failure (for example export or
+    /// clipboard) as a durable error notice (G002). Unlike
+    /// [`report_save_failure`] this records no save-specific reducer state: it
+    /// routes only through [`AppMessage::SurfaceNotice`] so any surface can
+    /// report failure without a dedicated method. The user-facing message is
+    /// `"{context}: {error}"` and the original `error` is preserved verbatim as
+    /// `source_error`.
+    pub fn report_surface_failure(
+        &mut self,
+        context: impl Into<String>,
+        error: impl Into<String>,
+    ) -> Vec<AppEffect> {
+        let context = context.into();
+        let error = error.into();
+        self.core.reduce(AppMessage::SurfaceNotice {
+            severity: crate::app::NoticeSeverity::Error,
+            message: format!("{context}: {error}"),
+            source_error: error,
+        })
+    }
+
     /// Surfaces a non-fatal open-delivery warning (for example multi-file
     /// `%f` requests) as a dismissible warning notice.
     pub fn report_open_warning(&mut self, message: impl Into<String>) -> Vec<AppEffect> {
@@ -2593,26 +2614,28 @@ fn build_window(
     let format_action: Rc<dyn Fn(FormatCommand)> = {
         let session = Rc::clone(&session);
         let editor_adapter = Rc::clone(&editor_adapter);
-        let window = window.clone();
         Rc::new(move |command: FormatCommand| {
             let selection = match editor_adapter.borrow().selection() {
                 Ok(selection) => selection,
                 Err(error) => {
-                    window.set_title(&status_title(&format!("format failed: {error}")));
+                    let _ = session
+                        .borrow_mut()
+                        .report_surface_failure("Format failed", error.to_string());
                     return;
                 }
             };
-            let applied =
-                match session
-                    .borrow_mut()
-                    .apply_format(selection, command, elapsed_ms(started))
-                {
-                    Ok(applied) => applied,
-                    Err(error) => {
-                        window.set_title(&status_title(&format!("format rejected: {error}")));
-                        return;
-                    }
-                };
+            let result = session
+                .borrow_mut()
+                .apply_format(selection, command, elapsed_ms(started));
+            let applied = match result {
+                Ok(applied) => applied,
+                Err(error) => {
+                    let _ = session
+                        .borrow_mut()
+                        .report_surface_failure("Format rejected", error.to_string());
+                    return;
+                }
+            };
             let snapshot = session.borrow().snapshot();
             if let Err(error) = follow_shared_edit(
                 &editor_adapter,
@@ -2620,7 +2643,9 @@ fn build_window(
                 &applied.changes,
                 applied.selection_after,
             ) {
-                window.set_title(&status_title(&format!("format mirror failed: {error}")));
+                let _ = session
+                    .borrow_mut()
+                    .report_surface_failure("Format mirror failed", error.to_string());
             }
         })
     };
@@ -2685,7 +2710,6 @@ fn build_window(
     let new_window_session = Rc::clone(&session);
     let ipc_session = Rc::clone(&session);
     let ipc_editor_adapter = Rc::clone(&editor_adapter);
-    let ipc_window = window.clone();
     let mut native_web = NativeWebState::new();
     let builder = WebViewBuilder::new_with_web_context(native_web.context_mut()?)
         .with_bounds(full_bounds(
@@ -2720,13 +2744,15 @@ fn build_window(
             }
         })
         .with_ipc_handler(move |request| {
-            let effects = match ipc_session
+            let result = ipc_session
                 .borrow_mut()
-                .handle_ipc(request.body().as_bytes())
-            {
+                .handle_ipc(request.body().as_bytes());
+            let effects = match result {
                 Ok(effects) => effects,
                 Err(error) => {
-                    ipc_window.set_title(&status_title(&format!("preview rejected: {error}")));
+                    let _ = ipc_session
+                        .borrow_mut()
+                        .report_surface_failure("Preview rejected", error.to_string());
                     return;
                 }
             };
@@ -2738,7 +2764,7 @@ fn build_window(
                         interaction_id,
                         user,
                     } => {
-                        match ipc_session.borrow_mut().preview_scroll(
+                        let result = ipc_session.borrow_mut().preview_scroll(
                             source_start,
                             interaction_id,
                             user,
@@ -2746,7 +2772,8 @@ fn build_window(
                                 monotonic_ms: elapsed_ms(started),
                                 preview_frame: 0,
                             },
-                        ) {
+                        );
+                        match result {
                             Ok(LinuxScrollDispatch::Source {
                                 revision,
                                 source_start,
@@ -2757,20 +2784,27 @@ fn build_window(
                                     source_start,
                                     interaction_id,
                                 ) {
-                                    ipc_window.set_title(&status_title(&format!(
-                                        "preview scroll rejected: {error}"
-                                    )));
+                                    let _ = ipc_session.borrow_mut().report_surface_failure(
+                                        "Preview scroll rejected",
+                                        error.to_string(),
+                                    );
                                 }
                             }
                             Ok(LinuxScrollDispatch::Suppressed) => {}
                             Ok(LinuxScrollDispatch::Preview { .. }) => {}
-                            Err(error) => ipc_window.set_title(&status_title(&format!(
-                                "stale preview scroll rejected: {error}"
-                            ))),
+                            Err(error) => {
+                                let _ = ipc_session.borrow_mut().report_surface_failure(
+                                    "Stale preview scroll rejected",
+                                    error.to_string(),
+                                );
+                            }
                         }
                     }
                     AppEffect::PresentLink(_) => {
-                        ipc_window.set_title(&status_title("external link blocked"));
+                        let _ = ipc_session.borrow_mut().report_surface_failure(
+                            "External link blocked",
+                            "navigation policy rejected the link",
+                        );
                     }
                     _ => {}
                 }
@@ -2801,14 +2835,16 @@ fn build_window(
             let key = event.keyval();
             let shifted = event.state().contains(gtk::gdk::ModifierType::SHIFT_MASK);
             if shifted && key == gtk::gdk::keys::constants::i {
-                if let Some((revision, generated)) = session.borrow().generated_source() {
+                let generated_source = session.borrow().generated_source();
+                if let Some((revision, generated)) = generated_source {
                     if let Err(error) = editor_adapter
                         .borrow_mut()
                         .set_read_only_generated(revision, generated)
                     {
-                        window.set_title(&status_title(&format!(
-                            "generated source inspection failed: {error}"
-                        )));
+                        let _ = session.borrow_mut().report_surface_failure(
+                            "Generated source inspection failed",
+                            error.to_string(),
+                        );
                     } else {
                         window.set_title(&status_title("Generated Source (read only)"));
                     }
@@ -2827,16 +2863,20 @@ fn build_window(
                         .map_err(|error| error.to_string())
                 });
                 if let Err(error) = result {
-                    window.set_title(&status_title(&format!("reload failed: {error}")));
+                    let _ = session
+                        .borrow_mut()
+                        .report_surface_failure("Reload failed", error.to_string());
                 }
                 return gtk::glib::Propagation::Stop;
             }
             if shifted && key == gtk::gdk::keys::constants::k {
-                if let Err(error) = session
+                let result = session
                     .borrow_mut()
-                    .resolve_external_conflict(ExternalResolution::KeepBuffer, elapsed_ms(started))
-                {
-                    window.set_title(&status_title(&format!("keep buffer failed: {error}")));
+                    .resolve_external_conflict(ExternalResolution::KeepBuffer, elapsed_ms(started));
+                if let Err(error) = result {
+                    let _ = session
+                        .borrow_mut()
+                        .report_surface_failure("Keep buffer failed", error.to_string());
                 }
                 return gtk::glib::Propagation::Stop;
             }
@@ -2867,7 +2907,9 @@ fn build_window(
             if let Some(change) = change
                 && let Err(error) = editor_adapter.borrow_mut().apply_external_change(&change)
             {
-                window.set_title(&status_title(&format!("history failed: {error}")));
+                let _ = session
+                    .borrow_mut()
+                    .report_surface_failure("History failed", error.to_string());
             }
             gtk::glib::Propagation::Stop
         });
@@ -2968,7 +3010,6 @@ fn build_window(
     {
         let session = Rc::clone(&session);
         let editor_adapter = Rc::clone(&editor_adapter);
-        let window = window.clone();
         source_view.connect_paste_clipboard(move |view| {
             let clipboard = gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD);
             let Some(data) = clipboard.wait_for_contents(&gtk::gdk::Atom::intern("text/html"))
@@ -2990,17 +3031,19 @@ fn build_window(
             };
             // Claim the paste only once we can honour it.
             view.stop_signal_emission_by_name("paste-clipboard");
-            let applied =
-                match session
+            let result =
+                session
                     .borrow_mut()
-                    .insert_text(selection, &markdown, elapsed_ms(started))
-                {
-                    Ok(applied) => applied,
-                    Err(error) => {
-                        window.set_title(&status_title(&format!("smart paste failed: {error}")));
-                        return;
-                    }
-                };
+                    .insert_text(selection, &markdown, elapsed_ms(started));
+            let applied = match result {
+                Ok(applied) => applied,
+                Err(error) => {
+                    let _ = session
+                        .borrow_mut()
+                        .report_surface_failure("Smart paste failed", error.to_string());
+                    return;
+                }
+            };
             // Follow the insert incrementally so the viewport is preserved,
             // instead of reinstalling the whole buffer (which reset scroll).
             let snapshot = session.borrow().snapshot();
@@ -3015,23 +3058,27 @@ fn build_window(
 
     {
         let native_web = Rc::clone(&native_web);
-        let window = window.clone();
+        let session = Rc::clone(&session);
         preview_container.connect_size_allocate(move |_container, allocation| {
             if let Err(error) = native_web
                 .borrow_mut()
                 .resize(allocation.width(), allocation.height())
             {
-                window.set_title(&status_title(&error.to_string()));
+                let _ = session
+                    .borrow_mut()
+                    .report_surface_failure("Preview resize failed", error.to_string());
             }
         });
     }
 
     {
         let native_web = Rc::clone(&native_web);
-        let window = window.clone();
+        let session = Rc::clone(&session);
         preview_container.connect_focus_in_event(move |_container, _event| {
             if let Err(error) = native_web.borrow().focus() {
-                window.set_title(&status_title(&error.to_string()));
+                let _ = session
+                    .borrow_mut()
+                    .report_surface_failure("Preview focus failed", error.to_string());
             }
             gtk::glib::Propagation::Proceed
         });
@@ -3051,20 +3098,24 @@ fn build_window(
 
     {
         let native_web = Rc::clone(&native_web);
-        let window = window.clone();
+        let session = Rc::clone(&session);
         preview_container.connect_map(move |_container| {
             if let Err(error) = native_web.borrow_mut().resume() {
-                window.set_title(&status_title(&format!("resume failed: {error}")));
+                let _ = session
+                    .borrow_mut()
+                    .report_surface_failure("Preview resume failed", error.to_string());
             }
         });
     }
 
     {
         let native_web = Rc::clone(&native_web);
-        let window = window.clone();
+        let session = Rc::clone(&session);
         preview_container.connect_unmap(move |_container| {
             if let Err(error) = native_web.borrow_mut().suspend() {
-                window.set_title(&status_title(&format!("suspend failed: {error}")));
+                let _ = session
+                    .borrow_mut()
+                    .report_surface_failure("Preview suspend failed", error.to_string());
             }
         });
     }
@@ -3746,10 +3797,13 @@ fn build_menu_bar(
         let session = Rc::clone(session);
         let window = window.clone();
         item.connect_activate(move |_| {
-            if let Some(path) = prompt_save_path(Some(&window), Some("export.html"))
-                && let Err(error) = session.borrow().save_html(&path, None)
-            {
-                window.set_title(&status_title(&format!("HTML export failed: {error}")));
+            if let Some(path) = prompt_save_path(Some(&window), Some("export.html")) {
+                let result = session.borrow().save_html(&path, None);
+                if let Err(error) = result {
+                    let _ = session
+                        .borrow_mut()
+                        .report_surface_failure("HTML export failed", error.to_string());
+                }
             }
         });
         file_menu.append(&item);
@@ -3757,35 +3811,39 @@ fn build_menu_bar(
     {
         let item = gtk::MenuItem::with_label("Copy as HTML");
         let session = Rc::clone(session);
-        let window = window.clone();
-        item.connect_activate(move |_| match session.borrow().export_html(None) {
-            Ok(output) => {
-                // LNX-005: publish both text/html and text/plain so rich and
-                // plain pastes both receive content. The payload holds an HTML
-                // copy and a tag-stripped fallback; `set_with_data` lazily
-                // serves whichever target the requestor asks for.
-                let payload = Rc::new(LinuxClipboardPayload::for_html_export(output.html));
-                let targets: Vec<gtk::TargetEntry> = CLIPBOARD_HTML_TARGETS
-                    .iter()
-                    .map(|(name, info)| {
-                        gtk::TargetEntry::new(name, gtk::TargetFlags::empty(), *info)
-                    })
-                    .collect();
-                let clipboard = gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD);
-                let provider = Rc::clone(&payload);
-                clipboard.set_with_data(&targets, move |_clip, selection, info| {
-                    let bytes = provider.bytes_for_info(info);
-                    // The type atom must match the target the requestor asked
-                    // for so paste-side target detection (text/html vs plain)
-                    // succeeds. `target_name` maps the info id back to its atom.
-                    let type_name =
-                        LinuxClipboardPayload::target_name(info).unwrap_or("UTF8_STRING");
-                    let type_atom = gtk::gdk::Atom::intern(type_name);
-                    selection.set(&type_atom, 8, bytes);
-                });
-            }
-            Err(error) => {
-                window.set_title(&status_title(&format!("HTML copy failed: {error}")));
+        item.connect_activate(move |_| {
+            let result = session.borrow().export_html(None);
+            match result {
+                Ok(output) => {
+                    // LNX-005: publish both text/html and text/plain so rich and
+                    // plain pastes both receive content. The payload holds an HTML
+                    // copy and a tag-stripped fallback; `set_with_data` lazily
+                    // serves whichever target the requestor asks for.
+                    let payload = Rc::new(LinuxClipboardPayload::for_html_export(output.html));
+                    let targets: Vec<gtk::TargetEntry> = CLIPBOARD_HTML_TARGETS
+                        .iter()
+                        .map(|(name, info)| {
+                            gtk::TargetEntry::new(name, gtk::TargetFlags::empty(), *info)
+                        })
+                        .collect();
+                    let clipboard = gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD);
+                    let provider = Rc::clone(&payload);
+                    clipboard.set_with_data(&targets, move |_clip, selection, info| {
+                        let bytes = provider.bytes_for_info(info);
+                        // The type atom must match the target the requestor asked
+                        // for so paste-side target detection (text/html vs plain)
+                        // succeeds. `target_name` maps the info id back to its atom.
+                        let type_name =
+                            LinuxClipboardPayload::target_name(info).unwrap_or("UTF8_STRING");
+                        let type_atom = gtk::gdk::Atom::intern(type_name);
+                        selection.set(&type_atom, 8, bytes);
+                    });
+                }
+                Err(error) => {
+                    let _ = session
+                        .borrow_mut()
+                        .report_surface_failure("HTML copy failed", error.to_string());
+                }
             }
         });
         file_menu.append(&item);
@@ -3903,7 +3961,9 @@ impl FindBar {
                 let query = match FindQuery::new(pattern, MatchMode::Plain, false) {
                     Ok(query) => query,
                     Err(error) => {
-                        window.set_title(&status_title(&format!("find rejected: {error}")));
+                        let _ = session
+                            .borrow_mut()
+                            .report_surface_failure("Find rejected", error.to_string());
                         return;
                     }
                 };
@@ -3929,7 +3989,9 @@ impl FindBar {
                     }
                     Ok(None) => window.set_title(&status_title("No matches")),
                     Err(error) => {
-                        window.set_title(&status_title(&format!("find failed: {error}")));
+                        let _ = session
+                            .borrow_mut()
+                            .report_surface_failure("Find failed", error.to_string());
                     }
                 }
             })
@@ -3950,19 +4012,20 @@ impl FindBar {
         {
             let session = Rc::clone(session);
             let adapter = Rc::clone(adapter);
-            let window = window.clone();
             let replace = replace.clone();
             let locate = Rc::clone(&locate);
             replace_one.connect_clicked(move |_| {
                 locate(true);
                 let replacement = replace.text().to_string();
-                let applied = match session
+                let result = session
                     .borrow_mut()
-                    .replace_current_match(replacement, elapsed_ms(started))
-                {
+                    .replace_current_match(replacement, elapsed_ms(started));
+                let applied = match result {
                     Ok(applied) => applied,
                     Err(error) => {
-                        window.set_title(&status_title(&format!("replace failed: {error}")));
+                        let _ = session
+                            .borrow_mut()
+                            .report_surface_failure("Replace failed", error.to_string());
                         return;
                     }
                 };
@@ -3986,7 +4049,9 @@ impl FindBar {
                 let query = match FindQuery::new(pattern, MatchMode::Plain, false) {
                     Ok(query) => query,
                     Err(error) => {
-                        window.set_title(&status_title(&format!("find rejected: {error}")));
+                        let _ = session
+                            .borrow_mut()
+                            .report_surface_failure("Find rejected", error.to_string());
                         return;
                     }
                 };
@@ -3994,13 +4059,15 @@ impl FindBar {
                     .borrow_mut()
                     .start_find(query, FindDirection::Forward, true);
                 let replacement = replace.text().to_string();
-                let applied = match session
+                let result = session
                     .borrow_mut()
-                    .replace_all_matches(replacement, elapsed_ms(started))
-                {
+                    .replace_all_matches(replacement, elapsed_ms(started));
+                let applied = match result {
                     Ok(applied) => applied,
                     Err(error) => {
-                        window.set_title(&status_title(&format!("replace all failed: {error}")));
+                        let _ = session
+                            .borrow_mut()
+                            .report_surface_failure("Replace all failed", error.to_string());
                         return;
                     }
                 };

@@ -862,3 +862,32 @@ fn product_session_tracks_scroll_events() {
     assert!(!matches!(dispatch, LinuxScrollDispatch::Suppressed));
     assert!(session.stats().scroll_events > 0);
 }
+
+#[test]
+fn report_surface_failure_pushes_a_durable_error_notice() {
+    // G002: any non-save product surface can report failure through the shared
+    // SurfaceNotice path with Error severity. The notice is durable: it survives
+    // an unrelated read/snapshot and only disappears once dismissed.
+    let mut session = LinuxProductSession::new().unwrap();
+    let effects = session.report_surface_failure("export", "disk write quota exceeded");
+    let AppEffect::PresentNotice { notice } = effects.into_iter().next().unwrap() else {
+        panic!("surface failure must produce a PresentNotice as its first effect");
+    };
+    assert_eq!(notice.severity, NoticeSeverity::Error);
+    assert!(notice.message.contains("export"));
+    assert!(notice.message.contains("disk write quota exceeded"));
+    assert_eq!(notice.source_error, "disk write quota exceeded");
+
+    // The shared status model holds the notice and latest_notice surfaces it.
+    assert_eq!(session.latest_notice(), Some(notice.clone()));
+
+    // An unrelated read/snapshot must not clear the durable notice.
+    let _ = session.snapshot();
+    let _ = session.source();
+    assert_eq!(session.latest_notice(), Some(notice.clone()));
+
+    // Dismissal removes it from the active notice set.
+    session.dismiss_notice(notice.id);
+    assert!(session.notices().is_empty());
+    assert!(session.latest_notice().is_none());
+}
