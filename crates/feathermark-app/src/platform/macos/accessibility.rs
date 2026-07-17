@@ -17,10 +17,32 @@
 //! consumes the same pure tree and publishes it onto the content `NSView`.
 //!
 //! Scope is deliberately minimal: the window, the editor document text, the
-//! toolbar buttons, and the active notice/status. Every iced widget would
-//! require a full AccessKit integration, which is out of scope; the residual
-//! gap is documented in `MacAccessibilityState`.
+//! toolbar buttons, the active notice/status, the find/replace bar, the editor
+//! caret/selection, and spoken announcements. Every iced widget would require
+//! a full AccessKit integration; the residual gap is documented below.
+//!
+//! ## Scope and residuals (G006)
+//!
+//! This module exposes the find/replace pseudo-fields, the editor caret, and
+//! spoken announcements from the same pure snapshot. Two residuals are
+//! deliberate and documented here, NOT closed:
+//!
+//! - **Pseudo-fields and caret are perceivability-only (INV-3).** The
+//!   find/replace bar and the editor caret are exposed to VoiceOver as
+//!   labels / values / focus / `AXSelectedTextRange` so an AT user can
+//!   *perceive* them, but they are not real `AXTextArea` providers backed by
+//!   `NSTextStorage`. Direct AT text entry (typing into the find field, or
+//!   driving the caret per-character from VoiceOver) still requires a full
+//!   AccessKit migration and remains out of scope.
+//! - **Announcement priority is modeled but not posted.** [`AxAnnouncement`]
+//!   carries a priority mapped from `NoticeSeverity`, but posting
+//!   `NSAccessibilityPriorityKey` requires an `NSNumber` value, and the
+//!   `objc2-foundation/NSNumber` feature is not enabled (a `Cargo.toml`
+//!   change owned by the integration slice). The spoken *message* is posted
+//!   via `NSAccessibilityAnnouncementRequestedNotification`; AppKit announces
+//!   it at its default priority.
 
+use crate::app::NoticeSeverity;
 use crate::brand::{PRODUCT_NAME, SOURCE_EDITOR_LABEL, status_title};
 
 // ---------------------------------------------------------------------------
@@ -66,11 +88,108 @@ impl AxRole {
     }
 }
 
+/// A byte-range selection in the editor document text (advisory).
+///
+/// Maps to `AXSelectedTextRange`. `location`/`length` are byte offsets into
+/// `AxUiState::editor_text`, clamped by the caller. Advisory only — see the
+/// module-level residual (INV-3): without real `NSTextStorage`, VoiceOver may
+/// not honor per-character caret movement driven from the AT side.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct AxSelection {
+    /// Inclusive start byte offset into the editor text.
+    pub location: usize,
+    /// Selection length in bytes (`0` ⇒ a bare caret).
+    pub length: usize,
+}
+
+impl AxSelection {
+    /// Clamp the range to the editor text length so a stale/oversized
+    /// selection never projects past the document end.
+    pub(crate) fn clamped_to(self, text_len: usize) -> Self {
+        let location = self.location.min(text_len);
+        let length = self.length.min(text_len.saturating_sub(location));
+        Self { location, length }
+    }
+}
+
+/// Which field of the find/replace pseudo-field has keyboard focus.
+///
+/// A pure mirror of `native::FindField` (`Query`/`Replace`), renamed to the
+/// AX label semantics (`Find`/`Replace`) so the pure model does not depend on
+/// the native runner. `native.rs` maps `FindField::Query → AxFindField::Find`
+/// and `FindField::Replace → AxFindField::Replace` when building the snapshot.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum AxFindField {
+    /// The "Find" / query field (mirrors `native::FindField::Query`).
+    #[default]
+    Find,
+    /// The "Replace" field (mirrors `native::FindField::Replace`).
+    Replace,
+}
+
+/// The projected find/replace bar. Exposed as additive `AXTextArea` children
+/// (one for "Find", one for "Replace" when replacement is enabled) plus a
+/// status `AXStaticText`. Perceivability-only — see the module-level residual.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct AxFindBar {
+    /// The current find query.
+    pub query: String,
+    /// The current replacement text. `None` ⇒ replace is disabled and the
+    /// "Replace" pseudo-field is omitted from the tree.
+    pub replacement: Option<String>,
+    /// Which pseudo-field currently has keyboard focus.
+    pub focus: AxFindField,
+    /// The live find status (e.g. `"Match 1 of 3"`, `"No matches"`). Emitted as
+    /// a `AXStaticText` child only when non-empty.
+    pub status: String,
+}
+
+/// Spoken-announcement priority, mapped from the reducer's `NoticeSeverity`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AxAnnouncementPriority {
+    /// Polite/low priority (background information).
+    Low,
+    /// Assertive/high priority (warnings and errors).
+    High,
+}
+
+impl AxAnnouncementPriority {
+    /// Map a reducer notice severity to an AX announcement priority.
+    ///
+    /// `Error` and `Warning` are spoken with high priority; `Info` with low.
+    /// Pure and headless-testable; consumed by `native.rs` when it builds an
+    /// [`AxAnnouncement`].
+    pub(crate) fn from_severity(severity: NoticeSeverity) -> Self {
+        match severity {
+            NoticeSeverity::Info => Self::Low,
+            NoticeSeverity::Warning | NoticeSeverity::Error => Self::High,
+        }
+    }
+}
+
+/// A spoken announcement to post via
+/// `NSAccessibilityAnnouncementRequestedNotification`. Not a tree child — it
+/// is passed through the state as a side-channel consumed by the AppKit wiring.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AxAnnouncement {
+    /// The reducer-owned notice id, used by `native.rs` as a shell-local dedup
+    /// cursor (mirrors the `window_title` dedup). Stored here so the wiring
+    /// round-trip is self-describing and testable.
+    #[allow(dead_code)]
+    pub notice_id: usize,
+    /// The message AppKit should speak.
+    pub message: String,
+    /// The announcement priority (modeled; see module-level residual re.
+    /// posting).
+    pub priority: AxAnnouncementPriority,
+}
+
 /// A single node in the derived accessibility tree.
 ///
 /// Each field maps to a standard NSAccessibility attribute:
 /// `title` → `AXTitle`, `label` → `AXDescription`/`AXLabel`,
-/// `value` → `AXValue`.
+/// `value` → `AXValue`, `focused` → `AXFocused`, `selection` →
+/// `AXSelectedTextRange`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AxNode {
     pub role: AxRole,
@@ -81,6 +200,13 @@ pub(crate) struct AxNode {
     /// The announced value (maps to `accessibilityValue`). Used for the editor
     /// document text and the notice message.
     pub value: Option<String>,
+    /// Whether this node is the keyboard-focused element (maps to
+    /// `AXFocused`). Defaults to `false`; set on the focused find field.
+    pub focused: bool,
+    /// The editor selection/caret range (maps to `AXSelectedTextRange`).
+    /// `None` everywhere except the editor node, and only when a selection is
+    /// projected. Advisory — see the module-level residual (INV-3).
+    pub selection: Option<AxSelection>,
 }
 
 impl AxNode {
@@ -90,6 +216,8 @@ impl AxNode {
             title: None,
             label: Some(label.into()),
             value: Some(value.into()),
+            focused: false,
+            selection: None,
         }
     }
 
@@ -99,6 +227,8 @@ impl AxNode {
             title: Some(label.to_owned()),
             label: Some(label.to_owned()),
             value: None,
+            focused: false,
+            selection: None,
         }
     }
 
@@ -108,6 +238,8 @@ impl AxNode {
             title: None,
             label: None,
             value: Some(value.into()),
+            focused: false,
+            selection: None,
         }
     }
 }
@@ -130,6 +262,16 @@ pub(crate) struct AxUiState {
     /// (e.g. `"Modified"`, `"External change detected: …"`). `None` when the
     /// buffer is clean and no notice is active.
     pub active_status: Option<String>,
+    /// The editor selection/caret projected from the iced editor, clamped to
+    /// `editor_text`. `None` exposes no `AXSelectedTextRange` (advisory; INV-3
+    /// residual).
+    pub editor_selection: Option<AxSelection>,
+    /// The find/replace bar, when open. `None` exposes no find children.
+    pub find_bar: Option<AxFindBar>,
+    /// A spoken announcement to post via
+    /// `NSAccessibilityAnnouncementRequestedNotification`. Not a child node —
+    /// passed through to the wiring as a side-channel.
+    pub announcement: Option<AxAnnouncement>,
 }
 
 /// Pure accessibility description of the Rutile window. Built from a UI
@@ -145,9 +287,13 @@ pub(crate) struct MacAccessibilityState {
     /// The label of the content group (always `PRODUCT_NAME`).
     pub group_label: String,
     /// The exposed children, in VoiceOver navigation order: the editor text
-    /// area first, then the toolbar buttons (when visible), then the active
-    /// notice/status (when present).
+    /// area first, then the find/replace pseudo-fields (when open), then the
+    /// toolbar buttons (when visible), then the active notice/status (when
+    /// present).
     pub children: Vec<AxNode>,
+    /// The pending announcement, if any. Consumed by the AppKit wiring to post
+    /// `NSAccessibilityAnnouncementRequestedNotification`. Not a child node.
+    pub announcement: Option<AxAnnouncement>,
 }
 
 impl MacAccessibilityState {
@@ -158,18 +304,51 @@ impl MacAccessibilityState {
             None => PRODUCT_NAME.to_owned(),
         };
 
-        let mut children = Vec::with_capacity(1 + state.toolbar_labels.len() + 1);
+        // Upper bound on child count: editor + (find + replace + status) +
+        // toolbar + notice.
+        let find_extra = match &state.find_bar {
+            Some(find) => {
+                1 + find.replacement.is_some() as usize + (!find.status.is_empty()) as usize
+            }
+            None => 0,
+        };
+        let mut children = Vec::with_capacity(1 + find_extra + state.toolbar_labels.len() + 1);
 
         // 1. Editor text area — always present. Exposing the document text as
         //    the AXValue is what lets VoiceOver read the source document.
-        children.push(AxNode::text_area(SOURCE_EDITOR_LABEL, &state.editor_text));
+        //    Attach the projected selection (advisory caret; INV-3 residual),
+        //    clamped to the text length so a stale range never overruns.
+        let mut editor = AxNode::text_area(SOURCE_EDITOR_LABEL, &state.editor_text);
+        editor.selection = state
+            .editor_selection
+            .map(|selection| selection.clamped_to(state.editor_text.len()));
+        children.push(editor);
 
-        // 2. Toolbar buttons — only when the toolbar is visible.
+        // 2. Find/replace pseudo-fields — only when the bar is open. Exposed
+        //    as AXTextArea children labeled "Find"/"Replace" with the focused
+        //    field marked, plus a status StaticText, so an AT user can
+        //    perceive the query/replacement/status. Perceivability-only;
+        //    direct AT text entry needs AccessKit (INV-3 residual).
+        if let Some(find) = &state.find_bar {
+            let mut find_node = AxNode::text_area("Find", &find.query);
+            find_node.focused = find.focus == AxFindField::Find;
+            children.push(find_node);
+            if let Some(replacement) = &find.replacement {
+                let mut replace_node = AxNode::text_area("Replace", replacement);
+                replace_node.focused = find.focus == AxFindField::Replace;
+                children.push(replace_node);
+            }
+            if !find.status.is_empty() {
+                children.push(AxNode::static_text(&find.status));
+            }
+        }
+
+        // 3. Toolbar buttons — only when the toolbar is visible.
         for label in &state.toolbar_labels {
             children.push(AxNode::button(label));
         }
 
-        // 3. Active notice/status — a distinct static-text element so VoiceOver
+        // 4. Active notice/status — a distinct static-text element so VoiceOver
         //    announces it independently of the window title.
         if let Some(message) = &state.active_status {
             children.push(AxNode::static_text(message));
@@ -179,6 +358,9 @@ impl MacAccessibilityState {
             window_title,
             group_label: PRODUCT_NAME.to_owned(),
             children,
+            // Announcements are side-channel state, not children; passed
+            // through for the wiring to post.
+            announcement: state.announcement.clone(),
         }
     }
 }
@@ -192,15 +374,17 @@ impl MacAccessibilityState {
 
 #[cfg(target_os = "macos")]
 mod appkit {
-    use super::{AxNode, AxRole, MacAccessibilityState};
+    use super::{AxAnnouncement, AxNode, AxRole, MacAccessibilityState};
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
     use objc2_app_kit::{
-        NSAccessibility, NSAccessibilityButtonRole, NSAccessibilityElement,
-        NSAccessibilityGroupRole, NSAccessibilityStaticTextRole, NSAccessibilityTextAreaRole,
-        NSView,
+        NSAccessibility, NSAccessibilityAnnouncementKey,
+        NSAccessibilityAnnouncementRequestedNotification, NSAccessibilityButtonRole,
+        NSAccessibilityElement, NSAccessibilityGroupRole, NSAccessibilityNotificationUserInfoKey,
+        NSAccessibilityPostNotificationWithUserInfo, NSAccessibilityStaticTextRole,
+        NSAccessibilityTextAreaRole, NSView,
     };
-    use objc2_foundation::{NSArray, NSString};
+    use objc2_foundation::{NSArray, NSDictionary, NSRange, NSString};
     use std::fmt;
 
     /// Non-fatal AppKit wiring error. AX publishing is best-effort: the caller
@@ -266,6 +450,68 @@ mod appkit {
             // SAFETY: `ns` is an `NSString`, a valid `AnyObject` for the value.
             unsafe { element.setAccessibilityValue(Some(&ns)) };
         }
+        // Focused flag → AXFocused (safe, concrete bool setter). Marks the
+        // focused find pseudo-field so VoiceOver reports the active field.
+        if node.focused {
+            element.setAccessibilityFocused(true);
+        }
+        // Selection → AXSelectedTextRange (safe, concrete NSRange setter).
+        // Best-effort on a proxy element without real NSTextStorage; advisory
+        // perceivability only (INV-3 residual).
+        if let Some(selection) = node.selection {
+            let range = NSRange::new(selection.location, selection.length);
+            element.setAccessibilitySelectedTextRange(range);
+        }
+    }
+
+    /// Build the userInfo dictionary carried by an announcement notification.
+    ///
+    /// Contains the spoken message under `NSAccessibilityAnnouncementKey`.
+    ///
+    /// # Residual (G006 / INV-3)
+    ///
+    /// The *priority* (`NSAccessibilityPriorityKey`) is modeled on
+    /// [`AxAnnouncement::priority`] but is NOT included here: its value must
+    /// be an `NSNumber`, and the `objc2-foundation/NSNumber` feature is not
+    /// enabled (a `Cargo.toml` change owned by the integration slice). AppKit
+    /// therefore announces the message at its default priority. The pure
+    /// severity→priority mapping is still covered by the headless test suite.
+    pub(super) fn build_announcement_user_info(
+        announcement: &AxAnnouncement,
+    ) -> Retained<NSDictionary<NSAccessibilityNotificationUserInfoKey, AnyObject>> {
+        let message = NSString::from_str(&announcement.message);
+        // Upcast the message NSString to the type-erased dictionary value
+        // (`Retained<NSString>` → `Retained<AnyObject>`); sound because every
+        // NSString is an NSObject.
+        let message_any: Retained<AnyObject> = Retained::from(message);
+        // SAFETY: reading the immutable AppKit userInfo-key constant is sound.
+        let keys: [&NSAccessibilityNotificationUserInfoKey; 1] =
+            [unsafe { NSAccessibilityAnnouncementKey }];
+        let objects: [&AnyObject; 1] = [&*message_any];
+        NSDictionary::from_slices(&keys, &objects)
+    }
+
+    /// Post a spoken announcement onto `ns_view` via
+    /// `NSAccessibilityAnnouncementRequestedNotification`. Best-effort and
+    /// non-fatal: every AppKit call here is either a safe setter or a C call
+    /// that returns no error, so an announcement miss can never block the
+    /// editor or hang VoiceOver.
+    fn post_announcement(ns_view: &NSView, announcement: &AxAnnouncement) {
+        let user_info = build_announcement_user_info(announcement);
+        // SAFETY: every Objective-C object (here an NSView) is an `id`
+        // (`AnyObject`); `NSView` and `AnyObject` are pointer types with an
+        // identical object-pointer layout, so the reference cast is sound.
+        let element: &AnyObject = unsafe { &*(ns_view as *const NSView as *const AnyObject) };
+        // SAFETY: `element` is a live NSView; the announcement notification
+        // name and the userInfo `NSDictionary` are the documented argument
+        // types for this AppKit function.
+        unsafe {
+            NSAccessibilityPostNotificationWithUserInfo(
+                element,
+                NSAccessibilityAnnouncementRequestedNotification,
+                Some(&user_info),
+            );
+        }
     }
 
     /// Publish the accessibility tree onto a content `NSView`.
@@ -306,6 +552,13 @@ mod appkit {
         // SAFETY: `children` is an `NSArray` of `NSAccessibilityElement`s, the
         // correct type for `accessibilityChildren`.
         unsafe { ns_view.setAccessibilityChildren(Some(&children)) };
+
+        // Spoken announcement (best-effort, non-fatal). Posted after the tree
+        // is published so VoiceOver has the element context for the message.
+        // See `post_announcement` for the priority residual.
+        if let Some(announcement) = &state.announcement {
+            post_announcement(ns_view, announcement);
+        }
 
         Ok(())
     }
@@ -348,6 +601,7 @@ pub(crate) use appkit::publish_to_window;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::NoticeSeverity;
     use crate::brand::{PRODUCT_NAME, SOURCE_EDITOR_LABEL};
 
     /// Toolbar labels mirror `native::TOOLBAR_ITEMS`. This test guards the
@@ -380,6 +634,7 @@ mod tests {
             editor_text: "# Hello".to_owned(),
             toolbar_labels: Vec::new(),
             active_status: None,
+            ..Default::default()
         };
         let tree = MacAccessibilityState::from_ui(&state);
 
@@ -392,6 +647,9 @@ mod tests {
         assert_eq!(editor.label.as_deref(), Some(SOURCE_EDITOR_LABEL));
         assert_eq!(editor.value.as_deref(), Some("# Hello"));
         assert!(editor.title.is_none());
+        // No selection projected on a clean snapshot.
+        assert!(!editor.focused);
+        assert!(editor.selection.is_none());
     }
 
     #[test]
@@ -400,6 +658,7 @@ mod tests {
             editor_text: String::new(),
             toolbar_labels: EXPECTED_TOOLBAR_LABELS.to_vec(),
             active_status: None,
+            ..Default::default()
         };
         let tree = MacAccessibilityState::from_ui(&state);
 
@@ -412,6 +671,8 @@ mod tests {
             assert_eq!(node.title.as_deref(), Some(*label));
             assert_eq!(node.label.as_deref(), Some(*label));
             assert!(node.value.is_none());
+            assert!(!node.focused);
+            assert!(node.selection.is_none());
         }
     }
 
@@ -421,6 +682,7 @@ mod tests {
             editor_text: "draft".to_owned(),
             toolbar_labels: Vec::new(),
             active_status: Some("External change detected: reload or save elsewhere".to_owned()),
+            ..Default::default()
         };
         let tree = MacAccessibilityState::from_ui(&state);
 
@@ -450,6 +712,7 @@ mod tests {
             editor_text: "body".to_owned(),
             toolbar_labels: vec!["Bold", "Italic"],
             active_status: Some("Modified".to_owned()),
+            ..Default::default()
         };
         let tree = MacAccessibilityState::from_ui(&state);
 
@@ -471,9 +734,326 @@ mod tests {
             editor_text: String::new(),
             toolbar_labels: Vec::new(),
             active_status: None,
+            ..Default::default()
         };
         let tree = MacAccessibilityState::from_ui(&state);
         assert_eq!(tree.children[0].value.as_deref(), Some(""));
+    }
+
+    // ----- find / replace pseudo-field projection (G006 gap 1) ------------
+
+    #[test]
+    fn find_bar_projects_query_replace_and_focused_field() {
+        // Find open with replace enabled and focus on the Replace field: the
+        // tree exposes a "Find" TextArea (value=query, not focused), a
+        // "Replace" TextArea (value=replacement, focused), and a status
+        // StaticText — in that order, after the editor.
+        let state = AxUiState {
+            editor_text: "hello world".to_owned(),
+            toolbar_labels: Vec::new(),
+            active_status: None,
+            find_bar: Some(AxFindBar {
+                query: "foo".to_owned(),
+                replacement: Some("bar".to_owned()),
+                focus: AxFindField::Replace,
+                status: "Match at byte 3".to_owned(),
+            }),
+            ..Default::default()
+        };
+        let tree = MacAccessibilityState::from_ui(&state);
+
+        // editor + find + replace + status.
+        assert_eq!(tree.children.len(), 4);
+
+        let editor = &tree.children[0];
+        assert_eq!(editor.role, AxRole::TextArea);
+        assert!(!editor.focused);
+
+        let find = &tree.children[1];
+        assert_eq!(find.role, AxRole::TextArea);
+        assert_eq!(find.label.as_deref(), Some("Find"));
+        assert_eq!(find.value.as_deref(), Some("foo"));
+        assert!(
+            !find.focused,
+            "Find node must not be focused when focus=Replace"
+        );
+
+        let replace = &tree.children[2];
+        assert_eq!(replace.role, AxRole::TextArea);
+        assert_eq!(replace.label.as_deref(), Some("Replace"));
+        assert_eq!(replace.value.as_deref(), Some("bar"));
+        assert!(
+            replace.focused,
+            "Replace node must be focused when focus=Replace"
+        );
+
+        let status = &tree.children[3];
+        assert_eq!(status.role, AxRole::StaticText);
+        assert_eq!(status.value.as_deref(), Some("Match at byte 3"));
+    }
+
+    #[test]
+    fn find_bar_query_focus_marks_the_find_node() {
+        // Focus on the Find/Query field: only the Find node is focused.
+        let state = AxUiState {
+            editor_text: String::new(),
+            toolbar_labels: Vec::new(),
+            active_status: None,
+            find_bar: Some(AxFindBar {
+                query: "baz".to_owned(),
+                replacement: Some(String::new()),
+                focus: AxFindField::Find,
+                status: String::new(),
+            }),
+            ..Default::default()
+        };
+        let tree = MacAccessibilityState::from_ui(&state);
+
+        // editor + find + replace (replace enabled though empty) + no status.
+        assert_eq!(tree.children.len(), 3);
+        assert!(!tree.children[0].focused, "editor never focused");
+        assert!(tree.children[1].focused, "Find node focused");
+        assert!(!tree.children[2].focused, "Replace node not focused");
+    }
+
+    #[test]
+    fn find_bar_replacement_none_omits_replace_field() {
+        // Replace disabled (replacement=None): only the Find TextArea is
+        // exposed; no Replace child.
+        let state = AxUiState {
+            editor_text: String::new(),
+            toolbar_labels: Vec::new(),
+            active_status: None,
+            find_bar: Some(AxFindBar {
+                query: "q".to_owned(),
+                replacement: None,
+                focus: AxFindField::Find,
+                status: "No matches".to_owned(),
+            }),
+            ..Default::default()
+        };
+        let tree = MacAccessibilityState::from_ui(&state);
+
+        // editor + find + status (no replace).
+        assert_eq!(tree.children.len(), 3);
+        assert_eq!(tree.children[1].label.as_deref(), Some("Find"));
+        assert_eq!(tree.children[2].role, AxRole::StaticText);
+        assert_eq!(tree.children[2].value.as_deref(), Some("No matches"));
+    }
+
+    #[test]
+    fn find_bar_closed_projects_no_find_children() {
+        // Regression guard: a closed find bar (None) exposes zero find
+        // children, even with a toolbar and notice present.
+        let state = AxUiState {
+            editor_text: "doc".to_owned(),
+            toolbar_labels: vec!["Bold"],
+            active_status: Some("Modified".to_owned()),
+            find_bar: None,
+            ..Default::default()
+        };
+        let tree = MacAccessibilityState::from_ui(&state);
+
+        // editor + 1 button + notice; no find/replace/status nodes.
+        assert_eq!(tree.children.len(), 3);
+        assert_eq!(tree.children[0].role, AxRole::TextArea);
+        assert_eq!(tree.children[1].role, AxRole::Button);
+        assert_eq!(tree.children[2].role, AxRole::StaticText);
+        // No node carries a Find/Replace label.
+        assert!(
+            tree.children
+                .iter()
+                .all(|node| node.label.as_deref() != Some("Find")
+                    && node.label.as_deref() != Some("Replace"))
+        );
+    }
+
+    #[test]
+    fn find_bar_inserts_between_editor_and_toolbar() {
+        // VoiceOver order: editor → find children → toolbar → notice.
+        let state = AxUiState {
+            editor_text: "doc".to_owned(),
+            toolbar_labels: vec!["Bold"],
+            active_status: Some("Modified".to_owned()),
+            find_bar: Some(AxFindBar {
+                query: "x".to_owned(),
+                replacement: None,
+                focus: AxFindField::Find,
+                status: String::new(),
+            }),
+            ..Default::default()
+        };
+        let tree = MacAccessibilityState::from_ui(&state);
+
+        // editor + find + button + notice.
+        assert_eq!(tree.children.len(), 4);
+        assert_eq!(tree.children[0].role, AxRole::TextArea);
+        assert_eq!(tree.children[1].label.as_deref(), Some("Find"));
+        assert_eq!(tree.children[2].role, AxRole::Button);
+        assert_eq!(tree.children[3].role, AxRole::StaticText);
+    }
+
+    // ----- editor selection / caret projection (G006 gap 3) --------------
+
+    #[test]
+    fn editor_selection_attached_to_editor_node() {
+        let state = AxUiState {
+            // Editor text is long enough that {location: 3, length: 2} is in
+            // range and unclamped — this test asserts attachment, not clamping
+            // (the dedicated `editor_selection_is_clamped_to_text_length`
+            // covers the clamp path).
+            editor_text: "# Hello, world".to_owned(),
+            toolbar_labels: Vec::new(),
+            active_status: None,
+            editor_selection: Some(AxSelection {
+                location: 3,
+                length: 2,
+            }),
+            ..Default::default()
+        };
+        let tree = MacAccessibilityState::from_ui(&state);
+
+        let editor = &tree.children[0];
+        assert_eq!(
+            editor.selection,
+            Some(AxSelection {
+                location: 3,
+                length: 2
+            }),
+            "editor node carries the projected selection"
+        );
+        // No other node carries a selection.
+        for node in tree.children.iter().skip(1) {
+            assert!(node.selection.is_none());
+        }
+    }
+
+    #[test]
+    fn editor_selection_is_clamped_to_text_length() {
+        // A selection that overruns the text is clamped via the pure helper so
+        // a stale/oversized range never projects past the document end.
+        let selection = AxSelection {
+            location: 10,
+            length: 5,
+        };
+        let clamped = selection.clamped_to(4);
+        assert_eq!(
+            clamped,
+            AxSelection {
+                location: 4,
+                length: 0
+            }
+        );
+
+        // In-range selection is preserved.
+        let in_range = AxSelection {
+            location: 1,
+            length: 2,
+        };
+        assert_eq!(
+            in_range.clamped_to(4),
+            AxSelection {
+                location: 1,
+                length: 2
+            }
+        );
+
+        // Partial overrun keeps location, truncates length.
+        assert_eq!(
+            AxSelection {
+                location: 3,
+                length: 5
+            }
+            .clamped_to(4),
+            AxSelection {
+                location: 3,
+                length: 1
+            }
+        );
+    }
+
+    #[test]
+    fn editor_selection_none_projects_no_selection() {
+        let state = AxUiState {
+            editor_text: "abc".to_owned(),
+            toolbar_labels: Vec::new(),
+            active_status: None,
+            editor_selection: None,
+            ..Default::default()
+        };
+        let tree = MacAccessibilityState::from_ui(&state);
+        assert!(tree.children[0].selection.is_none());
+    }
+
+    // ----- announcement payload + priority mapping (G006 gap 4) ----------
+
+    #[test]
+    fn announcement_priority_maps_severity() {
+        // Pure severity → priority mapping (Error/Warning assertive, Info low).
+        assert_eq!(
+            AxAnnouncementPriority::from_severity(NoticeSeverity::Error),
+            AxAnnouncementPriority::High
+        );
+        assert_eq!(
+            AxAnnouncementPriority::from_severity(NoticeSeverity::Warning),
+            AxAnnouncementPriority::High
+        );
+        assert_eq!(
+            AxAnnouncementPriority::from_severity(NoticeSeverity::Info),
+            AxAnnouncementPriority::Low
+        );
+    }
+
+    #[test]
+    fn announcement_passes_through_as_side_channel() {
+        // Announcements are NOT children; they are side-channel state carried
+        // on MacAccessibilityState for the wiring to post.
+        let state = AxUiState {
+            editor_text: String::new(),
+            toolbar_labels: Vec::new(),
+            active_status: None,
+            announcement: Some(AxAnnouncement {
+                notice_id: 42,
+                message: "Saved".to_owned(),
+                priority: AxAnnouncementPriority::Low,
+            }),
+            ..Default::default()
+        };
+        let tree = MacAccessibilityState::from_ui(&state);
+
+        // Only the editor child; the announcement is not a node.
+        assert_eq!(tree.children.len(), 1);
+        assert!(
+            tree.children
+                .iter()
+                .all(|node| node.role != AxRole::StaticText)
+        );
+
+        let announcement = tree.announcement.as_ref().expect("announcement carried");
+        assert_eq!(announcement.notice_id, 42);
+        assert_eq!(announcement.message, "Saved");
+        assert_eq!(announcement.priority, AxAnnouncementPriority::Low);
+    }
+
+    #[test]
+    fn empty_find_status_omits_status_static_text() {
+        // An empty find status string emits no status StaticText child.
+        let state = AxUiState {
+            editor_text: String::new(),
+            toolbar_labels: Vec::new(),
+            active_status: None,
+            find_bar: Some(AxFindBar {
+                query: "q".to_owned(),
+                replacement: None,
+                focus: AxFindField::Find,
+                status: String::new(),
+            }),
+            ..Default::default()
+        };
+        let tree = MacAccessibilityState::from_ui(&state);
+        // editor + find only.
+        assert_eq!(tree.children.len(), 2);
+        assert_eq!(tree.children[1].label.as_deref(), Some("Find"));
     }
 
     // ----- objc2 round-trip (macOS only) ---------------------------------
@@ -558,5 +1138,78 @@ mod tests {
         unsafe { group.setAccessibilityChildren(Some(&children)) };
         let read_back = group.accessibilityChildren().expect("children were set");
         assert_eq!(read_back.len(), 1);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn appkit_sets_focused_and_selected_text_range_best_effort() {
+        // Proves the G006 gap 2/3 wiring: setting AXFocused and
+        // AXSelectedTextRange on a peer element is a safe, non-panicking call
+        // that round-trips through the standard getters VoiceOver uses.
+        use objc2_app_kit::{NSAccessibility, NSAccessibilityElement, NSAccessibilityTextAreaRole};
+        use objc2_foundation::NSRange;
+
+        let element = NSAccessibilityElement::new();
+        // SAFETY: reading the immutable AppKit role constant is sound.
+        element.setAccessibilityRole(Some(unsafe { NSAccessibilityTextAreaRole }));
+
+        // Focused flag (safe bool setter) round-trips.
+        element.setAccessibilityFocused(true);
+        assert!(
+            element.isAccessibilityFocused(),
+            "AXFocused must read back true after set"
+        );
+
+        // Selected text range (safe NSRange setter) round-trips. Best-effort
+        // on a proxy element without real NSTextStorage; the assert is that the
+        // call does not panic and the value is observable (advisory; INV-3).
+        element.setAccessibilitySelectedTextRange(NSRange::new(3, 2));
+        assert_eq!(
+            element.accessibilitySelectedTextRange(),
+            NSRange::new(3, 2),
+            "AXSelectedTextRange must round-trip on a peer element"
+        );
+
+        // Clearing focus is also safe.
+        element.setAccessibilityFocused(false);
+        assert!(!element.isAccessibilityFocused());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn appkit_announcement_user_info_carries_message() {
+        // Proves the G006 gap 4 wiring builds a userInfo dict carrying the
+        // spoken message under NSAccessibilityAnnouncementKey. Priority is
+        // modeled (see announcement_priority_maps_severity) but NOT posted
+        // here — NSNumber is not enabled; documented residual.
+        use objc2::rc::Retained;
+        use objc2::runtime::AnyObject;
+        use objc2_app_kit::NSAccessibilityAnnouncementKey;
+        use objc2_foundation::NSString;
+
+        let announcement = AxAnnouncement {
+            notice_id: 7,
+            message: "Saved".to_owned(),
+            priority: AxAnnouncementPriority::High,
+        };
+        let user_info = super::appkit::build_announcement_user_info(&announcement);
+
+        // Exactly the announcement key → message mapping (no priority entry).
+        assert_eq!(user_info.len(), 1);
+
+        // SAFETY: the dict is not mutated during this call.
+        let value: &AnyObject =
+            unsafe { user_info.objectForKey_unchecked(NSAccessibilityAnnouncementKey) }
+                .expect("NSAccessibilityAnnouncementKey must be present in userInfo");
+
+        // Downcast the type-erased value back to NSString and read the message.
+        // SAFETY: `value` is a valid pointer to the retained NSString object.
+        let value_owned: Retained<AnyObject> =
+            unsafe { Retained::<AnyObject>::retain(value as *const AnyObject as *mut AnyObject) }
+                .expect("userInfo value retained");
+        let message = value_owned
+            .downcast::<NSString>()
+            .expect("userInfo value is an NSString");
+        assert_eq!(message.to_string(), "Saved");
     }
 }

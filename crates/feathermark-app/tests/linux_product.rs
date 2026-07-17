@@ -8,7 +8,8 @@ use feathermark_app::brand::STARTER_DOCUMENT;
 use feathermark_app::platform::linux_gtk::{
     GtkSourceEditorAdapter, LinuxClipboardPayload, LinuxExternalOutcome, LinuxOpenDelivery,
     LinuxProductSession, LinuxScrollController, LinuxScrollDispatch, NativeRenderOutcome,
-    plan_open_delivery, scroll_delivery_script,
+    announcement_accessible_spec, find_entry_accessible_specs, plan_open_delivery,
+    scroll_delivery_script,
 };
 use feathermark_app::preview_host::{PreviewControlSink, PreviewHost};
 use feathermark_core::{
@@ -890,4 +891,27 @@ fn report_surface_failure_pushes_a_durable_error_notice() {
     session.dismiss_notice(notice.id);
     assert!(session.notices().is_empty());
     assert!(session.latest_notice().is_none());
+}
+
+#[test]
+fn find_entry_accessible_specs_are_find_and_replace_entry() {
+    // G006 gap 1: the find/replace entries expose explicit accessible names
+    // and the ATK Entry role so AT-SPI users can identify them. Pure contract,
+    // no GTK widget required.
+    let specs = find_entry_accessible_specs();
+    assert_eq!(specs[0].0, "Find");
+    assert_eq!(specs[0].1, gtk::atk::Role::Entry);
+    assert_eq!(specs[1].0, "Replace");
+    assert_eq!(specs[1].1, gtk::atk::Role::Entry);
+}
+
+#[test]
+fn announcement_accessible_spec_is_a_notification_live_region() {
+    // G006 gap 4: the dedicated announcement region exposes the ATK
+    // Notification role and the "Rutile status" name so Orca/AT-SPI treats it
+    // as a live region for AppEffect::PresentNotice messages. Pure contract,
+    // no GTK widget required.
+    let (name, role) = announcement_accessible_spec();
+    assert_eq!(name, "Rutile status");
+    assert_eq!(role, gtk::atk::Role::Notification);
 }
