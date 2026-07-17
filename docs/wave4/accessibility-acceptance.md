@@ -94,10 +94,9 @@ These must all hold on both platforms under the AT stack:
 ## 5. Per-action pass/fail evidence shape
 
 Each row of the §3 matrix is closed by an evidence record conforming to the
-**`rutile.accessibility-attestation.v1`** schema. The schema file is not yet
-present in `schemas/`; its absence is registered as evidence-debt (see
-[`evidence-debt.md`](evidence-debt.md) item ED-A11Y-0). Until it exists, the
-shape each record must satisfy is fixed here so collection is unambiguous:
+**`rutile.accessibility-attestation.v1`** schema at
+`schemas/rutile.accessibility-attestation.v1.schema.json`. The shape each
+record must satisfy is fixed here so collection is unambiguous:
 
 ```jsonc
 {
@@ -135,7 +134,7 @@ shape each record must satisfy is fixed here so collection is unambiguous:
 }
 ```
 
-Validation command (once the schema is added):
+Validation command:
 
 ```
 cargo run -p xtask -- evidence validate \

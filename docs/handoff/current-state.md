@@ -1,15 +1,16 @@
 # Rutile Current-State Handoff
 
-> **Status: Current.** Reconciled with `main` on 2026-07-16 (0.2.1). Supersedes
+> **Status: Current.** Reconciled with `main` on 2026-07-17 (0.2.2). Supersedes
 > the 0.2.0-era version previously at this path (that list is folded into the
 > debt section below, split resolved / partial / remains).
 
 ## BLUF
 
 > **Safety update (2026-07-16):** 0.2.1 is withdrawn from dogfood. Its macOS
-> event loop continuously redrew at idle (97.7–99.2% CPU) and was observed once
-> at approximately 10 GB RSS. The loop is fixed in 0.2.2 and a 180-second
-> RSS/CPU soak now gates macOS native verification.
+> event loop continuously redrew at idle (97.7–99.2% CPU). The deterministic
+> idle redraw loop is fixed in 0.2.2; the separate one-time observation of
+> approximately 10 GB RSS was not reproduced; a 180-second RSS/CPU soak now
+> gates native verification.
 
 Rutile **0.2.2 (internal/preview)** is merged on `main` (`74df96c`), tagged
 `v0.2.2`, and published as Forgejo **pre-release 354** — a macOS arm64 DMG +
@@ -32,7 +33,8 @@ is met. It went through an adversarial triple-check (see debt §C).
 
 ## Repository and release state
 
-- Branch: `main` (`74df96c`)
+- Branch: `main` (`e98f0cb`)
+- Conditional source-pane redraw hardening: PR #44 (merge `e98f0cb`)
 - Idle-loop fix merge: `68a16cb` (PR #41)
 - Release merge: `74df96c` (squash of `release/0.2.2`, PR #42)
 - Pipeline merge: `ec51f53` (PR #36)
@@ -55,7 +57,7 @@ find/replace, counts, reading-time, **content-preserving smart-paste**,
 **serialized autosave/recovery with corrupt-candidate reporting**, session
 restore; **navigation-hardened self-contained HTML export**; bounded rendering,
 protocol, navigation, and link-safety contracts. **macOS NSAccessibility bridge**
-shipped (CY-A11Y-001): window/editor-text/toolbar/notice exposed to VoiceOver.
+shipped (CY-A11Y-001): window/editor-text/toolbar/notice exposed to the NSAccessibility/AX tree.
 
 ## Verification and artifacts
 
@@ -75,7 +77,7 @@ shipped (CY-A11Y-001): window/editor-text/toolbar/notice exposed to VoiceOver.
 
 ## Known debt
 
-### A. Product-behavior debt — re-verified 2026-07-16 against 0.2.2 code
+### A. Product-behavior debt — re-verified 2026-07-17 against 0.2.2 code
 
 **Resolved by the remediation** (each backed by file:line evidence + tests):
 - ✅ macOS save semantics (untitled Cmd-S, save-failure exit, swallowed Cmd
@@ -87,15 +89,17 @@ shipped (CY-A11Y-001): window/editor-text/toolbar/notice exposed to VoiceOver.
 - ✅ Export hardening (allowlist inspector rejects `<base>`/`<form>`/`<meta
   http-equiv>`; CSP) + content-preserving smart-paste (allowlist HTML→Markdown,
   bounded, raw-text fallback).
+- ✅ Compile-contract fixture hermeticity (`crates/feathermark-app/tests/compile_contracts.rs`)
+  via injected vendored `pulldown-cmark` `[patch.crates-io]`.
 
 **Partial**:
 - ◐ **macOS recovery/close prompt**: edit-during-recovery is blocked (MAC-004);
   the prompt is now an AXStaticText node. **Remains**: no accessible action-button
   dialog on macOS (decisions are Cmd+Y/Esc shortcut-only). GTK is fully modal.
 - ◐ **Linux transient title errors**: critical failures now surface as durable
-  `SurfaceNotice`. **Remains**: ~25 error sites still route to the transient
-  window title — notably the interactive Ctrl+S save failure (`linux_gtk.rs:2859`,
-  inconsistent with the close path's `report_save_failure`).
+  `SurfaceNotice`; interactive Ctrl+S now calls `report_save_failure`.
+  **Remains**: ~24 other product-facing error sites still route to the transient
+  window title. *(Test-control title receipts are not product debt.)*
 - ◐ **Document-open/association**: Linux CLI open + macOS `CFBundleDocumentTypes`/
   `UTExportedTypeDeclarations` + Open/Save UI + drag/drop + Linux desktop/mime
   all wired. **Remains**: the macOS `application:openURLs:` AppKit delegate for
@@ -103,31 +107,29 @@ shipped (CY-A11Y-001): window/editor-text/toolbar/notice exposed to VoiceOver.
   `open_events.rs:1-6`).
 
 **Remains**:
-- ⬜ **Hermetic compile-contract fixture** (`crates/feathermark-app/tests/compile_contracts.rs`)
-  still needs a cached crates.io `pulldown-cmark 0.13.4` tarball on a fresh host
-  (no `[patch.crates-io]` injection). Fix: inject the patch stanza into the
-  fixture manifest or prime the tarball in the gate. *(The `xtask` comparator
-  scaffold is independently hermetic — it excludes pulldown-cmark — but does not
-  fix this fixture.)*
+- ⬜ **gid/xattr preservation on atomic save** (`files.rs` copies existing mode, not gid or extended attributes).
 
 ### B. Accessibility — validation debt + residual gaps (Wave 4)
+- **Resolved**: ED-A11Y-0 (attestation schema exists).
 - Interactive VoiceOver / AT-SPI / keyboard-only validation (ED-A11Y-1/2/3) +
   zero-trap/zero-unlabeled sweep (ED-A11Y-4) — **evidence-debt**, need real platforms.
-- Residual a11y gaps (need full accesskit, beyond the NSAccessibility bridge):
-  find/replace pseudo-fields, pseudo-dialog focus traps, per-character editor
-  navigation, ARIA live-region auto-announce.
-- (ED-A11Y-0, "missing attestation schema", is **resolved** — the schema exists;
-  `docs/wave4/evidence-debt.md` still says "missing" and is stale.)
+- Codeable residual a11y gaps (open, not contingent on a full AccessKit
+  migration): find/replace pseudo-fields, pseudo-dialog focus traps,
+  per-character editor navigation, ARIA live-region auto-announce.
 
 ### C. Publication-pipeline review findings (2026-07-16 triple-check, PR #36/#37)
-- **[MED]** `bind_provenance` checks only the schema string — no
-  `candidate_sha256`↔artifact bind, no `source_tree_clean`/test-control enforcement.
+**Resolved**:
+- ✅ `source_tree_clean` and `test-control` rejection now enforced.
+- ✅ Sibling evidence pattern scan (`scan_bytes` over `.provenance`/`.preview-auth`/`.manifest`).
+- ✅ `RUSTUP_HOME`/sysroot remapping.
+
+**Remains**:
+- **[MED]** Codesign-aware binding chain: bind `build_input_sha256` to provenance
+  `candidate_sha256`, and the packaged-executable hash to the inspected
+  executable — never a direct pre-sign/post-sign comparison.
 - **[MED]** `generate_with_reproducible_env` injects the reproducibility env it
   then measures (self-fulfilling for an ad-hoc build; true in practice since the
   operator runs `reproducible-build`, but unverifiable by the tool).
-- **[LOW]** `RUSTUP_HOME`/sysroot not remapped (standard toolchains pre-anonymized).
-- **[LOW]** Sibling evidence files (`.provenance`/`.preview-auth`/`.manifest`)
-  are not pattern-scanned (defense-in-depth; currently contain no paths).
 
 ### D. External / by-design out of scope (the full-public-release bar)
 The **14 release-prerequisite blockers** (`ready:false`): trusted verifier;
@@ -154,9 +156,15 @@ Everything in `docs/plan/`, `docs/research/`, versioned old handoffs, and dated
 
 ## Safe next step
 
-For the **next preview** (0.2.2): the partial items in §A (macOS recovery
-action-dialog; Linux transient-title errors → `report_save_failure`; the macOS
-`openURLs:` delegate) and the `compile_contracts.rs` fixture (§A remains) are the
-highest-value, in-repo work. The §B/§C items are hardening. **Do not** treat the
-14 external blockers (§D) as codeable — they need provisioning + external
-authority. Do not cut/tag a *public* release without all prerequisite evidence.
+Genuine remaining **in-repo** work: the macOS recovery action-button dialog (§A
+partial); the ~24 Linux transient-title error sites (§A partial); gid/xattr
+preservation on atomic save (§A remains); the §B codeable residual a11y gaps
+(find/replace, focus, per-character navigation, announcements); and the §C
+codesign-aware binding chain + reproducibility-assertion boundary.
+
+**External/blocked boundaries** (not codeable in-repo): the 14
+release-prerequisite blockers (§D) need provisioning + external authority;
+ED-A11Y-1..4 real AT receipts need real platforms (VoiceOver/AT-SPI/keyboard);
+and the macOS second-launch `openURLs:` delegate is blocked on winit owning the
+AppKit delegate. `publication_authorized` stays `false`; do not cut/tag a
+*public* release without all prerequisite evidence.
