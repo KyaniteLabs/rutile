@@ -37,6 +37,9 @@ use winit::window::{Window, WindowId};
 use wry::http::{Response, StatusCode};
 use wry::{NewWindowResponse, Rect, WebContext, WebView, WebViewBuilder};
 
+use super::accessibility::{
+    AxAnnouncement, AxAnnouncementPriority, AxFindBar, AxFindField, AxSelection,
+};
 use super::{
     AppKitMainThread, AxUiState, EditorVisualReceipt, IcedEditorAdapter, MacError,
     MacExternalOutcome, MacMenuCommand, MacSaveAction, MacScrollDispatch, MacUserEvent,
@@ -44,7 +47,7 @@ use super::{
     install_file_menu_with_actions, preview_ipc_channel, split_panes,
 };
 use crate::actions::SessionRestore;
-use crate::app::{AppEffect, CloseDecision, CloseOutcome};
+use crate::app::{AppEffect, CloseDecision, CloseOutcome, UserNotice};
 use crate::brand::{PRODUCT_NAME, SOURCE_EDITOR_LABEL, STARTER_DOCUMENT, status_title};
 use crate::preview_host::{
     HostError, NavigationKind, PreviewControlSink, PreviewHost, SchemeRequest, SchemeResponse,
@@ -109,6 +112,7 @@ struct ProductRunner {
     webview: Option<WebView>,
     web_context: Option<WebContext>,
     window: Option<Arc<Window>>,
+    last_announced_notice_id: Option<usize>,
     window_title: Option<String>,
     session: ProductSession,
     preview_host: Arc<Mutex<PreviewHost>>,
@@ -189,6 +193,7 @@ impl ProductRunner {
             webview: None,
             web_context: Some(WebContext::new(None)),
             window: None,
+            last_announced_notice_id: None,
             window_title: None,
             session,
             preview_host,
@@ -343,6 +348,20 @@ impl ProductRunner {
         }
     }
 
+    /// The first undismissed reducer notice, if any. This is the single
+    /// notice that drives both [`Self::active_status`] and the spoken
+    /// [`AxAnnouncement`] in [`Self::publish_accessibility`], so the visible
+    /// status and VoiceOver never disagree about *which* notice is current.
+    /// Pending pseudo-decisions (dirty-close / recovery) are deliberately NOT
+    /// modeled here — only reducer-owned notices are announced.
+    fn active_notice(&self) -> Option<&UserNotice> {
+        self.session
+            .app_state()
+            .notices()
+            .iter()
+            .find(|notice| !notice.dismissed)
+    }
+
     /// The active status/notice message that should be surfaced to the user
     /// (both as the window-title suffix and as an NSAccessibility element).
     /// `None` means the buffer is clean with no outstanding notice. This is
@@ -350,13 +369,7 @@ impl ProductRunner {
     /// [`Self::publish_accessibility`] so the title bar and VoiceOver never
     /// disagree.
     fn active_status(&self) -> Option<String> {
-        if let Some(notice) = self
-            .session
-            .app_state()
-            .notices()
-            .iter()
-            .find(|notice| !notice.dismissed)
-        {
+        if let Some(notice) = self.active_notice() {
             return Some(notice.message.clone());
         }
         if self.pending_close {
@@ -387,39 +400,88 @@ impl ProductRunner {
 
     /// Publish the NSAccessibility tree (CY-A11Y-001) onto the content NSView
     /// so VoiceOver can announce the window, read the document text, speak the
-    /// toolbar button labels, and surface the active notice. Best-effort: any
-    /// wiring miss is silently dropped so an AX failure can never block the
-    /// editor or hang the app under VoiceOver (which calls AX callbacks on the
-    /// main thread).
-    fn publish_accessibility(&self) {
-        let Some(window) = self.window.as_deref() else {
-            return;
-        };
+    /// toolbar button labels, surface the active notice, and — when a *new*
+    /// reducer notice appears — speak it once.
+    ///
+    /// Additive perceivability, NOT a full AccessKit text-provider closure
+    /// (INV-3): the find/replace pseudo-fields and the editor
+    /// [`AxSelection`]/caret are exposed so an AT user can *perceive* them
+    /// (label / value / focus / `AXSelectedTextRange`), but they are not real
+    /// `AXTextArea` providers backed by `NSTextStorage`. Direct AT text entry
+    /// into the find field, or per-character caret driving from VoiceOver,
+    /// still requires a full AccessKit migration and remains out of scope.
+    ///
+    /// Best-effort: any wiring miss is silently dropped so an AX failure can
+    /// never block the editor or hang the app under VoiceOver (which calls AX
+    /// callbacks on the main thread). The announcement dedup cursor
+    /// (`last_announced_notice_id`) is advanced *only* after a successful
+    /// `publish_to_window`, so a wiring failure retries the announcement on the
+    /// next frame and a repeated frame never re-announces the same notice.
+    fn publish_accessibility(&mut self) {
         let toolbar_labels: Vec<&'static str> = if self.source_pane.state.toolbar_visible {
             TOOLBAR_ITEMS.iter().map(|(label, _)| *label).collect()
         } else {
             Vec::new()
         };
+        let source = self.session.source();
+        let editor_selection = self
+            .source_pane
+            .editor()
+            .current_selection()
+            .ok()
+            .map(|selection| project_editor_selection(selection, source.len()));
+        let find_bar = self.find_bar.as_ref().map(project_find_bar);
+        let cursor = self.last_announced_notice_id;
+        let announcement = self
+            .active_notice()
+            .and_then(|notice| project_announcement(notice, cursor));
+        // Capture the notice id before moving `announcement` into the snapshot
+        // so the dedup cursor can advance after a successful publish without a
+        // clone.
+        let pending_notice_id = announcement.as_ref().map(|a| a.notice_id);
         let ui = AxUiState {
-            editor_text: self.session.source(),
+            editor_text: source,
             toolbar_labels,
             active_status: self.active_status(),
+            editor_selection,
+            find_bar,
+            announcement,
         };
         let state = super::MacAccessibilityState::from_ui(&ui);
-        // SAFETY / defensive: every failure path returns Err and is discarded.
-        #[cfg(target_os = "macos")]
-        {
-            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-            let raw = match window.window_handle() {
-                Ok(handle) => handle,
-                Err(_) => return,
-            };
-            let RawWindowHandle::AppKit(appkit) = raw.as_raw() else {
-                return;
-            };
-            let _ = super::accessibility::publish_to_window(&appkit, &state);
-        }
+        let published = match self.window.as_deref() {
+            // No window yet (early frames before WindowEvent::Resumed). Leave
+            // the announcement cursor untouched so the first notice is
+            // announced once the window is live.
+            None => false,
+            Some(window) => {
+                // SAFETY / defensive: every failure path returns Err and is
+                // discarded below.
+                #[cfg(target_os = "macos")]
+                {
+                    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                    let raw = match window.window_handle() {
+                        Ok(handle) => handle,
+                        Err(_) => return,
+                    };
+                    let RawWindowHandle::AppKit(appkit) = raw.as_raw() else {
+                        return;
+                    };
+                    super::accessibility::publish_to_window(&appkit, &state).is_ok()
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let _ = window;
+                    false
+                }
+            }
+        };
         let _ = state;
+        // Advance the dedup cursor only after a successful publish so a wiring
+        // failure retries on the next frame. `pending_notice_id` is a Copy
+        // `Option<usize>`, so it does not alias the window borrow above.
+        if published && let Some(notice_id) = pending_notice_id {
+            self.last_announced_notice_id = Some(notice_id);
+        }
     }
 
     fn maybe_poll_external_change(&mut self) {
@@ -803,6 +865,18 @@ impl ProductRunner {
     }
 
     // --- find / replace bar -------------------------------------------------
+    /// Best-effort restore keyboard focus to the source editor after a UX flow
+    /// that stole it (find bar close, a recovery / dirty-close decision that
+    /// keeps the window open). Production-only — the supervised smoke drives
+    /// its own focus flow (via `commit_ime_for_smoke` / `Focused(true)`) and
+    /// must not be perturbed. Failures are swallowed so a focus miss never
+    /// blocks the editor.
+    fn restore_editor_focus(&mut self) {
+        if !self.smoke {
+            let _ = self.source_pane.focus_editor();
+        }
+    }
+    // --- find / replace bar -------------------------------------------------
 
     fn open_find(&mut self, replace_enabled: bool) {
         let seed = self
@@ -837,6 +911,9 @@ impl ProductRunner {
     fn close_find(&mut self) {
         self.find_bar = None;
         self.session.end_find();
+        // Best-effort return keyboard focus to the source editor now that the
+        // find bar has closed. Production-only (smoke never opens the bar).
+        self.restore_editor_focus();
         self.source_pane.set_find_bar(None);
     }
 
@@ -1109,6 +1186,9 @@ impl ProductRunner {
         if let Some(window) = &self.window {
             window.set_title(&status_title("Recovered unsaved changes"));
         }
+        // The adopted buffer replaced the document; return keyboard focus to
+        // the editor so the user can keep typing.
+        self.restore_editor_focus();
     }
 
     fn dismiss_recovery(&mut self) {
@@ -1116,6 +1196,8 @@ impl ProductRunner {
         if let Some(window) = &self.window {
             window.set_title(PRODUCT_NAME);
         }
+        // The prompt stole keyboard focus from the editor; return it.
+        self.restore_editor_focus();
     }
 
     /// Execute a dirty-close decision through the reducer-owned
@@ -1137,6 +1219,7 @@ impl ProductRunner {
                 let _ = self.session.request_close(CloseDecision::Cancel);
                 self.pending_close = false;
                 self.sync_window_title();
+                self.restore_editor_focus();
                 false
             }
             CloseDialogAction::Discard => {
@@ -1149,6 +1232,7 @@ impl ProductRunner {
                     Ok(CloseOutcome::KeepOpen) => {
                         self.pending_close = false;
                         self.sync_window_title();
+                        self.restore_editor_focus();
                         false
                     }
                     Err(error) => {
@@ -1167,6 +1251,7 @@ impl ProductRunner {
                             let _ = self.session.request_close(CloseDecision::Cancel);
                             self.pending_close = false;
                             self.sync_window_title();
+                            self.restore_editor_focus();
                             return false;
                         }
                         Err(error) => {
@@ -1189,6 +1274,7 @@ impl ProductRunner {
                     Ok(CloseOutcome::KeepOpen) => {
                         self.pending_close = false;
                         self.sync_window_title();
+                        self.restore_editor_focus();
                         false
                     }
                     Err(error) => {
@@ -2082,6 +2168,64 @@ struct FindBarView {
     status: String,
 }
 
+// ---------------------------------------------------------------------------
+// G006 — accessibility projections (pure, headless-testable).
+//
+// These map the runner's live editor/find/notice state onto the accessibility
+// model exposed in `accessibility.rs`. They are free functions so the mapping
+// (clamping, focus projection, announcement dedup) can be unit-tested without
+// constructing a full `ProductRunner`. All reducer/AppMessage ownership stays
+// in `ProductSession`; no new `AppMessage` is introduced.
+// ---------------------------------------------------------------------------
+
+/// Project the editor's current selection onto a clamped [`AxSelection`].
+/// `anchor`/`head` are byte offsets that may arrive in either order; the
+/// location is the earlier byte and the length is the span between them
+/// (`0` ⇒ a bare caret). Clamped to `text_len` so a stale selection never
+/// projects past the document end.
+fn project_editor_selection(selection: Selection, text_len: usize) -> AxSelection {
+    let location = selection.anchor.min(selection.head);
+    let length = selection.head.abs_diff(selection.anchor);
+    AxSelection { location, length }.clamped_to(text_len)
+}
+
+/// Project the live find/replace bar onto the AX pseudo-field model. The
+/// replacement text is exposed only when replace is enabled (`None` ⇒ the
+/// "Replace" pseudo-field is omitted from the tree). Additive perceivability
+/// only — see the module residual in `accessibility.rs` (INV-3).
+fn project_find_bar(bar: &FindBarView) -> AxFindBar {
+    AxFindBar {
+        query: bar.query.clone(),
+        replacement: if bar.replace_enabled {
+            Some(bar.replacement.clone())
+        } else {
+            None
+        },
+        focus: match bar.focus {
+            FindField::Query => AxFindField::Find,
+            FindField::Replace => AxFindField::Replace,
+        },
+        status: bar.status.clone(),
+    }
+}
+
+/// Project a reducer notice onto a spoken [`AxAnnouncement`] unless it has
+/// already been announced (`notice.id == cursor`), in which case `None` is
+/// returned so a repeated frame never re-announces the same notice. Severity
+/// is mapped to an AX priority. Reducer-owned notices only — pending
+/// pseudo-decisions are never announced here.
+fn project_announcement(notice: &UserNotice, cursor: Option<usize>) -> Option<AxAnnouncement> {
+    if Some(notice.id) == cursor {
+        None
+    } else {
+        Some(AxAnnouncement {
+            notice_id: notice.id,
+            message: notice.message.clone(),
+            priority: AxAnnouncementPriority::from_severity(notice.severity),
+        })
+    }
+}
+
 #[derive(Default)]
 struct SourceProgram;
 
@@ -2942,10 +3086,14 @@ fn run_dirty_close_alert() -> Result<CloseDialogAction, MacError> {
 #[cfg(test)]
 mod tests {
     use super::smoke_stage_zero_ready_to_edit;
+    use super::{AxAnnouncementPriority, AxFindField, AxSelection};
     use super::{
-        CLOSE_DIALOG_BUTTONS, CloseDialogAction, RECOVERY_DIALOG_BUTTONS, RecoveryDialogAction,
-        close_dialog_action, recovery_dialog_action,
+        CLOSE_DIALOG_BUTTONS, CloseDialogAction, FindBarView, FindField, RECOVERY_DIALOG_BUTTONS,
+        RecoveryDialogAction, close_dialog_action, project_announcement, project_editor_selection,
+        project_find_bar, recovery_dialog_action,
     };
+    use crate::app::{NoticeSeverity, UserNotice};
+    use feathermark_core::Selection;
 
     #[test]
     fn stage_zero_blocks_the_first_edit_until_a_preview_scroll_receipt_arrives() {
@@ -3037,5 +3185,145 @@ mod tests {
         assert_eq!(close_dialog_action(0), CloseDialogAction::Cancel);
         assert_eq!(close_dialog_action(-1), CloseDialogAction::Cancel);
         assert_eq!(close_dialog_action(9999), CloseDialogAction::Cancel);
+    }
+
+    // -----------------------------------------------------------------
+    // G006 — accessibility projection tests (pure, no ProductRunner).
+    // -----------------------------------------------------------------
+
+    fn notice(id: usize, severity: NoticeSeverity, message: &str) -> UserNotice {
+        UserNotice {
+            id,
+            severity,
+            message: message.to_owned(),
+            source_error: String::new(),
+            action_label: None,
+            shown: false,
+            dismissed: false,
+        }
+    }
+
+    #[test]
+    fn editor_selection_collapses_a_caret_to_zero_length() {
+        // anchor == head is a bare caret; length must be 0 and location the
+        // caret byte, clamped to the document end.
+        let sel = project_editor_selection(Selection { anchor: 4, head: 4 }, 10);
+        assert_eq!(
+            sel,
+            AxSelection {
+                location: 4,
+                length: 0
+            }
+        );
+    }
+
+    #[test]
+    fn editor_selection_orders_a_forward_range() {
+        // anchor < head: location is the anchor, length is the span.
+        let sel = project_editor_selection(Selection { anchor: 2, head: 7 }, 10);
+        assert_eq!(
+            sel,
+            AxSelection {
+                location: 2,
+                length: 5
+            }
+        );
+    }
+
+    #[test]
+    fn editor_selection_orders_a_backward_range() {
+        // head < anchor (drag selection): location is the earlier byte.
+        let sel = project_editor_selection(Selection { anchor: 7, head: 2 }, 10);
+        assert_eq!(
+            sel,
+            AxSelection {
+                location: 2,
+                length: 5
+            }
+        );
+    }
+
+    #[test]
+    fn editor_selection_clamps_to_the_document_end() {
+        // A stale/oversized selection never projects past the text. The text
+        // is only 5 bytes, so a selection at 3..9 clamps to 3..5.
+        let sel = project_editor_selection(Selection { anchor: 3, head: 9 }, 5);
+        assert_eq!(
+            sel,
+            AxSelection {
+                location: 3,
+                length: 2
+            }
+        );
+        // A caret past the end clamps its location to the end (length 0).
+        let sel = project_editor_selection(Selection { anchor: 9, head: 9 }, 5);
+        assert_eq!(
+            sel,
+            AxSelection {
+                location: 5,
+                length: 0
+            }
+        );
+    }
+
+    #[test]
+    fn find_bar_projects_query_focus_status_and_replacement_when_enabled() {
+        let bar = FindBarView {
+            query: "todo".to_owned(),
+            replacement: "DONE".to_owned(),
+            replace_enabled: true,
+            focus: FindField::Query,
+            status: "Match 1 of 3".to_owned(),
+        };
+        let projected = project_find_bar(&bar);
+        assert_eq!(projected.query, "todo");
+        assert_eq!(projected.replacement.as_deref(), Some("DONE"));
+        assert_eq!(projected.focus, AxFindField::Find);
+        assert_eq!(projected.status, "Match 1 of 3");
+    }
+
+    #[test]
+    fn find_bar_omits_replacement_and_maps_focus_when_disabled() {
+        // Replace disabled ⇒ replacement is None (the "Replace" pseudo-field is
+        // omitted from the AX tree), and a Replace focus maps across anyway.
+        let bar = FindBarView {
+            query: "x".to_owned(),
+            replacement: String::new(),
+            replace_enabled: false,
+            focus: FindField::Replace,
+            status: String::new(),
+        };
+        let projected = project_find_bar(&bar);
+        assert!(projected.replacement.is_none());
+        assert_eq!(projected.focus, AxFindField::Replace);
+        assert_eq!(projected.query, "x");
+    }
+
+    #[test]
+    fn announcement_dedup_returns_none_when_the_cursor_matches() {
+        // A notice whose id equals the cursor has already been announced; the
+        // projection must return None so a repeated frame stays silent.
+        let n = notice(7, NoticeSeverity::Info, "Saved");
+        assert_eq!(project_announcement(&n, Some(7)), None);
+    }
+
+    #[test]
+    fn announcement_projects_a_new_notice_with_mapped_priority() {
+        // A notice id the cursor has not seen yet is announced, with severity
+        // mapped to an AX priority.
+        let info = notice(1, NoticeSeverity::Info, "Saved");
+        let ann = project_announcement(&info, None).expect("new info notice announced");
+        assert_eq!(ann.notice_id, 1);
+        assert_eq!(ann.message, "Saved");
+        assert_eq!(ann.priority, AxAnnouncementPriority::Low);
+
+        // Warning and Error map to High; a different cursor id still announces.
+        let warn = notice(2, NoticeSeverity::Warning, "Conflict");
+        let ann = project_announcement(&warn, Some(1)).expect("new warning announced");
+        assert_eq!(ann.priority, AxAnnouncementPriority::High);
+
+        let err = notice(3, NoticeSeverity::Error, "Save failed");
+        let ann = project_announcement(&err, None).expect("new error announced");
+        assert_eq!(ann.priority, AxAnnouncementPriority::High);
     }
 }

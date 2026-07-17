@@ -2167,6 +2167,7 @@ fn execute_shared_open(
     session: &Rc<RefCell<LinuxProductSession>>,
     editor_adapter: &Rc<RefCell<GtkSourceEditorAdapter>>,
     window: &gtk::ApplicationWindow,
+    announcement_bar: &gtk::Label,
     path: PathBuf,
     started: Instant,
 ) {
@@ -2188,16 +2189,24 @@ fn execute_shared_open(
         let mirror_effects = session
             .borrow_mut()
             .record_mirror_failure(error.to_string());
-        handle_session_effects(&mirror_effects, session, editor_adapter, window, started);
+        handle_session_effects(
+            &mirror_effects,
+            session,
+            editor_adapter,
+            window,
+            announcement_bar,
+            started,
+        );
     }
 }
 
-#[allow(clippy::only_used_in_recursion)] // window reserved for future notice presentation
+#[allow(clippy::only_used_in_recursion)] // window only feeds the recursion; notice presentation goes through announcement_bar
 fn handle_session_effects(
     effects: &[AppEffect],
     session: &Rc<RefCell<LinuxProductSession>>,
     editor_adapter: &Rc<RefCell<GtkSourceEditorAdapter>>,
     window: &gtk::ApplicationWindow,
+    announcement_bar: &gtk::Label,
     started: Instant,
 ) {
     for effect in effects {
@@ -2209,9 +2218,22 @@ fn handle_session_effects(
                 let follow_up = session
                     .borrow_mut()
                     .complete_mirror_resync(result.map_err(|error| error.to_string()));
-                handle_session_effects(&follow_up, session, editor_adapter, window, started);
+                handle_session_effects(
+                    &follow_up,
+                    session,
+                    editor_adapter,
+                    window,
+                    announcement_bar,
+                    started,
+                );
             }
-            AppEffect::PresentNotice { .. } => {}
+            AppEffect::PresentNotice { notice } => {
+                // A11Y (G006 gap 4): surface the notice message in the dedicated
+                // Notification-role live region so AT-SPI/Orca announces it
+                // without disturbing the word-count status_bar.
+                announcement_bar.set_text(&notice.message);
+                announcement_bar.show();
+            }
             AppEffect::ScheduleRender { revision } => {
                 session
                     .borrow_mut()
@@ -2234,6 +2256,7 @@ fn pump_ui_work(
     frame_seq: &Rc<RefCell<u64>>,
     window: &gtk::ApplicationWindow,
     status_bar: &gtk::Label,
+    announcement_bar: &gtk::Label,
     last_counts_revision: &Cell<u64>,
     started: Instant,
 ) -> gtk::glib::ControlFlow {
@@ -2268,6 +2291,7 @@ fn pump_ui_work(
                                 session,
                                 editor_adapter,
                                 window,
+                                announcement_bar,
                                 started,
                             );
                         }
@@ -2333,7 +2357,14 @@ fn pump_ui_work(
         let effects = session
             .borrow_mut()
             .report_open_warning(format!("render queue failed: {error}"));
-        handle_session_effects(&effects, session, editor_adapter, window, started);
+        handle_session_effects(
+            &effects,
+            session,
+            editor_adapter,
+            window,
+            announcement_bar,
+            started,
+        );
     }
 
     match worker.try_recv() {
@@ -2343,7 +2374,14 @@ fn pump_ui_work(
             Ok(NativeRenderOutcome::Navigate { url, .. }) => {
                 if let Err(error) = native_web.borrow().load_url(&url) {
                     let effects = session.borrow_mut().report_open_warning(error.to_string());
-                    handle_session_effects(&effects, session, editor_adapter, window, started);
+                    handle_session_effects(
+                        &effects,
+                        session,
+                        editor_adapter,
+                        window,
+                        announcement_bar,
+                        started,
+                    );
                 }
             }
             Ok(_) => {}
@@ -2351,7 +2389,14 @@ fn pump_ui_work(
                 let effects = session
                     .borrow_mut()
                     .report_open_warning(format!("render failed: {error}"));
-                handle_session_effects(&effects, session, editor_adapter, window, started);
+                handle_session_effects(
+                    &effects,
+                    session,
+                    editor_adapter,
+                    window,
+                    announcement_bar,
+                    started,
+                );
             }
         },
         Ok(None) => {}
@@ -2362,7 +2407,14 @@ fn pump_ui_work(
             let effects = session
                 .borrow_mut()
                 .report_open_warning(format!("renderer stopped: {error}"));
-            handle_session_effects(&effects, session, editor_adapter, window, started);
+            handle_session_effects(
+                &effects,
+                session,
+                editor_adapter,
+                window,
+                announcement_bar,
+                started,
+            );
         }
     }
 
@@ -2464,6 +2516,7 @@ fn run_application() -> Result<(), String> {
                         &handles.session,
                         &handles.editor_adapter,
                         &handles.window,
+                        &handles.announcement_bar,
                         handles.started,
                     );
                     *open_session.borrow_mut() = Some(handles);
@@ -2515,6 +2568,7 @@ struct OpenSessionHandles {
     session: Rc<RefCell<LinuxProductSession>>,
     editor_adapter: Rc<RefCell<GtkSourceEditorAdapter>>,
     window: gtk::ApplicationWindow,
+    announcement_bar: gtk::Label,
     started: Instant,
 }
 
@@ -2524,13 +2578,21 @@ fn drain_pending_open_paths(
     session: &Rc<RefCell<LinuxProductSession>>,
     editor_adapter: &Rc<RefCell<GtkSourceEditorAdapter>>,
     window: &gtk::ApplicationWindow,
+    announcement_bar: &gtk::Label,
     started: Instant,
 ) {
     for warning in pending_warnings.borrow_mut().drain(..) {
         let _ = session.borrow_mut().report_open_warning(warning);
     }
     for path in pending_paths.borrow_mut().drain(..) {
-        execute_shared_open(session, editor_adapter, window, path, started);
+        execute_shared_open(
+            session,
+            editor_adapter,
+            window,
+            announcement_bar,
+            path,
+            started,
+        );
     }
 }
 
@@ -2654,7 +2716,7 @@ fn build_window(
     // toggle (DESIGN-SYSTEM: toolbar default-off, no icons in chrome).
     let toolbar = build_format_toolbar(&format_action);
     // Find/replace bar — hidden until Ctrl+F / Edit ▸ Find.
-    let find_bar = FindBar::new(&session, &editor_adapter, &window, started);
+    let find_bar = FindBar::new(&session, &editor_adapter, &window, &source_view, started);
     // Live-counts status bar.
     let status_bar = gtk::Label::new(Some(""));
     status_bar.set_xalign(0.0);
@@ -2665,12 +2727,33 @@ fn build_window(
     status_bar
         .style_context()
         .add_class("feathermark-statusbar");
+    // Dedicated status announcement region (G006 gap 4): a Notification-role
+    // live region for AppEffect::PresentNotice messages, separate from the
+    // word-count status_bar so AT-SPI/Orca announces notices without speaking
+    // count churn. Hidden until the first notice arrives; set_no_show_all keeps
+    // the initial show_all() from revealing it.
+    let announcement_bar = gtk::Label::new(Some(""));
+    announcement_bar.set_xalign(0.0);
+    announcement_bar.set_margin_start(8);
+    announcement_bar.set_margin_end(8);
+    announcement_bar.set_margin_top(2);
+    announcement_bar.set_margin_bottom(2);
+    announcement_bar.set_no_show_all(true);
+    announcement_bar
+        .style_context()
+        .add_class("feathermark-announce");
+    let announcement_spec = announcement_accessible_spec();
+    if let Some(accessible) = announcement_bar.accessible() {
+        accessible.set_role(announcement_spec.1);
+        accessible.set_name(announcement_spec.0);
+    }
 
     let menubar = build_menu_bar(
         &window,
         &format_action,
         &toolbar,
         &find_bar.container,
+        &find_bar.search,
         &session,
     );
 
@@ -2679,6 +2762,7 @@ fn build_window(
     root.pack_start(&toolbar, false, false, 0);
     root.pack_start(&find_bar.container, false, false, 0);
     root.pack_start(&paned, true, true, 0);
+    root.pack_start(&announcement_bar, false, false, 0);
     root.pack_start(&status_bar, false, false, 0);
     window.add(&root);
     window.show_all();
@@ -3149,6 +3233,7 @@ fn build_window(
         let frame_seq = Rc::new(RefCell::new(0_u64));
         let window = window.clone();
         let status_bar = status_bar.clone();
+        let announcement_bar = announcement_bar.clone();
         let last_counts_revision = Cell::new(u64::MAX);
         wakeup_rx.attach(None, move |_wakeup| {
             pump_ui_work(
@@ -3160,6 +3245,7 @@ fn build_window(
                 &frame_seq,
                 &window,
                 &status_bar,
+                &announcement_bar,
                 &last_counts_revision,
                 started,
             )
@@ -3172,6 +3258,7 @@ fn build_window(
         let editor_adapter = Rc::clone(&editor_adapter);
         let window = window.clone();
         let status_bar = status_bar.clone();
+        let announcement_bar = announcement_bar.clone();
         let last_counts_revision = Cell::new(u64::MAX);
         gtk::glib::timeout_add_local(Duration::from_millis(DISK_POLL_MS), move || {
             if session.borrow().is_closed() {
@@ -3191,6 +3278,7 @@ fn build_window(
                             &session,
                             &editor_adapter,
                             &window,
+                            &announcement_bar,
                             started,
                         );
                     }
@@ -3350,7 +3438,14 @@ fn build_window(
                 window.resize(frame.width.max(1) as i32, frame.height.max(1) as i32);
             }
             if !recovered_adopted && let Some(path) = restore.last_file.clone() {
-                execute_shared_open(&session, &editor_adapter, &window, path, started);
+                execute_shared_open(
+                    &session,
+                    &editor_adapter,
+                    &window,
+                    &announcement_bar,
+                    path,
+                    started,
+                );
                 if let Some(selection) = restore.selection {
                     let _ = editor_adapter.borrow().set_selection(selection);
                 }
@@ -3530,6 +3625,7 @@ fn build_window(
         session: Rc::clone(&session),
         editor_adapter: Rc::clone(&editor_adapter),
         window: window.clone(),
+        announcement_bar: announcement_bar.clone(),
         started,
     });
     drain_pending_open_paths(
@@ -3538,6 +3634,7 @@ fn build_window(
         &session,
         &editor_adapter,
         &window,
+        &announcement_bar,
         started,
     );
 
@@ -3785,6 +3882,7 @@ fn build_menu_bar(
     format_action: &Rc<dyn Fn(FormatCommand)>,
     toolbar: &gtk::Box,
     find_container: &gtk::Box,
+    find_search: &gtk::Entry,
     session: &Rc<RefCell<LinuxProductSession>>,
 ) -> gtk::MenuBar {
     let menubar = gtk::MenuBar::new();
@@ -3856,9 +3954,16 @@ fn build_menu_bar(
     {
         let item = gtk::MenuItem::with_label("Find / Replace   Ctrl+F");
         let find_container = find_container.clone();
-        item.connect_activate(move |_| find_container.show_all());
+        let find_search = find_search.clone();
+        item.connect_activate(move |_| {
+            // A11Y (G006 gap 1): Edit ▸ Find must reveal AND focus the search
+            // field, matching the Ctrl+F accelerator (keyboard/menu parity).
+            find_container.show_all();
+            find_search.grab_focus();
+        });
         edit_menu.append(&item);
     }
+
     menubar.append(&edit_root);
 
     let format_menu = gtk::Menu::new();
@@ -3912,6 +4017,24 @@ fn build_menu_bar(
     menubar
 }
 
+/// Accessible name + ATK role for the find/replace entries (G006 gap 1). Pure
+/// and widget-free so the contract is headlessly testable without a running
+/// GTK/AT-SPI stack; the entries previously carried only placeholder text.
+pub fn find_entry_accessible_specs() -> [(&'static str, gtk::atk::Role); 2] {
+    [
+        ("Find", gtk::atk::Role::Entry),
+        ("Replace", gtk::atk::Role::Entry),
+    ]
+}
+
+/// Accessible name + ATK role for the dedicated status announcement region
+/// (G006 gap 4). Pure and widget-free so the Notification-role contract is
+/// headlessly testable; the live region consumes [`AppEffect::PresentNotice`]
+/// messages without disturbing the word-count status bar.
+pub fn announcement_accessible_spec() -> (&'static str, gtk::atk::Role) {
+    ("Rutile status", gtk::atk::Role::Notification)
+}
+
 /// Find/replace bar. Owns its widgets and routes every gesture to the Wave-2S
 /// find/replace actions on the session, resyncing the native mirror after any
 /// mutation.
@@ -3925,6 +4048,7 @@ impl FindBar {
         session: &Rc<RefCell<LinuxProductSession>>,
         adapter: &Rc<RefCell<GtkSourceEditorAdapter>>,
         window: &gtk::ApplicationWindow,
+        source_view: &sourceview4::View,
         started: Instant,
     ) -> Self {
         let container = gtk::Box::new(gtk::Orientation::Horizontal, 4);
@@ -3933,6 +4057,18 @@ impl FindBar {
         search.set_placeholder_text(Some("Find"));
         let replace = gtk::Entry::new();
         replace.set_placeholder_text(Some("Replace with"));
+        // A11Y (G006 gap 1): explicit accessible name + Entry role on the
+        // find/replace entries so AT-SPI users can identify them. Previously
+        // only the placeholder text labelled these fields.
+        let entry_specs = find_entry_accessible_specs();
+        if let Some(accessible) = search.accessible() {
+            accessible.set_name(entry_specs[0].0);
+            accessible.set_role(entry_specs[0].1);
+        }
+        if let Some(accessible) = replace.accessible() {
+            accessible.set_name(entry_specs[1].0);
+            accessible.set_role(entry_specs[1].1);
+        }
         let prev = gtk::Button::with_label("Prev");
         let next = gtk::Button::with_label("Next");
         let replace_one = gtk::Button::with_label("Replace");
@@ -4081,9 +4217,13 @@ impl FindBar {
         {
             let session = Rc::clone(session);
             let container = container.clone();
+            let source_view = source_view.clone();
             close.connect_clicked(move |_| {
                 session.borrow_mut().end_find();
                 container.hide();
+                // A11Y (G006 gap 2): return keyboard focus to the source editor
+                // when the find bar closes so the user is not stranded.
+                source_view.grab_focus();
             });
         }
 
