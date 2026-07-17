@@ -169,6 +169,23 @@ fn new_file_is_created_0600() {
     assert_eq!(fs::read_to_string(&path).unwrap(), "new");
 }
 
+#[cfg(unix)]
+#[test]
+fn existing_file_gid_is_preserved_after_save() {
+    use std::os::unix::fs::MetadataExt;
+
+    let dir = TestDir::new("gid-existing");
+    let path = dir.join("note.md");
+    fs::write(&path, "old").unwrap();
+    let original_gid = fs::metadata(&path).unwrap().gid();
+
+    let outcome = LocalFileService::new().save_atomic(&path, &snapshot("new"));
+
+    assert!(matches!(outcome, SaveOutcome::Committed { .. }));
+    assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+    assert_eq!(fs::metadata(&path).unwrap().gid(), original_gid);
+}
+
 #[test]
 fn before_rename_failure_returns_not_committed_and_leaves_original_intact() {
     let dir = TestDir::new("before-rename");
@@ -317,4 +334,197 @@ fn debounce_waits_for_a_full_quiet_period_after_the_latest_event() {
     assert!(!debounce.take_ready(start + Duration::from_millis(179)));
     assert!(debounce.take_ready(start + Duration::from_millis(180)));
     assert!(!debounce.take_ready(start + Duration::from_secs(1)));
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::os::unix::ffi::OsStrExt;
+// Minimal libc helpers to set and read back a single extended attribute, used
+// only by the xattr-preservation test below. macOS and Linux share the syscall
+// names but differ in arity, so each raw wrapper selects the matching libc
+// signature per target (mirroring the production `*_raw` wrappers in
+// `src/files.rs`). Only ENOTSUP/EOPNOTSUPP yield `Unsupported` — e.g. a
+// filesystem with no xattr support — every other syscall failure panics so a
+// genuine preservation regression cannot hide behind a silent skip.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+enum XattrOutcome {
+    Applied,
+    Unsupported,
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn feathermark_xattr_name() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "com.feathermark.test"
+    }
+    #[cfg(target_os = "linux")]
+    {
+        "user.feathermark.test"
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn classify_xattr_error() -> XattrOutcome {
+    let err = std::io::Error::last_os_error();
+    match err.raw_os_error() {
+        Some(code) if code == libc::ENOTSUP || code == libc::EOPNOTSUPP => {
+            XattrOutcome::Unsupported
+        }
+        _ => panic!("xattr syscall failed: {err}"),
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+unsafe fn setxattr_raw(
+    path: *const libc::c_char,
+    name: *const libc::c_char,
+    value: *const libc::c_void,
+    size: usize,
+) -> i32 {
+    // macOS takes trailing `position` (0) and `options` (0); Linux takes neither.
+    unsafe {
+        #[cfg(target_os = "macos")]
+        {
+            libc::setxattr(path, name, value, size, 0, 0)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            libc::setxattr(path, name, value, size, 0)
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+unsafe fn getxattr_raw(
+    path: *const libc::c_char,
+    name: *const libc::c_char,
+    value: *mut libc::c_void,
+    size: usize,
+) -> isize {
+    // macOS takes trailing `position` (0) and `options` (0); Linux takes neither.
+    unsafe {
+        #[cfg(target_os = "macos")]
+        {
+            libc::getxattr(path, name, value, size, 0, 0)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            libc::getxattr(path, name, value, size)
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn set_test_xattr(path: &Path, value: &[u8]) -> XattrOutcome {
+    let path_c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    let name_c = std::ffi::CString::new(feathermark_xattr_name()).unwrap();
+    // SAFETY: `path`/`name` are valid NUL-terminated C strings; `value`/`size`
+    // describe a readable buffer (a dangling pointer is fine when `size` is 0).
+    let result = unsafe {
+        setxattr_raw(
+            path_c.as_ptr(),
+            name_c.as_ptr(),
+            value.as_ptr() as *const libc::c_void,
+            value.len(),
+        )
+    };
+    if result == 0 {
+        XattrOutcome::Applied
+    } else {
+        classify_xattr_error()
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn read_test_xattr(path: &Path, out: &mut Vec<u8>) -> XattrOutcome {
+    out.clear();
+    let path_c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    let name_c = std::ffi::CString::new(feathermark_xattr_name()).unwrap();
+    // SAFETY: probing with a null buffer and size 0 returns the required length
+    // without writing.
+    let probe = unsafe { getxattr_raw(path_c.as_ptr(), name_c.as_ptr(), std::ptr::null_mut(), 0) };
+    if probe < 0 {
+        return classify_xattr_error();
+    }
+    out.resize(probe as usize, 0);
+    // SAFETY: `out`/`probe` describe a writable buffer large enough for the value.
+    let actual = unsafe {
+        getxattr_raw(
+            path_c.as_ptr(),
+            name_c.as_ptr(),
+            out.as_mut_ptr() as *mut libc::c_void,
+            out.len(),
+        )
+    };
+    if actual < 0 {
+        out.clear();
+        return classify_xattr_error();
+    }
+    out.truncate(actual as usize);
+    XattrOutcome::Applied
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn save_atomic_preserves_existing_extended_attribute_byte_for_byte() {
+    let dir = TestDir::new("xattr");
+    let path = dir.join("note.md");
+    fs::write(&path, "original").unwrap();
+
+    // Raw bytes that are invalid UTF-8 and include an interior NUL: extended
+    // attribute values must survive replacement byte-for-byte.
+    let value: &[u8] = b"\xff\x00\xfe";
+    if let XattrOutcome::Unsupported = set_test_xattr(&path, value) {
+        // Filesystem lacks xattr support; the preservation path cannot be
+        // exercised here, so there is nothing to assert.
+        return;
+    }
+
+    let outcome = LocalFileService::new().save_atomic(&path, &snapshot("replacement"));
+    let SaveOutcome::Committed { .. } = outcome else {
+        panic!("expected committed save outcome");
+    };
+
+    assert_eq!(fs::read(&path).unwrap(), b"replacement");
+
+    let mut recovered = Vec::new();
+    match read_test_xattr(&path, &mut recovered) {
+        XattrOutcome::Applied => assert_eq!(recovered, value),
+        XattrOutcome::Unsupported => panic!("xattr disappeared after save"),
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn pre_rename_failure_preserves_extended_attribute_and_cleans_tempfile() {
+    let dir = TestDir::new("xattr-failed-save");
+    let path = dir.join("note.md");
+    fs::write(&path, "original").unwrap();
+
+    // Raw, invalid-UTF-8 bytes with an interior NUL: the extended attribute on
+    // the original must survive an aborted save unchanged, byte-for-byte.
+    let value: &[u8] = b"\xff\x00\xfe";
+    if let XattrOutcome::Unsupported = set_test_xattr(&path, value) {
+        // Filesystem lacks xattr support; the preservation path cannot be
+        // exercised here, so there is nothing to assert.
+        return;
+    }
+
+    let outcome = LocalFileService::with_fault(SaveFault::BeforeRename)
+        .save_atomic(&path, &snapshot("replacement"));
+
+    assert!(matches!(outcome, SaveOutcome::NotCommitted { .. }));
+    assert_eq!(fs::read_to_string(&path).unwrap(), "original");
+
+    let mut recovered = Vec::new();
+    match read_test_xattr(&path, &mut recovered) {
+        XattrOutcome::Applied => assert_eq!(recovered, value),
+        XattrOutcome::Unsupported => panic!("xattr disappeared after aborted save"),
+    }
+
+    let names = fs::read_dir(&dir.0)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    assert_eq!(names, vec![path.file_name().unwrap()]);
 }
