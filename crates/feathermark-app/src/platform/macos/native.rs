@@ -24,7 +24,10 @@ use iced_winit::program::runtime::UserInterface;
 use iced_winit::program::runtime::user_interface;
 use iced_winit::winit;
 use objc2::MainThreadMarker;
-use objc2_app_kit::{NSModalResponseOK, NSOpenPanel, NSSavePanel};
+use objc2_app_kit::{
+    NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSAlertStyle, NSModalResponse,
+    NSModalResponseOK, NSOpenPanel, NSSavePanel,
+};
 use objc2_foundation::NSString;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
@@ -1115,6 +1118,88 @@ impl ProductRunner {
         }
     }
 
+    /// Execute a dirty-close decision through the reducer-owned
+    /// [`ProductSession::request_close`] path. Returns `true` when the event
+    /// loop has been asked to exit. Shared by both the native NSAlert decision
+    /// (G003 production) and the smoke keyboard pseudo-decision fallback so
+    /// both routes preserve identical reducer and save-path semantics:
+    /// untitled Save still routes through `choose_save_path("Untitled.md")`,
+    /// Discard only exits on [`CloseOutcome::Close`], and a save-panel cancel
+    /// routes back through [`CloseDecision::Cancel`] so a stray Esc in the
+    /// save panel cannot drop the document.
+    fn execute_close_decision(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        decision: CloseDialogAction,
+    ) -> bool {
+        match decision {
+            CloseDialogAction::Cancel => {
+                let _ = self.session.request_close(CloseDecision::Cancel);
+                self.pending_close = false;
+                self.sync_window_title();
+                false
+            }
+            CloseDialogAction::Discard => {
+                match self.session.request_close(CloseDecision::Discard) {
+                    Ok(CloseOutcome::Close) => {
+                        self.save_session_on_exit();
+                        event_loop.exit();
+                        true
+                    }
+                    Ok(CloseOutcome::KeepOpen) => {
+                        self.pending_close = false;
+                        self.sync_window_title();
+                        false
+                    }
+                    Err(error) => {
+                        self.surface_error(error.to_string());
+                        false
+                    }
+                }
+            }
+            CloseDialogAction::Save => {
+                let untitled_path = if self.session.path().is_none() {
+                    match choose_save_path("Untitled.md") {
+                        Ok(Some(path)) => Some(path),
+                        Ok(None) => {
+                            // Save-panel cancel routes back through Cancel so a
+                            // stray Esc cannot silently drop the document.
+                            let _ = self.session.request_close(CloseDecision::Cancel);
+                            self.pending_close = false;
+                            self.sync_window_title();
+                            return false;
+                        }
+                        Err(error) => {
+                            self.surface_error(error.to_string());
+                            return false;
+                        }
+                    }
+                } else {
+                    None
+                };
+                match self
+                    .session
+                    .request_close(CloseDecision::Save { untitled_path })
+                {
+                    Ok(CloseOutcome::Close) => {
+                        self.save_session_on_exit();
+                        event_loop.exit();
+                        true
+                    }
+                    Ok(CloseOutcome::KeepOpen) => {
+                        self.pending_close = false;
+                        self.sync_window_title();
+                        false
+                    }
+                    Err(error) => {
+                        self.surface_error(format!("Save failed: {error}"));
+                        false
+                    }
+                }
+            }
+        }
+    }
+
     fn apply_restore(&mut self, event_loop: &ActiveEventLoop) {
         let Some(restore) = self.pending_restore.take() else {
             return;
@@ -1527,12 +1612,29 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
                 self.window = Some(window);
                 self.install_file_menu();
                 self.apply_restore(event_loop);
-                if self.pending_recovery.is_some()
-                    && let Some(window) = &self.window
-                {
+                let has_recovery = self.pending_recovery.is_some();
+                if has_recovery && let Some(window) = &self.window {
+                    // Always publish the pending-recovery status so the
+                    // keyboard fallback (⌘Y Restore · Esc Dismiss) stays
+                    // discoverable even if the native alert cannot be
+                    // presented. Smoke never invokes NSAlert (G003).
                     window.set_title(&status_title(
                         "Recovered unsaved changes: ⌘Y Restore · Esc Dismiss",
                     ));
+                }
+                if has_recovery && !self.smoke {
+                    // Production (G003): present the native accessible AppKit
+                    // recovery alert after the window/webview is installed and
+                    // session restore has been applied. Restore routes through
+                    // the existing `adopt_recovery` path; Dismiss through
+                    // `dismiss_recovery`. An alert construction/presentation
+                    // failure surfaces the error and leaves `pending_recovery`
+                    // intact rather than silently dismissing.
+                    match run_recovery_alert() {
+                        Ok(RecoveryDialogAction::Restore) => self.adopt_recovery(event_loop),
+                        Ok(RecoveryDialogAction::Dismiss) => self.dismiss_recovery(),
+                        Err(error) => self.surface_error(error.to_string()),
+                    }
                 }
                 if self.smoke {
                     event_loop.set_control_flow(ControlFlow::WaitUntil(self.deadline));
@@ -1553,12 +1655,28 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
         event: WindowEvent,
     ) {
         if matches!(&event, WindowEvent::CloseRequested) {
-            if self.session.app_state().dirty() {
-                self.pending_close = true;
-                self.sync_window_title();
-            } else {
+            if !self.session.app_state().dirty() {
                 self.save_session_on_exit();
                 event_loop.exit();
+                return;
+            }
+            if self.smoke {
+                // Non-blocking automation fallback (G003): smoke keeps the
+                // existing pending-title/keyboard pseudo-decision path and
+                // never invokes NSAlert.
+                self.pending_close = true;
+                self.sync_window_title();
+                return;
+            }
+            // Production (G003): present the native accessible AppKit
+            // dirty-close alert immediately and route the chosen decision
+            // through the reducer-owned close path shared with the smoke
+            // keyboard fallback.
+            match run_dirty_close_alert() {
+                Ok(decision) => {
+                    self.execute_close_decision(event_loop, decision);
+                }
+                Err(error) => self.surface_error(error.to_string()),
             }
             return;
         }
@@ -1629,67 +1747,28 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
         {
             let command = self.modifiers.super_key();
             if self.pending_close {
-                if matches!(
+                let decision = if matches!(
                     key_event.logical_key,
                     Key::Named(winit::keyboard::NamedKey::Escape)
                 ) {
-                    let _ = self.session.request_close(CloseDecision::Cancel);
-                    self.pending_close = false;
-                    self.sync_window_title();
-                    return;
-                }
-                if command
+                    Some(CloseDialogAction::Cancel)
+                } else if command
                     && matches!(key_event.logical_key, Key::Character(ref key) if key.eq_ignore_ascii_case("d"))
                 {
-                    match self.session.request_close(CloseDecision::Discard) {
-                        Ok(CloseOutcome::Close) => {
-                            self.save_session_on_exit();
-                            event_loop.exit();
-                        }
-                        Ok(CloseOutcome::KeepOpen) => {
-                            self.pending_close = false;
-                            self.sync_window_title();
-                        }
-                        Err(error) => self.surface_error(error.to_string()),
-                    }
-                    return;
-                }
-                if command
+                    Some(CloseDialogAction::Discard)
+                } else if command
                     && matches!(key_event.logical_key, Key::Character(ref key) if key.eq_ignore_ascii_case("s"))
                 {
-                    let untitled_path = if self.session.path().is_none() {
-                        match choose_save_path("Untitled.md") {
-                            Ok(Some(path)) => Some(path),
-                            Ok(None) => {
-                                let _ = self.session.request_close(CloseDecision::Cancel);
-                                self.pending_close = false;
-                                self.sync_window_title();
-                                return;
-                            }
-                            Err(error) => {
-                                self.surface_error(error.to_string());
-                                return;
-                            }
-                        }
-                    } else {
-                        None
-                    };
-                    match self
-                        .session
-                        .request_close(CloseDecision::Save { untitled_path })
-                    {
-                        Ok(CloseOutcome::Close) => {
-                            self.save_session_on_exit();
-                            event_loop.exit();
-                        }
-                        Ok(CloseOutcome::KeepOpen) => {
-                            self.pending_close = false;
-                            self.sync_window_title();
-                        }
-                        Err(error) => self.surface_error(format!("Save failed: {error}")),
-                    }
+                    Some(CloseDialogAction::Save)
+                } else {
+                    None
+                };
+                if let Some(decision) = decision {
+                    self.execute_close_decision(event_loop, decision);
                     return;
                 }
+                // Non-decision keys fall through to the rest of the keyboard
+                // handler, matching the historical smoke fallback semantics.
             }
             let shift = self.modifiers.shift_key();
 
@@ -2737,9 +2816,136 @@ fn unix_ms_now() -> u64 {
         .unwrap_or(0)
 }
 
+// ---------------------------------------------------------------------------
+// G003 — crash-recovery / unsaved-changes dialog primitives.
+//
+// The two `NSAlert` confirmations the production shell presents on launch
+// (recovery) and on a dirty window close. The button orderings and fail-closed
+// `runModal` mappers are pure and unit-tested; `run_recovery_alert` /
+// `run_dirty_close_alert` build and present the alerts on the AppKit main
+// thread and project the response through those mappers. Smoke never invokes
+// them (it uses the keyboard pseudo-decision fallback). A presentation error
+// is surfaced and leaves `pending_recovery` intact / the dirty window open.
+// `NSModalResponse` is a type alias for `isize`, so the mappers are plain
+// integer comparisons with no AppKit runtime involvement.
+// ---------------------------------------------------------------------------
+
+/// The user's choice on the crash-recovery `NSAlert` (a recovered buffer was
+/// found on launch). "Restore" rehydrates it; "Dismiss" discards it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RecoveryDialogAction {
+    /// Rehydrate the recovered buffer ("Restore", first button).
+    Restore,
+    /// Drop the recovered buffer ("Dismiss", second button).
+    Dismiss,
+}
+
+/// The user's choice on the unsaved-changes-on-close `NSAlert`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CloseDialogAction {
+    /// Save the buffer before closing ("Save", first button).
+    Save,
+    /// Drop unsaved changes and close ("Don't Save", second button).
+    Discard,
+    /// Keep the window open ("Cancel", third button).
+    Cancel,
+}
+
+/// Exact button ordering for the recovery `NSAlert`. Buttons are added to the
+/// alert in this order, so `NSAlertFirstButtonReturn` ⇒ `RecoveryDialogAction::Restore`
+/// and every other response ⇒ `RecoveryDialogAction::Dismiss`.
+const RECOVERY_DIALOG_BUTTONS: &[&str] = &["Restore", "Dismiss"];
+
+/// Exact button ordering for the unsaved-changes-on-close `NSAlert`:
+/// `NSAlertFirstButtonReturn` ⇒ `CloseDialogAction::Save`,
+/// `NSAlertSecondButtonReturn` ⇒ `CloseDialogAction::Discard`, and anything
+/// else ⇒ `CloseDialogAction::Cancel`.
+const CLOSE_DIALOG_BUTTONS: &[&str] = &["Save", "Don't Save", "Cancel"];
+
+/// Maps a recovery `NSAlert` response onto `RecoveryDialogAction`. Only the
+/// first button restores; the second button and any unknown / out-of-range code
+/// dismiss — fail-closed against silently clobbering the live buffer with a
+/// stale recovered one.
+fn recovery_dialog_action(response: NSModalResponse) -> RecoveryDialogAction {
+    if response == NSAlertFirstButtonReturn {
+        RecoveryDialogAction::Restore
+    } else {
+        RecoveryDialogAction::Dismiss
+    }
+}
+
+/// Maps an unsaved-changes-on-close `NSAlert` response onto
+/// `CloseDialogAction`. First button ⇒ Save, second ⇒ Discard, and the third
+/// button plus any unknown / out-of-range code ⇒ Cancel — the only
+/// non-destructive default when the user's intent is ambiguous.
+fn close_dialog_action(response: NSModalResponse) -> CloseDialogAction {
+    if response == NSAlertFirstButtonReturn {
+        CloseDialogAction::Save
+    } else if response == NSAlertSecondButtonReturn {
+        CloseDialogAction::Discard
+    } else {
+        CloseDialogAction::Cancel
+    }
+}
+
+/// Presents the crash-recovery `NSAlert` on the AppKit main thread and projects
+/// its `runModal` response onto `RecoveryDialogAction`. Buttons are added in
+/// `RECOVERY_DIALOG_BUTTONS` order so the first button restores; the "Dismiss"
+/// button is bound to Escape (⎋) so the recovered buffer can be dropped without
+/// leaving the keyboard. A failure to reach the main thread is returned as an
+/// error — the caller surfaces it and leaves `pending_recovery` intact
+/// (MAC-004 fail-closed) rather than silently restoring or dismissing.
+fn run_recovery_alert() -> Result<RecoveryDialogAction, MacError> {
+    let mtm = MainThreadMarker::new().ok_or_else(|| {
+        MacError::Native("recovery alert must run on the AppKit main thread".into())
+    })?;
+    let alert = NSAlert::new(mtm);
+    alert.setAlertStyle(NSAlertStyle::Warning);
+    alert.setMessageText(&NSString::from_str("Recovered unsaved changes"));
+    alert.setInformativeText(&NSString::from_str(
+        "A previous session ended with unsaved edits. Restore them now, or \
+         dismiss to keep the current document unchanged.",
+    ));
+    // First button ("Restore") restores; second ("Dismiss") dismisses. The
+    // retained buttons are owned by the alert, so only "Dismiss" is bound —
+    // to Escape (⎋) so the recovered buffer can be dropped from the keyboard.
+    let _ = alert.addButtonWithTitle(&NSString::from_str(RECOVERY_DIALOG_BUTTONS[0]));
+    let dismiss = alert.addButtonWithTitle(&NSString::from_str(RECOVERY_DIALOG_BUTTONS[1]));
+    dismiss.setKeyEquivalent(&NSString::from_str("\u{1b}"));
+    Ok(recovery_dialog_action(alert.runModal()))
+}
+
+/// Presents the unsaved-changes-on-close `NSAlert` on the AppKit main thread
+/// and projects its `runModal` response onto `CloseDialogAction`. Buttons are
+/// added in `CLOSE_DIALOG_BUTTONS` order ("Save", "Don't Save", "Cancel").
+/// "Cancel" and "Don't Save" pick up their standard AppKit key equivalents
+/// (Escape / ⌘D) from their native titles, so no equivalent is set here. A
+/// failure to reach the main thread is returned as an error — the caller
+/// surfaces it and leaves the dirty window open rather than dropping changes.
+fn run_dirty_close_alert() -> Result<CloseDialogAction, MacError> {
+    let mtm = MainThreadMarker::new()
+        .ok_or_else(|| MacError::Native("close alert must run on the AppKit main thread".into()))?;
+    let alert = NSAlert::new(mtm);
+    alert.setAlertStyle(NSAlertStyle::Warning);
+    alert.setMessageText(&NSString::from_str("Do you want to save your changes?"));
+    alert.setInformativeText(&NSString::from_str(
+        "Your changes will be lost if you don't save them.",
+    ));
+    // "Save" (first) ⇒ Save, "Don't Save" (second) ⇒ Discard, "Cancel" (third)
+    // ⇒ Cancel. The discarded retained buttons are owned by the alert.
+    let _ = alert.addButtonWithTitle(&NSString::from_str(CLOSE_DIALOG_BUTTONS[0]));
+    let _ = alert.addButtonWithTitle(&NSString::from_str(CLOSE_DIALOG_BUTTONS[1]));
+    let _ = alert.addButtonWithTitle(&NSString::from_str(CLOSE_DIALOG_BUTTONS[2]));
+    Ok(close_dialog_action(alert.runModal()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::smoke_stage_zero_ready_to_edit;
+    use super::{
+        CLOSE_DIALOG_BUTTONS, CloseDialogAction, RECOVERY_DIALOG_BUTTONS, RecoveryDialogAction,
+        close_dialog_action, recovery_dialog_action,
+    };
 
     #[test]
     fn stage_zero_blocks_the_first_edit_until_a_preview_scroll_receipt_arrives() {
@@ -2767,5 +2973,69 @@ mod tests {
     #[test]
     fn stage_zero_blocks_until_the_source_editor_has_presented_a_frame() {
         assert!(!smoke_stage_zero_ready_to_edit(Some(0), 0, 1));
+    }
+    #[test]
+    fn recovery_dialog_buttons_have_the_exact_restore_then_dismiss_ordering() {
+        // The alert must add "Restore" first so NSAlertFirstButtonReturn ⇒ Restore.
+        assert_eq!(RECOVERY_DIALOG_BUTTONS, ["Restore", "Dismiss"].as_slice());
+    }
+
+    #[test]
+    fn close_dialog_buttons_have_the_exact_save_dont_save_cancel_ordering() {
+        assert_eq!(
+            CLOSE_DIALOG_BUTTONS,
+            ["Save", "Don't Save", "Cancel"].as_slice()
+        );
+    }
+
+    #[test]
+    fn recovery_dialog_maps_known_responses() {
+        assert_eq!(
+            recovery_dialog_action(objc2_app_kit::NSAlertFirstButtonReturn),
+            RecoveryDialogAction::Restore
+        );
+        assert_eq!(
+            recovery_dialog_action(objc2_app_kit::NSAlertSecondButtonReturn),
+            RecoveryDialogAction::Dismiss
+        );
+        assert_eq!(
+            recovery_dialog_action(objc2_app_kit::NSAlertThirdButtonReturn),
+            RecoveryDialogAction::Dismiss
+        );
+    }
+
+    #[test]
+    fn close_dialog_maps_known_responses() {
+        assert_eq!(
+            close_dialog_action(objc2_app_kit::NSAlertFirstButtonReturn),
+            CloseDialogAction::Save
+        );
+        assert_eq!(
+            close_dialog_action(objc2_app_kit::NSAlertSecondButtonReturn),
+            CloseDialogAction::Discard
+        );
+        assert_eq!(
+            close_dialog_action(objc2_app_kit::NSAlertThirdButtonReturn),
+            CloseDialogAction::Cancel
+        );
+    }
+
+    #[test]
+    fn recovery_dialog_fails_closed_on_an_unknown_response() {
+        // Any code that is not the first button must dismiss, never restore —
+        // restoring an unrecognised choice could clobber the live buffer.
+        // 0 is NSModalResponseCancel; -1 and 9999 are out of the alert's range.
+        assert_eq!(recovery_dialog_action(0), RecoveryDialogAction::Dismiss);
+        assert_eq!(recovery_dialog_action(-1), RecoveryDialogAction::Dismiss);
+        assert_eq!(recovery_dialog_action(9999), RecoveryDialogAction::Dismiss);
+    }
+
+    #[test]
+    fn close_dialog_fails_closed_on_an_unknown_response() {
+        // Any code that is neither the first nor second button must cancel —
+        // the only non-destructive default for an ambiguous close.
+        assert_eq!(close_dialog_action(0), CloseDialogAction::Cancel);
+        assert_eq!(close_dialog_action(-1), CloseDialogAction::Cancel);
+        assert_eq!(close_dialog_action(9999), CloseDialogAction::Cancel);
     }
 }
