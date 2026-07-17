@@ -22,21 +22,21 @@
 What it did **not** do: change production Rust, run VoiceOver/AT-SPI, or emit any
 `accessibility-attestation.v1` record. Those are the debt items below.
 
-## ED-A11Y-0 — Missing attestation schema
+## ED-A11Y-0 — Attestation schema (resolved)
 
-- **Item:** the `rutile.accessibility-attestation.v1.schema.json` file does not
-  exist in `schemas/`. The evidence shape is fixed in
-  `accessibility-acceptance.md` §5, but cannot be validated by
-  `cargo run -p xtask -- evidence validate --schema accessibility-attestation`
-  until the schema file is added.
-- **Why deferred:** schemas and the xtask validator are shared release
-> artifacts; this lane is read-only on production code. The schema must be
-> authored alongside the first real attestation collection so the shape is
-> validated against actual AT output rather than invented in a vacuum.
-- **Owner:** release owner / accessibility specialist.
-- **Revalidate:** add `schemas/rutile.accessibility-attestation.v1.schema.json`,
-  then every attestation in the run directory must validate against it.
-- **Expiry:** before the first interactive AT run (ED-A11Y-1).
+- **Item (original):** the `rutile.accessibility-attestation.v1.schema.json`
+  file did not exist in `schemas/`, so the evidence shape fixed in
+  `accessibility-acceptance.md` §5 could not be validated by
+  `cargo run -p xtask -- evidence validate --schema accessibility-attestation`.
+- **Resolution:** the schema now exists at
+  `schemas/rutile.accessibility-attestation.v1.schema.json`, matching the
+  attestation shape from `accessibility-acceptance.md` §5, so the validator can
+  check attestation records against it.
+- **Scope of closure:** schema existence closes **only ED-A11Y-0**. It does
+  **not** create, collect, or fabricate any real `accessibility-attestation.v1`
+  records, and it does **not** close ED-A11Y-1, ED-A11Y-2, ED-A11Y-3, or
+  ED-A11Y-4 — those still require real interactive assistive-technology runs in
+  environments that remain unavailable in this lane (see below).
 
 ## ED-A11Y-1 — macOS / VoiceOver validation (all flows)
 
@@ -47,8 +47,7 @@ What it did **not** do: change production Rust, run VoiceOver/AT-SPI, or emit an
 - **Why deferred:** requires a real macOS host with VoiceOver and the gaps
   G-1…G-7 from the audit resolved (or explicitly accepted). VoiceOver cannot be
 > exercised in a headless / non-interactive lane, and per the plan unavailable
-> environments become evidence-debt, never fabricated passes. GLM 5.2 has no
-> vision capability, so visual/AT grading cannot even be proxied here.
+> environments become evidence-debt, never fabricated passes.
 - **Owner:** accessibility specialist.
 - **Revalidate:** (a) G-1 (NSAccessibility bridge) implemented and verified with
   Accessibility Inspector showing the editor, toolbar, find bar, and notices in
