@@ -10,6 +10,11 @@
 //! `reproducible-build`); the **candidate_sha256 is genuinely measured** and is
 //! the verification anchor — a reviewer rebuilds via `reproducible-build` and
 //! byte-compares candidate_sha256 to confirm reproducibility independently.
+//! This assertion boundary is made explicit and schema-enforced by the
+//! [`ReproducibilityControlsOrigin`] field on every record: it records whether
+//! the controls were measured from the ambient build environment or re-derived
+//! by an operator assertion, so a self-injected re-derivation cannot masquerade
+//! as an independent build-environment measurement.
 //! A production candidate must originate from a clean git tree, must not enable
 //! the test-control feature, and must use reproducible-build controls
 //! (SOURCE_DATE_EPOCH + --remap-path-prefix + a separate prod target root).
@@ -62,6 +67,30 @@ pub struct Reproducibility {
     pub source_date_epoch: u64,
     pub remap_path_prefix: bool,
     pub target_root: String,
+    pub controls_origin: ReproducibilityControlsOrigin,
+}
+
+/// Explicit derivation boundary for the reproducibility controls
+/// (`source_date_epoch` + `--remap-path-prefix` + `target_root`).
+///
+/// The `candidate_sha256` is always measured from the candidate artifact file.
+/// The reproducibility *controls* have a derivation boundary that this enum
+/// records, so a self-injected re-derivation cannot be mistaken for an
+/// independent build-environment measurement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReproducibilityControlsOrigin {
+    /// `SOURCE_DATE_EPOCH` + `--remap-path-prefix` RUSTFLAGS were read from the
+    /// ambient build environment (i.e. inherited from the `reproducible-build`
+    /// subprocess that produced the candidate). The operator asserts the
+    /// candidate was built under these controls; the generator measured them.
+    AmbientBuildEnv,
+    /// The controls were re-derived from the repository by
+    /// [`generate_with_reproducible_env`] (commit-date `SOURCE_DATE_EPOCH` and
+    /// repo-derived RUSTFLAGS) because the generating process did not inherit
+    /// `reproducible-build`'s subprocess environment. This is an operator
+    /// re-derivation assertion, not an independent build-environment measurement.
+    OperatorReDerivation,
 }
 
 /// Inputs the generator cannot measure on its own (paths and caller-provided
@@ -166,6 +195,7 @@ pub fn generate(request: &ProvenanceRequest) -> Result<ProductionProvenance, Pro
             source_date_epoch,
             remap_path_prefix: true,
             target_root: request.target_root.clone(),
+            controls_origin: ReproducibilityControlsOrigin::AmbientBuildEnv,
         },
         built_at,
         source_tag,
@@ -193,7 +223,14 @@ pub fn generate_with_reproducible_env(
         std::env::set_var("SOURCE_DATE_EPOCH", &source_date_epoch);
         std::env::set_var("RUSTFLAGS", &rustflags);
     }
-    generate(request)
+    let mut provenance = generate(request)?;
+    // The controls were re-derived from the repository (commit-date
+    // SOURCE_DATE_EPOCH + repo-derived RUSTFLAGS) rather than measured from
+    // the candidate build subprocess env. Mark the boundary explicitly so the
+    // record cannot be mistaken for an independent build-environment measurement.
+    provenance.reproducibility.controls_origin =
+        ReproducibilityControlsOrigin::OperatorReDerivation;
+    Ok(provenance)
 }
 
 impl ProductionProvenance {
@@ -719,6 +756,12 @@ mod tests {
         assert_eq!(provenance.reproducibility.source_date_epoch, 1720915200);
         assert!(provenance.reproducibility.remap_path_prefix);
         assert_eq!(provenance.reproducibility.target_root, "target-prod");
+        // `generate` reads the controls from the ambient build env: the
+        // derivation boundary is explicitly marked as measured, not re-derived.
+        assert_eq!(
+            provenance.reproducibility.controls_origin,
+            ReproducibilityControlsOrigin::AmbientBuildEnv
+        );
 
         // built_at deterministic from SOURCE_DATE_EPOCH.
         assert_eq!(provenance.built_at, "2024-07-14T00:00:00Z");
@@ -767,6 +810,7 @@ mod tests {
                 source_date_epoch: 0,
                 remap_path_prefix: true,
                 target_root: "target-prod".into(),
+                controls_origin: ReproducibilityControlsOrigin::AmbientBuildEnv,
             },
             built_at: "1970-01-01T00:00:00Z".into(),
             source_tag: None,

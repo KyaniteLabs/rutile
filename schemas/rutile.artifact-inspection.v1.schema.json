@@ -13,6 +13,9 @@
     "quarantine_sha256",
     "artifact_sha256",
     "production_provenance_sha256",
+    "manifest_build_input_sha256",
+    "manifest_packaged_executable_sha256",
+    "inspected_executable_sha256",
     "complete_scan",
     "accepted",
     "publication_authorized",
@@ -37,6 +40,27 @@
       ]
     },
     "production_provenance_sha256": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      ]
+    },
+    "manifest_build_input_sha256": {
+      "description": "The pre-sign build-input SHA-256 claimed by the package manifest. Null outside Package mode or when the manifest is missing/malformed. This is the link that provenance candidate_sha256 must equal.",
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      ]
+    },
+    "manifest_packaged_executable_sha256": {
+      "description": "The post-sign packaged-executable SHA-256 claimed by the package manifest. Null outside Package mode or when the manifest is missing/malformed. This is the link that inspected_executable_sha256 must equal. On macOS it legitimately differs from manifest_build_input_sha256 because codesigning mutates the executable.",
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      ]
+    },
+    "inspected_executable_sha256": {
+      "description": "The SHA-256 measured by the inspector from the actual executable inside the package (directory walk, bounded zip reader, or bounded DMG reader). Null outside Package mode or when no executable was found.",
       "oneOf": [
         { "type": "null" },
         { "type": "string", "pattern": "^[0-9a-f]{64}$" }
