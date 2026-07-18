@@ -8,17 +8,23 @@
 # job. The pipeline is:
 #
 #   1. xtask package local <kind>     -> package artifacts + manifests JSON
+#      (manifests JSON carries packaged_executable_sha256 per artifact)
 #   2. xtask artifact inspect          -> candidate-mode quarantine/leak audit
-#      (--mode candidate; --mode package always rejects today because
-#       publication_authorized is bound false until the Phase B provenance
-#       keystone can authorize publication)
+#      (--mode candidate only; package-mode publication_authorized is
+#      permanently false in this pipeline — no keystone or owner approval
+#      path exists here to authorize publication)
 #   3. best-effort dependency SBOM     -> CycloneDX if cargo-cyclonedx is
 #      installed, otherwise a Cargo.lock-derived SBOM (real data, not a stub)
 #
-# install / open / uninstall smoke and provenance binding are owned by the
-# Phase B/C commands (`xtask package smoke-row`, `xtask evidence ...`); until
-# those land this gate records them as outstanding in its gate-result error
-# field and fails closed if the candidate inspection rejects.
+#   4. xtask package smoke-row        -> rutile.package-smoke-row.v1 receipt
+#      per produced artifact proving real install/open/uninstall (never
+#      planned-only). Platform-tool absence or kind/platform mismatch fails
+#      closed inside the command and is recorded as a failed run row.
+#
+# Provenance binding (`xtask evidence bind`) is owned by evidence-finalize.sh,
+# which holds the plain gate index. This gate never authorizes publication:
+# publication_authorized is permanently false; no keystone or owner approval
+# path is wired here to change that.
 #
 # Usage:
 #   scripts/ci/package-inspect.sh --candidate target/prod/feathermark \
@@ -269,7 +275,7 @@ runs_tsv="$(mktemp)"
 trap 'rm -f "$stdout_raw" "$stderr_raw" "$runs_tsv"' EXIT
 
 output_root="${job_dir}/packages/${kind}"
-build_input_sha256="$(sha256_arg "${REPO_ROOT}/Cargo.lock")"
+build_input_sha256="$(sha256_arg "$candidate")"
 source_commit="$commit"
 
 started_ms="$(now_ms)"
@@ -310,8 +316,9 @@ if [ -d "$output_root" ]; then
 fi
 
 # Candidate-mode leak audit over the whole package tree. Package-mode
-# publication authorization is a Phase B gate (publication_authorized is bound
-# false today) and is recorded as outstanding rather than invoked.
+# publication authorization is permanently out of scope: publication_authorized
+# is bound false and no path in this pipeline can change that. The candidate
+# audit quarantines and reports leaks without authorizing release.
 echo "=== package-inspect: xtask artifact inspect (candidate leak audit) ==="
 inspect_json="${job_dir}/artifact-inspection.json"
 set +e
@@ -386,10 +393,111 @@ fi
 { head -c 16384 "$sbom_json"; } >>"$stdout_raw" 2>/dev/null || true
 record "sbom" "$sbom_code" ""
 
-# install/open/uninstall + provenance binding require Phase B/C commands that
-# do not exist yet (xtask package smoke-row, xtask evidence ...). They are
-# recorded as outstanding and never faked.
-outstanding="${outstanding} pending:package-smoke-row(install/open/uninstall) pending:provenance-binding"
+# install/open/uninstall smoke: one xtask package smoke-row invocation per
+# produced package artifact. Each receipt is a create-only
+# rutile.package-smoke-row.v1 document at a FIXED path
+# <evidence_dir>/package-smoke-row.json. The smoke engine installs the package
+# to the real platform footprint (NOT the candidate binary path), opens the
+# installed binary, then uninstalls and verifies no residue.
+#
+# Per-kind install footprint (confirmed with the smoke engine owner):
+#   macos-app-zip / macos-dmg:
+#     install_target = /Applications/Rutile.app
+#     binary_path    = /Applications/Rutile.app/Contents/MacOS/FeatherMark
+#   linux-deb / linux-rpm:
+#     install_target = /
+#     binary_path    = /usr/bin/feathermark
+#   linux-tar-zst:
+#     install_target = /opt/feathermark
+#     binary_path    = /opt/feathermark/bin/feathermark
+#
+# The expected executable SHA-256 is parsed from each artifact's sibling
+# manifest (packaged_executable_sha256 field) written by `xtask package local`.
+# The manifests JSON array was captured to ${output_root}.manifests.stdout.log
+# at step 1; we parse it to build an artifact-basename → sha256 lookup. If a
+# manifest is missing or the hash absent, that artifact's smoke-row fails
+# closed (the engine rejects a missing/empty expected hash).
+#
+# Inputs:  $output_root                   - package artifacts + manifests log
+#          $source_commit                 - git HEAD SHA-40
+#          ${output_root}.manifests.stdout.log - JSON array of ArtifactManifest
+# Artifacts: ${job_dir}/smoke/<smoke-kind>-<artifact>/package-smoke-row.json
+echo "=== package-inspect: xtask package smoke-row (install/open/uninstall) ==="
+smoke_root="${job_dir}/smoke"
+mkdir -p "$smoke_root"
+smoke_count=0
+manifests_log="${output_root}.manifests.stdout.log"
+
+# Build an artifact-basename → packaged_executable_sha256 lookup from the
+# manifests JSON array captured at step 1. python3 is already required.
+exec_sha_lookup="$(python3 - "$manifests_log" <<'PYLOOKUP'
+import json, sys, os
+path = sys.argv[1]
+lookup = {}
+if os.path.isfile(path):
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        for entry in data:
+            art = entry.get("artifact", "")
+            sha = entry.get("packaged_executable_sha256", "")
+            if art and sha:
+                lookup[os.path.basename(art)] = sha
+    except Exception:
+        pass
+for name, sha in sorted(lookup.items()):
+    print("%s\t%s" % (name, sha))
+PYLOOKUP
+)"
+
+if [ -d "$output_root" ]; then
+  shopt -s nullglob
+  for artifact in "$output_root"/*.app.zip "$output_root"/*.dmg \
+                  "$output_root"/*.deb "$output_root"/*.rpm \
+                  "$output_root"/*.tar.zst; do
+    case "$artifact" in
+      *.app.zip) smoke_kind="macos-app-zip"; install_target="/Applications/Rutile.app"; binary_path="/Applications/Rutile.app/Contents/MacOS/FeatherMark" ;;
+      *.dmg)     smoke_kind="macos-dmg";     install_target="/Applications/Rutile.app"; binary_path="/Applications/Rutile.app/Contents/MacOS/FeatherMark" ;;
+      *.deb)     smoke_kind="linux-deb";     install_target="/"; binary_path="/usr/bin/feathermark" ;;
+      *.rpm)     smoke_kind="linux-rpm";     install_target="/"; binary_path="/usr/bin/feathermark" ;;
+      *.tar.zst) smoke_kind="linux-tar-zst"; install_target="/opt/feathermark"; binary_path="/opt/feathermark/bin/feathermark" ;;
+      *) continue ;;
+    esac
+    artifact_sha="$(sha256_arg "$artifact")"
+    artifact_base="$(basename "$artifact")"
+    # Look up the packaged executable SHA-256 from the sibling manifest.
+    expected_exec_sha="$(printf '%s\n' "$exec_sha_lookup" | awk -F'\t' -v a="$artifact_base" '$1==a{print $2; exit}')"
+    artifact_stem="$(printf '%s' "$artifact_base" | tr -c 'A-Za-z0-9._-' '_')"
+    smoke_ev_dir="${smoke_root}/${smoke_kind}-${artifact_stem}"
+    mkdir -p "$smoke_ev_dir"
+    set +e
+    cargo run --locked -p xtask --bin xtask -- package smoke-row \
+      --package "$artifact" \
+      --kind "$smoke_kind" \
+      --package-sha256 "$artifact_sha" \
+      --expected-executable-sha256 "$expected_exec_sha" \
+      --source-commit "$source_commit" \
+      --install-target "$install_target" \
+      --binary-path "$binary_path" \
+      --evidence-dir "$smoke_ev_dir" \
+      > >(tee -a "$stdout_raw") 2> >(tee -a "$stderr_raw" >&2)
+    smoke_code=$?
+    set -e
+    record "package-smoke-row:${smoke_kind}" "$smoke_code" \
+      "${smoke_ev_dir}/package-smoke-row.json"
+    smoke_count=$((smoke_count + 1))
+  done
+  shopt -u nullglob
+fi
+# Fail closed if no smoke-row executed (no packages produced or kind/platform
+# mismatch). runs[] already holds one honest row per artifact that did run.
+if [ "$smoke_count" -eq 0 ]; then
+  echo "package-inspect: no package artifacts found for smoke-row (kind=${kind})" >&2
+  overall_failed=1
+  run_n=$((run_n + 1))
+  tests_failed=$((tests_failed + 1))
+  printf '%s\tfailed\t0\t0\t0\tno-smoke-row-artifacts\n' "$run_n" >>"$runs_tsv"
+fi
 
 ended_ms="$(now_ms)"
 
@@ -397,11 +505,12 @@ final_exit=0
 [ "$overall_failed" -eq 0 ] || final_exit=1
 command_id="package-${kind}-${job}"
 
-# runs[] already holds one honest row per executed step (package-local,
-# artifact-inspect, sbom). No synthetic aggregate row is appended: the
-# schema requires run >= 1 and a row that does not correspond to a real
-# executed step would overstate coverage. The outstanding-Phase-B note is
-# surfaced via stdout below and in retained logs, not faked as a passed run.
+# runs[] holds one honest row per executed step (package-local,
+# artifact-inspect, sbom, one package-smoke-row per produced artifact). No
+# synthetic aggregate row is appended: the schema requires run >= 1 and a row
+# that does not correspond to a real executed step would overstate coverage.
+# Outstanding human/platform inputs (e.g. pending-cyclonedx) are surfaced via
+# stdout below and in retained logs, never faked as a passed run.
 
 gate_path="$(emit_gate_result \
   --command-id "$command_id" \

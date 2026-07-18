@@ -138,23 +138,40 @@ jobs:
           if-no-files-found: error
           retention-days: 365
 
-  # 4. Generate + bind provenance. The canonical provenance keystone (which
-  #    produces the fully-attested release-prerequisite-preflight document from
-  #    runner probes + signing identities + owner approval) lands in Phase B.
-  #    Today this job consumes an attested preflight inventory (committed or
-  #    supplied via PREFLIGHT_INPUT) and runs the real `xtask release-preflight`
-  #    command, which validates the inventory's commit/tree against the live
-  #    repository and fails closed (listing hard blockers) until the inventory
-  #    is regenerated for the tag and result.ready becomes true. No input or
-  #    output is fabricated: a missing or stale inventory fails closed.
+  # 4. Independent readiness attestation + runner verification + provenance
+  #    validation. This job consumes three EXTERNAL inputs that cannot be
+  #    fabricated in CI and fails closed if any is absent:
+  #      - PROVENANCE_INPUT: a real G005 production-provenance record
+  #        (rutile.production-provenance.v1) generated externally for the exact
+  #        tagged source. Validated against the checked-out tag before upload.
+  #      - READINESS_ATTESTATION_INPUT: an independent readiness attestation
+  #        signed by the trusted verifier. Absent until G004 provisions the key.
+  #      - PREFLIGHT_INPUT: an attested release-prerequisite-preflight inventory.
+  #    It also captures the five-runner enrollment matrix
+  #    (`xtask runner capture-verify-matrix`; fails closed Unprovisioned),
+  #    verifies + publishes the readiness attestation (`xtask readiness
+  #    verify/publish`; never signs, never authorizes publication), validates
+  #    the provenance against the tag (`xtask evidence validate`), and validates
+  #    the preflight inventory (`xtask release-preflight`).
+  #    publication_authorized remains false throughout. No tags, uploads, or
+  #    public release steps exist in this workflow.
   provenance:
-    # needs: external — signing identity (Apple notary / GPG) and owner approval.
+    # needs: external — signing identity, provisioned runners (G004),
+    # trusted-verifier key (G004), G005 provenance generator, and owner approval.
     needs: [tag-guard, release-package]
     runs-on: ubuntu-latest
     env:
-      # Canonical attested inventory path; override via workflow env to supply a
-      # tag-specific attestation once the Phase B generator exists.
+      # Real externally generated G005 production-provenance record for the
+      # exact tagged source. Generated outside CI from the tagged clean tree
+      # (never fabricated headless here). Absent → fail closed.
+      PROVENANCE_INPUT: release/evidence/provenance/production-provenance.json
+      # Canonical attested inventory path; the owner regenerates it for the tag.
       PREFLIGHT_INPUT: release/evidence/release-prerequisite-preflight-v1.json
+      # Independent readiness attestation supplied by the trusted verifier
+      # (rutile.readiness-attestation.v1). Absent until G004 provisions the
+      # trusted-verifier key and the verifier signs; readiness verify fails
+      # closed on absence.
+      READINESS_ATTESTATION_INPUT: release/evidence/readiness-attestation-v1.json
     steps:
       - uses: actions/checkout@v4
         with:
@@ -162,30 +179,90 @@ jobs:
           fetch-depth: 0
       - name: bootstrap toolchain
         run: rustup toolchain install 1.88.0 --profile minimal --no-self-update
+      - name: validate external production provenance (fails closed if absent)
+        # The G005 production-provenance record is generated externally from
+        # the exact tagged source — never fabricated in this pipeline. This
+        # step validates it against the rutile.production-provenance.v1 schema
+        # and fails closed if the file is absent, unreadable, or schema-invalid.
+        # The provenance is later passed to evidence-finalize.sh --provenance
+        # so evidence bind can anchor the canonical evidence index to it.
+        run: |
+          set -euo pipefail
+          if [ ! -f "$PROVENANCE_INPUT" ]; then
+            echo "release: no production provenance at $PROVENANCE_INPUT (G005 externally generated provenance required for this exact tag)" >&2
+            exit 2
+          fi
+          cargo run --locked -p xtask --bin xtask -- evidence validate \
+            --input "$PROVENANCE_INPUT" \
+            --schema production-provenance
+      - name: capture + verify runner enrollment matrix (fails closed)
+        # `xtask runner capture-verify-matrix` dispatches the five enrollment
+        # probes and commits the offline-verifiable runner lock. Fails closed
+        # (RunnerError::Unprovisioned) until G004 provisions the two trust
+        # manifests under xtask/. The runner lock is the --runner-lock input to
+        # readiness verify/publish below.
+        run: |
+          set -euo pipefail
+          mkdir -p release/evidence/runner target/runner-captures
+          cargo run --locked -p xtask --bin xtask -- runner capture-verify-matrix \
+            --runners fm-macos-arm64-v1,fm-macos-x86_64-v1,fm-ubuntu-x11-v1,fm-ubuntu-wayland-v1,fm-fedora-wayland-v1 \
+            --capture-dir target/runner-captures \
+            --out release/evidence/runner/runner-lock-v1.json
+      - name: verify independent readiness attestation (fails closed)
+        # `xtask readiness verify` checks the attestation's signature against
+        # the pinned trusted-verifier public key
+        # (release/keys/trusted-verifier-v1.pub.hex) and cross-binds its source
+        # to the checked-out tag + the runner lock. Never signs, never reads a
+        # secret, never authorizes publication. Fails closed until G004
+        # provisions the key and the independent verifier signs.
+        run: |
+          set -euo pipefail
+          if [ ! -f "$READINESS_ATTESTATION_INPUT" ]; then
+            echo "release: no readiness attestation at $READINESS_ATTESTATION_INPUT (G004 trusted-verifier key + independent verifier signature required)" >&2
+            exit 2
+          fi
+          cargo run --locked -p xtask --bin xtask -- readiness verify \
+            --input "$READINESS_ATTESTATION_INPUT" \
+            --runner-lock release/evidence/runner/runner-lock-v1.json
+      - name: publish readiness attestation (create-only; never signs)
+        # `xtask readiness publish` writes a create-only canonical copy of the
+        # verified attestation. publication_authorized stays false; this step
+        # emits the attestation for reviewers, it does not authorize release.
+        run: |
+          set -euo pipefail
+          mkdir -p release/evidence/readiness
+          cargo run --locked -p xtask --bin xtask -- readiness publish \
+            --input "$READINESS_ATTESTATION_INPUT" \
+            --runner-lock release/evidence/runner/runner-lock-v1.json \
+            --out release/evidence/readiness/readiness-attestation-published-v1.json
       - name: validate attested preflight inventory (real command; fails closed)
         # release-preflight parses the full rutile.release-prerequisite-preflight.v1
         # document, asserts its source commit/tree match the checked-out tag
-        # exactly, and reports readiness. Until the Phase B generator produces a
-        # matching inventory and the owner approves the protected tag, this step
-        # exits non-zero and blocks publication of the release.
+        # exactly, and reports readiness. Until the owner regenerates a matching
+        # inventory and approves the protected tag, this step exits non-zero
+        # and blocks publication of the release.
         run: |
           set -euo pipefail
           if [ ! -f "$PREFLIGHT_INPUT" ]; then
-            echo "release: no attested preflight inventory at $PREFLIGHT_INPUT (Phase B provenance generator required)" >&2
+            echo "release: no attested preflight inventory at $PREFLIGHT_INPUT (owner must regenerate for this tag)" >&2
             exit 2
           fi
           mkdir -p release/evidence/provenance
           cargo run --locked -p xtask --bin xtask -- release-preflight \
             --input "$PREFLIGHT_INPUT" \
-            --out release/evidence/provenance/
-      - name: retain preflight evidence
+            --out release/evidence/provenance/release-prerequisite-preflight.json
+      - name: retain provenance + readiness + runner evidence
+        # Named release-evidence-preflight so evidence-retention's
+        # release-evidence-* download pattern picks it up. Contains the
+        # validated production provenance, readiness attestation, runner lock,
+        # and preflight inventory under release/evidence/. When merged into
+        # target/evidence/ the provenance lands at
+        # target/evidence/provenance/production-provenance.json.
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: release-preflight
-          path: |
-            release/evidence/
-            ${{ env.PREFLIGHT_INPUT }}
+          name: release-evidence-preflight
+          path: release/evidence/
           if-no-files-found: warn
           retention-days: 365
 
@@ -200,16 +277,28 @@ jobs:
           ref: ${{ needs.tag-guard.outputs.commit }}
           fetch-depth: 0
       - name: merge all release evidence
+        # Downloads every release-evidence-* artifact (per-kind gate-results,
+        # smoke-row receipts, and the production-provenance record from the
+        # provenance job) into target/evidence for the finalizer.
         uses: actions/download-artifact@v4
         with:
           path: target/evidence
           pattern: release-evidence-*
           merge-multiple: true
-      - name: validate release evidence (fail-on-skip)
+      - name: finalize + bind canonical evidence index (fail-on-skip)
+        # Validates every gate-result, then binds the plain gate index into the
+        # canonical rutile.evidence-index.v1 schema via `xtask evidence bind`,
+        # anchored to the validated production-provenance SHA-256. Fails closed
+        # if any required gate is missing/failed/invalid, if the provenance is
+        # missing/unreadable (non-empty path asserted by the release pipeline),
+        # or if evidence bind rejects the index/provenance/source binding.
+        # Gate validation failure prevents bind entirely.
         run: |
           bash scripts/ci/evidence-finalize.sh \
             --required release-package-macos,release-package-linux \
             --fail-on-dirty \
+            --profile release \
+            --provenance target/evidence/provenance/production-provenance.json \
             --job release-evidence
       - name: retain final release evidence (long retention)
         if: always()

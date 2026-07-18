@@ -23,6 +23,7 @@
 #   clippy  cargo clippy ... -- -D warnings  (--workspace: all crates incl. spikes)
 #   docs    cargo doc --no-deps              (core + protocol + types)
 #   test    cargo test                       (core + protocol + types)
+#   xtask-test  cargo test -p xtask --all-targets  (G002 keystone crate tests; runs whenever test runs)
 #   build   cargo build --release            (production, no test-control, target/prod root)
 #   deny    cargo deny check                 (workspace dependency policy, deny-warnings)
 #   fuzz-deny  cargo deny check              (fuzz crate dependency policy, deny-warnings)
@@ -76,7 +77,8 @@ expanded=()
 for s in "${stage_list[@]}"; do
   case "$s" in
     lint) expanded+=(fmt clippy) ;;
-    fmt|clippy|docs|test|build|fuzz|deny|fuzz-deny) expanded+=("$s") ;;
+    test) expanded+=(test xtask-test) ;;
+    fmt|clippy|docs|xtask-test|build|fuzz|deny|fuzz-deny) expanded+=("$s") ;;
     *) echo "portable-gate: unknown stage: $s" >&2; exit 2 ;;
   esac
 done
@@ -371,6 +373,12 @@ for stage in "${stage_list[@]}"; do
     test)
       run_stage test cargo test --locked \
         -p feathermark-types -p feathermark-core -p feathermark-protocol
+      ;;
+    xtask-test)
+      # G002 keystone crate (evidence_bind, package_smoke, readiness_keystone)
+      # under locked all-targets coverage. Tests use in-process fakes (no native
+      # shell deps) so this stays portable alongside the types/core/protocol row.
+      run_stage xtask-test cargo test --locked -p xtask --all-targets
       ;;
     build)
       # Production build: no GUI feature and no test-control, in a separate

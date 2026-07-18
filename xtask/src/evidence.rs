@@ -18,13 +18,25 @@ pub const KNOWN_SCHEMA_KINDS: &[&str] = &[
     "preview-publication-authorization",
     "readiness-probe-bundle",
     "readiness-attestation",
+    "package-smoke-row",
 ];
 
-/// Rutile evidence kinds that carry a `source: { commit, tree }` binding which
-/// must match the current repository HEAD before the record can be trusted.
-/// Used by [`validate_readiness_with_source`]; generic schema validation
-/// ([`validate_kind`]) stays schema-only for every kind, including these.
-const READINESS_SOURCE_BOUND_KINDS: &[&str] = &["readiness-probe-bundle", "readiness-attestation"];
+/// Rutile evidence kinds that carry source bindings which must match the
+/// current repository HEAD and be reachable from the authoritative main ref.
+///
+/// Readiness records carry `source: { commit, tree }`; accessibility records
+/// carry `source_commit`. Generic schema validation ([`validate_kind`]) stays
+/// schema-only for every kind, including these.
+const SOURCE_BOUND_KINDS: &[&str] = &[
+    "readiness-probe-bundle",
+    "readiness-attestation",
+    "accessibility-attestation",
+];
+
+/// Return whether a schema kind requires repository source binding in the CLI.
+pub fn is_source_bound_kind(kind: &str) -> bool {
+    SOURCE_BOUND_KINDS.contains(&kind)
+}
 
 /// Resolve a schema kind string (e.g. "production-provenance") to the
 /// checked-in schema file under `schemas/rutile.<kind>.v1.schema.json`.
@@ -60,11 +72,8 @@ pub enum ValidationError {
     #[error("validation failed:\n{0}")]
     ValidationFailed(String),
     #[error("readiness source binding is only supported for kinds {expected}; got \"{kind}\"")]
-    ReadinessKindNotSourceBound {
-        kind: String,
-        expected: &'static str,
-    },
-    #[error("readiness source binding cannot read repository HEAD at {repo}: {error}")]
+    ReadinessKindNotSourceBound { kind: String, expected: String },
+    #[error("cannot run isolated git to derive repository source at {repo}: {error}")]
     ReadinessSourceIo {
         repo: PathBuf,
         #[source]
@@ -74,6 +83,8 @@ pub enum ValidationError {
     ReadinessSourceInvalid(String),
     #[error("readiness source commit/tree do not match the current repository HEAD")]
     ReadinessSourceMismatch,
+    #[error("source commit is not reachable from the authoritative main ref")]
+    ReadinessSourceNotReachableFromMain,
 }
 
 /// Validate an input JSON file against the named schema kind.
@@ -117,50 +128,44 @@ pub fn validate_file(input: &Path, schema_file: &Path) -> Result<(), ValidationE
     }
 }
 
-/// Validate an input JSON file against a readiness schema kind AND verify that
-/// its embedded `source: { commit, tree }` matches the current repository HEAD.
+/// Validate a source-bound evidence record against its schema and verify that
+/// its embedded source matches the current checkout and is reachable from
+/// `refs/heads/main`.
 ///
-/// This layers a source cross-check on top of generic schema validation
-/// ([`validate_kind`]); `validate_kind` itself stays schema-only for every
-/// kind, including the readiness kinds, so unrelated callers are unaffected.
-/// Only `readiness-probe-bundle` and `readiness-attestation` are accepted
-/// here — other kinds fail closed with [`ValidationError::ReadinessKindNotSourceBound`].
+/// Readiness records bind both commit and tree. Accessibility attestations
+/// bind their `source_commit`; their schema has no tree field.
 ///
-/// The current repository HEAD is derived via [`tool_process::git_isolated`],
-/// mirroring the audited `release_preflight` source-binding path: the
-/// `GIT_DIR`/`GIT_WORK_TREE`/global-config environment is stripped so caller
-/// state cannot redirect the binding. This function never shells out directly.
-///
-/// Final signature verification of a readiness attestation is owned by
-/// `readiness.rs`, not by this generic evidence lane.
+/// The repository state is derived via [`tool_process::git_isolated`], which
+/// strips caller-controlled Git environment and global configuration. Missing
+/// refs, command failures, source mismatches, and local-only commits fail
+/// closed. Generic [`validate_kind`] remains schema-only.
 pub fn validate_readiness_with_source(input: &Path, kind: &str) -> Result<(), ValidationError> {
-    if !READINESS_SOURCE_BOUND_KINDS.contains(&kind) {
+    if !is_source_bound_kind(kind) {
         return Err(ValidationError::ReadinessKindNotSourceBound {
             kind: kind.to_string(),
-            expected: "readiness-probe-bundle, readiness-attestation",
+            expected: SOURCE_BOUND_KINDS.join(", "),
         });
     }
-    // Step 1: schema validation — fail closed on any schema error first so a
-    // malformed record can never reach the source cross-check.
+
     validate_kind(input, kind)?;
-    // Step 2: read the recorded source commit/tree. The schema guarantees the
-    // `^[0-9a-f]{40}$` shape, but we re-check defensively so this binding stays
-    // correct independent of future schema drift.
     let input_str = std::fs::read_to_string(input).map_err(|e| ValidationError::InputRead {
         path: input.to_owned(),
         error: e,
     })?;
     let value: serde_json::Value = serde_json::from_str(&input_str)?;
-    let source = parse_readiness_source(&value)?;
-    // Step 3: cross-check against the current repository HEAD.
+    let source = if kind == "accessibility-attestation" {
+        parse_accessibility_source(&value)?
+    } else {
+        parse_readiness_source(&value)?
+    };
     verify_current_source(&source)
 }
 
-/// Typed source binding extracted from a readiness record's `source` object.
+/// Typed source binding extracted from a source-bound evidence record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReadinessSource {
     commit: String,
-    tree: String,
+    tree: Option<String>,
 }
 
 fn parse_readiness_source(value: &serde_json::Value) -> Result<ReadinessSource, ValidationError> {
@@ -189,7 +194,25 @@ fn parse_readiness_source(value: &serde_json::Value) -> Result<ReadinessSource, 
     }
     Ok(ReadinessSource {
         commit: commit.to_string(),
-        tree: tree.to_string(),
+        tree: Some(tree.to_string()),
+    })
+}
+
+fn parse_accessibility_source(
+    value: &serde_json::Value,
+) -> Result<ReadinessSource, ValidationError> {
+    let commit = value
+        .get("source_commit")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ValidationError::ReadinessSourceInvalid("missing /source_commit".into()))?;
+    if !is_lowercase_sha40(commit) {
+        return Err(ValidationError::ReadinessSourceInvalid(
+            "/source_commit must be a 40-char lowercase hex SHA".into(),
+        ));
+    }
+    Ok(ReadinessSource {
+        commit: commit.to_string(),
+        tree: None,
     })
 }
 
@@ -210,7 +233,13 @@ fn workspace_root() -> &'static Path {
 }
 
 fn verify_current_source(source: &ReadinessSource) -> Result<(), ValidationError> {
-    let repo = workspace_root();
+    verify_current_source_in_repo(workspace_root(), source)
+}
+
+fn verify_current_source_in_repo(
+    repo: &Path,
+    source: &ReadinessSource,
+) -> Result<(), ValidationError> {
     let output = tool_process::git_isolated(
         repo,
         &["--no-replace-objects", "rev-parse", "HEAD", "HEAD^{tree}"],
@@ -230,12 +259,73 @@ fn verify_current_source(source: &ReadinessSource) -> Result<(), ValidationError
     })?;
     let mut lines = text.lines();
     let head_matches = lines.next() == Some(source.commit.as_str());
-    let tree_matches = lines.next() == Some(source.tree.as_str());
+    let tree_matches = match source.tree.as_deref() {
+        Some(expected) => lines.next() == Some(expected),
+        None => lines.next().is_some(),
+    };
     let no_extra_line = lines.next().is_none();
     if !(head_matches && tree_matches && no_extra_line) {
         return Err(ValidationError::ReadinessSourceMismatch);
     }
-    Ok(())
+
+    verify_main_ancestry(repo, &source.commit)
+}
+
+fn verify_main_ancestry(repo: &Path, commit: &str) -> Result<(), ValidationError> {
+    for main_ref in ["refs/remotes/origin/main", "refs/heads/main"] {
+        let reference = tool_process::git_isolated(
+            repo,
+            &[
+                "--no-replace-objects",
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                main_ref,
+            ],
+            &[],
+        )
+        .map_err(|error| ValidationError::ReadinessSourceIo {
+            repo: repo.to_path_buf(),
+            error,
+        })?;
+        if !reference.status.success() {
+            continue;
+        }
+        if reference.stdout.len() > 64 {
+            return Err(ValidationError::ReadinessSourceInvalid(
+                "authoritative main ref output exceeds the bound".into(),
+            ));
+        }
+
+        let ancestry = tool_process::git_isolated(
+            repo,
+            &[
+                "--no-replace-objects",
+                "merge-base",
+                "--is-ancestor",
+                commit,
+                main_ref,
+            ],
+            &[],
+        )
+        .map_err(|error| ValidationError::ReadinessSourceIo {
+            repo: repo.to_path_buf(),
+            error,
+        })?;
+        if ancestry.status.success() {
+            return Ok(());
+        }
+        if ancestry.status.code() == Some(1) {
+            return Err(ValidationError::ReadinessSourceNotReachableFromMain);
+        }
+        return Err(ValidationError::ReadinessSourceInvalid(
+            "cannot verify source reachability from the authoritative main ref".into(),
+        ));
+    }
+    Err(ValidationError::ReadinessSourceInvalid(
+        "cannot verify source reachability: neither origin/main nor refs/heads/main is available"
+            .into(),
+    ))
 }
 
 #[cfg(test)]
@@ -435,6 +525,90 @@ mod tests {
         (commit, tree)
     }
 
+    fn git_success(repo: &Path, args: &[&str]) -> std::process::Output {
+        let output = tool_process::git_isolated(repo, args, &[])
+            .unwrap_or_else(|error| panic!("git {args:?} failed to start: {error}"));
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    }
+
+    fn local_only_repository_source(
+        with_origin_main: bool,
+    ) -> (tempfile::TempDir, ReadinessSource) {
+        let repo = readiness_temp_root();
+        git_success(repo.path(), &["init"]);
+        git_success(repo.path(), &["branch", "-M", "main"]);
+        std::fs::write(repo.path().join("main.txt"), b"main\n").unwrap();
+        git_success(repo.path(), &["add", "main.txt"]);
+        git_success(
+            repo.path(),
+            &[
+                "-c",
+                "user.name=Rutile Test",
+                "-c",
+                "user.email=rutile-test@example.invalid",
+                "commit",
+                "-m",
+                "main",
+            ],
+        );
+        if with_origin_main {
+            let main = git_success(repo.path(), &["rev-parse", "HEAD"]);
+            let main = std::str::from_utf8(&main.stdout).unwrap().trim();
+            git_success(
+                repo.path(),
+                &["update-ref", "refs/remotes/origin/main", main],
+            );
+        }
+        git_success(repo.path(), &["checkout", "-b", "local-only"]);
+        std::fs::write(repo.path().join("local.txt"), b"local\n").unwrap();
+        git_success(repo.path(), &["add", "local.txt"]);
+        git_success(
+            repo.path(),
+            &[
+                "-c",
+                "user.name=Rutile Test",
+                "-c",
+                "user.email=rutile-test@example.invalid",
+                "commit",
+                "-m",
+                "local-only",
+            ],
+        );
+        let output = git_success(
+            repo.path(),
+            &["--no-replace-objects", "rev-parse", "HEAD", "HEAD^{tree}"],
+        );
+        let text = std::str::from_utf8(&output.stdout).unwrap();
+        let mut lines = text.lines();
+        let source = ReadinessSource {
+            commit: lines.next().unwrap().to_string(),
+            tree: Some(lines.next().unwrap().to_string()),
+        };
+        (repo, source)
+    }
+
+    fn accessibility_attestation_value(commit: &str) -> serde_json::Value {
+        serde_json::json!({
+            "schema": "rutile.accessibility-attestation.v1",
+            "version": 1,
+            "source_commit": commit,
+            "platform": "macos",
+            "tool": "voiceover",
+            "rows": [{
+                "action": "file/open",
+                "passed": true,
+                "evidence_ref": "release/evidence/readiness/file-open.wav"
+            }],
+            "summary": { "passed": 1, "total": 1, "failed": 0 },
+            "unverified_rows": []
+        })
+    }
+
     fn hex_fill(ch: char, len: usize) -> String {
         ch.to_string().repeat(len)
     }
@@ -594,6 +768,54 @@ mod tests {
             .expect("schema must accept well-formed but mismatched source");
         let err = validate_readiness_with_source(&input, "readiness-probe-bundle")
             .expect_err("mismatched source must fail the readiness source check");
+        assert!(
+            matches!(err, ValidationError::ReadinessSourceMismatch),
+            "expected ReadinessSourceMismatch, got: {err}"
+        );
+    }
+
+    #[test]
+    fn source_check_rejects_local_only_head_not_reachable_from_main() {
+        let (repo, source) = local_only_repository_source(false);
+        let err = verify_current_source_in_repo(repo.path(), &source)
+            .expect_err("local-only HEAD must not be accepted as merged-main evidence");
+        assert!(
+            matches!(err, ValidationError::ReadinessSourceNotReachableFromMain),
+            "expected ReadinessSourceNotReachableFromMain, got: {err}"
+        );
+    }
+
+    #[test]
+    fn source_check_rejects_local_only_head_when_origin_main_exists() {
+        let (repo, source) = local_only_repository_source(true);
+        let err = verify_current_source_in_repo(repo.path(), &source)
+            .expect_err("origin/main must reject a local-only HEAD");
+        assert!(
+            matches!(err, ValidationError::ReadinessSourceNotReachableFromMain),
+            "expected ReadinessSourceNotReachableFromMain, got: {err}"
+        );
+    }
+
+    #[test]
+    fn accessibility_attestation_validates_current_source_commit() {
+        let (commit, _) = current_workspace_source();
+        let attestation = accessibility_attestation_value(&commit);
+        let dir = readiness_temp_root();
+        let input = write_readiness_json(&dir, "accessibility-current.json", &attestation);
+        validate_readiness_with_source(&input, "accessibility-attestation")
+            .unwrap_or_else(|error| panic!("accessibility source must validate: {error}"));
+    }
+
+    #[test]
+    fn accessibility_attestation_rejects_mismatched_source_commit() {
+        let attestation =
+            accessibility_attestation_value("0000000000000000000000000000000000000000");
+        let dir = readiness_temp_root();
+        let input = write_readiness_json(&dir, "accessibility-mismatch.json", &attestation);
+        validate_kind(&input, "accessibility-attestation")
+            .expect("schema must accept a well-formed source commit");
+        let err = validate_readiness_with_source(&input, "accessibility-attestation")
+            .expect_err("mismatched accessibility source must fail closed");
         assert!(
             matches!(err, ValidationError::ReadinessSourceMismatch),
             "expected ReadinessSourceMismatch, got: {err}"

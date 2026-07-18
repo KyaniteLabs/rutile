@@ -7,6 +7,7 @@ pub mod artifact_inspector;
 mod candidate;
 pub mod comparator;
 pub mod evidence;
+pub mod evidence_bind;
 pub mod fixtures;
 pub mod gui;
 #[cfg(unix)]
@@ -17,8 +18,10 @@ pub mod metrics;
 #[cfg(unix)]
 pub mod native_smoke;
 pub mod package;
+pub mod package_smoke;
 pub mod provenance;
 pub mod readiness;
+pub mod readiness_keystone;
 pub mod release_authority;
 pub mod release_preflight;
 pub mod reproducible_build;
@@ -34,6 +37,7 @@ pub mod cli {
 
     #[cfg(unix)]
     use crate::native_smoke::NativeSmokeProfile;
+    use crate::package_smoke::PackageKind;
     use clap::{Parser, Subcommand, ValueEnum};
 
     #[derive(Parser)]
@@ -134,6 +138,10 @@ pub mod cli {
         Release {
             #[command(subcommand)]
             command: ReleaseCommand,
+        },
+        Readiness {
+            #[command(subcommand)]
+            command: ReadinessCommand,
         },
     }
 
@@ -247,6 +255,18 @@ pub mod cli {
             #[arg(long)]
             schema: String,
         },
+        /// Bind a plain gate index to production provenance and emit a canonical
+        /// `rutile.evidence-index.v1` record. Create-only; never signs.
+        Bind {
+            #[arg(long)]
+            plain_index: PathBuf,
+            #[arg(long)]
+            provenance: PathBuf,
+            #[arg(long)]
+            evidence_root: PathBuf,
+            #[arg(long)]
+            out: PathBuf,
+        },
     }
 
     #[derive(Subcommand)]
@@ -284,6 +304,34 @@ pub mod cli {
         Local {
             #[command(subcommand)]
             command: LocalPackageCommand,
+        },
+        /// Run the bounded install/open/uninstall smoke row against a produced
+        /// package on the current host. Proves each stage ran; fails closed on
+        /// any nonzero/timeout/residue. Never invokes a shell.
+        SmokeRow {
+            #[arg(long)]
+            package: PathBuf,
+            #[arg(long, value_enum)]
+            kind: PackageSmokeKind,
+            #[arg(long)]
+            package_sha256: String,
+            #[arg(long)]
+            source_commit: String,
+            #[arg(long)]
+            install_target: PathBuf,
+            #[arg(long)]
+            binary_path: PathBuf,
+            /// Expected SHA-256 (64-char lowercase hex) of the executable at
+            /// `--binary-path` after install. The engine re-hashes the installed
+            /// binary and rejects any drift.
+            #[arg(long)]
+            expected_executable_sha256: String,
+            #[arg(long)]
+            evidence_dir: PathBuf,
+            #[arg(long)]
+            deadline_secs: Option<u64>,
+            #[arg(long)]
+            term_grace_secs: Option<u64>,
         },
     }
 
@@ -357,5 +405,407 @@ pub mod cli {
             #[arg(long)]
             lock: PathBuf,
         },
+    }
+
+    #[derive(Subcommand)]
+    pub enum ReadinessCommand {
+        /// Verify an externally-signed readiness attestation against the pinned
+        /// independent trusted-verifier key and committed runner lock. Verifies
+        /// only; never signs. Fails closed until G004 provisions the verifier key.
+        Verify {
+            #[arg(long)]
+            input: PathBuf,
+            #[arg(long)]
+            runner_lock: PathBuf,
+        },
+        /// Re-verify the attestation and publish a create-only canonical copy.
+        /// Never signs; `publication_authorized` stays false.
+        Publish {
+            #[arg(long)]
+            input: PathBuf,
+            #[arg(long)]
+            runner_lock: PathBuf,
+            #[arg(long)]
+            out: PathBuf,
+        },
+    }
+
+    /// CLI mirror of `package_smoke::PackageKind`. Defined locally so the parse
+    /// layer stays decoupled from whether the module derives clap. Use
+    /// [`PackageSmokeKind::to_smoke_kind`] for the 1:1 conversion.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+    pub enum PackageSmokeKind {
+        MacosAppZip,
+        MacosDmg,
+        LinuxDeb,
+        LinuxRpm,
+        LinuxTarZst,
+    }
+
+    impl PackageSmokeKind {
+        /// Convert the CLI-local kind to the engine's `PackageKind`. This is the
+        /// single dispatch point — exhaustive, so adding a variant without
+        /// updating it is a compile error (fail-closed).
+        pub fn to_smoke_kind(self) -> PackageKind {
+            match self {
+                PackageSmokeKind::MacosAppZip => PackageKind::MacosAppZip,
+                PackageSmokeKind::MacosDmg => PackageKind::MacosDmg,
+                PackageSmokeKind::LinuxDeb => PackageKind::LinuxDeb,
+                PackageSmokeKind::LinuxRpm => PackageKind::LinuxRpm,
+                PackageSmokeKind::LinuxTarZst => PackageKind::LinuxTarZst,
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod cli_parse_tests {
+    use clap::Parser;
+
+    use super::cli::{
+        Cli, Command, EvidenceCommand, PackageCommand, PackageSmokeKind, ReadinessCommand,
+    };
+
+    fn parse(args: &[&str]) -> Command {
+        Cli::try_parse_from(args).unwrap().command
+    }
+
+    fn fail(args: &[&str]) -> String {
+        Cli::try_parse_from(args)
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| panic!("expected parse failure: {args:?}"))
+    }
+
+    #[test]
+    fn readiness_verify_parses_required_inputs_only() {
+        let Command::Readiness { command } = parse(&[
+            "xtask",
+            "readiness",
+            "verify",
+            "--input",
+            "a.json",
+            "--runner-lock",
+            "lock",
+        ]) else {
+            panic!("expected Readiness command");
+        };
+        match command {
+            ReadinessCommand::Verify { input, runner_lock } => {
+                assert_eq!(input, std::path::Path::new("a.json"));
+                assert_eq!(runner_lock, std::path::Path::new("lock"));
+            }
+            ReadinessCommand::Publish { .. } => panic!("expected Verify variant"),
+        }
+    }
+
+    #[test]
+    fn readiness_publish_parses_with_out() {
+        let Command::Readiness { command } = parse(&[
+            "xtask",
+            "readiness",
+            "publish",
+            "--input",
+            "a.json",
+            "--runner-lock",
+            "lock",
+            "--out",
+            "o.json",
+        ]) else {
+            panic!("expected Readiness command");
+        };
+        match command {
+            ReadinessCommand::Publish {
+                input,
+                runner_lock,
+                out,
+            } => {
+                assert_eq!(input, std::path::Path::new("a.json"));
+                assert_eq!(runner_lock, std::path::Path::new("lock"));
+                assert_eq!(out, std::path::Path::new("o.json"));
+            }
+            ReadinessCommand::Verify { .. } => panic!("expected Publish variant"),
+        }
+    }
+
+    #[test]
+    fn readiness_verify_rejects_missing_runner_lock() {
+        let message = fail(&["xtask", "readiness", "verify", "--input", "a.json"]);
+        assert!(message.contains("--runner-lock"), "{message}");
+    }
+
+    #[test]
+    fn package_smoke_row_parses_all_five_kinds() {
+        for (index, kind) in [
+            "macos-app-zip",
+            "macos-dmg",
+            "linux-deb",
+            "linux-rpm",
+            "linux-tar-zst",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let Command::Package { command } = parse(&[
+                "xtask",
+                "package",
+                "smoke-row",
+                "--package",
+                "p",
+                "--kind",
+                kind,
+                "--package-sha256",
+                "abc123",
+                "--source-commit",
+                "deadbeef",
+                "--install-target",
+                "i",
+                "--binary-path",
+                "b",
+                "--expected-executable-sha256",
+                "def456",
+                "--evidence-dir",
+                "e",
+            ]) else {
+                panic!("expected Package command");
+            };
+            match command {
+                PackageCommand::SmokeRow {
+                    kind: parsed_kind,
+                    expected_executable_sha256,
+                    deadline_secs,
+                    term_grace_secs,
+                    ..
+                } => {
+                    let expected = [
+                        PackageSmokeKind::MacosAppZip,
+                        PackageSmokeKind::MacosDmg,
+                        PackageSmokeKind::LinuxDeb,
+                        PackageSmokeKind::LinuxRpm,
+                        PackageSmokeKind::LinuxTarZst,
+                    ][index];
+                    assert_eq!(parsed_kind, expected, "kind {kind}");
+                    assert_eq!(expected_executable_sha256, "def456");
+                    assert_eq!(deadline_secs, None);
+                    assert_eq!(term_grace_secs, None);
+                }
+                _ => panic!("expected SmokeRow variant"),
+            }
+        }
+    }
+
+    #[test]
+    fn package_smoke_row_parses_optional_timeouts() {
+        let Command::Package { command } = parse(&[
+            "xtask",
+            "package",
+            "smoke-row",
+            "--package",
+            "p",
+            "--kind",
+            "linux-tar-zst",
+            "--package-sha256",
+            "abc123",
+            "--source-commit",
+            "deadbeef",
+            "--install-target",
+            "i",
+            "--binary-path",
+            "b",
+            "--expected-executable-sha256",
+            "def456",
+            "--evidence-dir",
+            "e",
+            "--deadline-secs",
+            "120",
+            "--term-grace-secs",
+            "10",
+        ]) else {
+            panic!("expected Package command");
+        };
+        match command {
+            PackageCommand::SmokeRow {
+                deadline_secs,
+                term_grace_secs,
+                ..
+            } => {
+                assert_eq!(deadline_secs, Some(120));
+                assert_eq!(term_grace_secs, Some(10));
+            }
+            _ => panic!("expected SmokeRow variant"),
+        }
+    }
+
+    #[test]
+    fn package_smoke_row_requires_binary_path() {
+        let message = fail(&[
+            "xtask",
+            "package",
+            "smoke-row",
+            "--package",
+            "p",
+            "--kind",
+            "linux-tar-zst",
+            "--package-sha256",
+            "abc123",
+            "--source-commit",
+            "deadbeef",
+            "--install-target",
+            "i",
+            "--expected-executable-sha256",
+            "def456",
+            "--evidence-dir",
+            "e",
+        ]);
+        assert!(message.contains("--binary-path"), "{message}");
+    }
+
+    #[test]
+    fn package_smoke_row_requires_expected_executable_sha256() {
+        let message = fail(&[
+            "xtask",
+            "package",
+            "smoke-row",
+            "--package",
+            "p",
+            "--kind",
+            "linux-tar-zst",
+            "--package-sha256",
+            "abc123",
+            "--source-commit",
+            "deadbeef",
+            "--install-target",
+            "i",
+            "--binary-path",
+            "b",
+            "--evidence-dir",
+            "e",
+        ]);
+        assert!(
+            message.contains("--expected-executable-sha256"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn package_smoke_row_rejects_unknown_kind() {
+        let message = fail(&[
+            "xtask",
+            "package",
+            "smoke-row",
+            "--package",
+            "p",
+            "--kind",
+            "windows-msi",
+            "--package-sha256",
+            "abc123",
+            "--source-commit",
+            "deadbeef",
+            "--install-target",
+            "i",
+            "--binary-path",
+            "b",
+            "--expected-executable-sha256",
+            "def456",
+            "--evidence-dir",
+            "e",
+        ]);
+        assert!(message.contains("invalid value 'windows-msi'"), "{message}");
+    }
+
+    #[test]
+    fn package_smoke_kind_maps_exhaustively_to_engine_kind() {
+        use crate::package_smoke::PackageKind;
+        assert_eq!(
+            PackageSmokeKind::MacosAppZip.to_smoke_kind(),
+            PackageKind::MacosAppZip
+        );
+        assert_eq!(
+            PackageSmokeKind::MacosDmg.to_smoke_kind(),
+            PackageKind::MacosDmg
+        );
+        assert_eq!(
+            PackageSmokeKind::LinuxDeb.to_smoke_kind(),
+            PackageKind::LinuxDeb
+        );
+        assert_eq!(
+            PackageSmokeKind::LinuxRpm.to_smoke_kind(),
+            PackageKind::LinuxRpm
+        );
+        assert_eq!(
+            PackageSmokeKind::LinuxTarZst.to_smoke_kind(),
+            PackageKind::LinuxTarZst
+        );
+    }
+
+    #[test]
+    fn evidence_bind_parses_required_args() {
+        let Command::Evidence { command } = parse(&[
+            "xtask",
+            "evidence",
+            "bind",
+            "--plain-index",
+            "plain.json",
+            "--provenance",
+            "prov.json",
+            "--evidence-root",
+            "root",
+            "--out",
+            "out.json",
+        ]) else {
+            panic!("expected Evidence command");
+        };
+        match command {
+            EvidenceCommand::Bind {
+                plain_index,
+                provenance,
+                evidence_root,
+                out,
+            } => {
+                assert_eq!(plain_index, std::path::Path::new("plain.json"));
+                assert_eq!(provenance, std::path::Path::new("prov.json"));
+                assert_eq!(evidence_root, std::path::Path::new("root"));
+                assert_eq!(out, std::path::Path::new("out.json"));
+            }
+            EvidenceCommand::Validate { .. } => panic!("expected Bind variant"),
+        }
+    }
+
+    #[test]
+    fn evidence_bind_rejects_missing_out() {
+        let message = fail(&[
+            "xtask",
+            "evidence",
+            "bind",
+            "--plain-index",
+            "plain.json",
+            "--provenance",
+            "prov.json",
+            "--evidence-root",
+            "root",
+        ]);
+        assert!(message.contains("--out"), "{message}");
+    }
+
+    #[test]
+    fn evidence_validate_still_parses_after_bind_addition() {
+        let Command::Evidence { command } = parse(&[
+            "xtask",
+            "evidence",
+            "validate",
+            "--input",
+            "i.json",
+            "--schema",
+            "evidence-index",
+        ]) else {
+            panic!("expected Evidence command");
+        };
+        match command {
+            EvidenceCommand::Validate { input, schema } => {
+                assert_eq!(input, std::path::Path::new("i.json"));
+                assert_eq!(schema, "evidence-index");
+            }
+            EvidenceCommand::Bind { .. } => panic!("expected Validate variant"),
+        }
     }
 }

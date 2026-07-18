@@ -1,4 +1,5 @@
 use std::fs;
+use std::time::Duration;
 
 use clap::Parser;
 use sha2::Digest;
@@ -6,9 +7,10 @@ use xtask::artifact_inspector::{ArtifactInspector, InspectionMode, PolicyPaths};
 use xtask::cli::{
     ArtifactCommand, ArtifactInspectionMode, Cli, Command, ComparatorCommand, EvidenceCommand,
     FixtureCommand, GuiCommand, LocalPackageCommand, MetricsCommand, PackageCommand,
-    ProvenanceCommand, ReleaseCommand, RunnerCommand, ScaffoldCommand,
+    ProvenanceCommand, ReadinessCommand, ReleaseCommand, RunnerCommand, ScaffoldCommand,
 };
 use xtask::comparator::{ScaffoldCreate, create_scaffold, verify_scaffold};
+use xtask::evidence_bind::{EvidenceBindRequest, bind as bind_evidence};
 use xtask::fixtures::{generate_fixtures, verify_fixtures};
 use xtask::gui::validate_transcript;
 #[cfg(unix)]
@@ -19,6 +21,8 @@ use xtask::metrics::{MetricAssertion, assert_metric_record};
 #[cfg(unix)]
 use xtask::native_smoke::{NativeSmokeGateRequest, run_gate};
 use xtask::package::assert_file;
+use xtask::package_smoke::{ProductionSmokeExecutor, SmokeRequest, run_smoke};
+use xtask::readiness_keystone;
 use xtask::release_preflight::{load_and_validate, publish_create_only};
 use xtask::reproducible_build::{ReproducibleBuildRequest, run as run_reproducible_build};
 use xtask::runner::capture_verify_matrix;
@@ -99,7 +103,12 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         },
         Command::Evidence { command } => match command {
             EvidenceCommand::Validate { input, schema } => {
-                match xtask::evidence::validate_kind(&input, &schema) {
+                let validation = if xtask::evidence::is_source_bound_kind(&schema) {
+                    xtask::evidence::validate_readiness_with_source(&input, &schema)
+                } else {
+                    xtask::evidence::validate_kind(&input, &schema)
+                };
+                match validation {
                     Ok(()) => {
                         println!(
                             "PASS: {} validates against rutile.{}.v1",
@@ -116,6 +125,31 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                         )
                         .into());
                     }
+                }
+            }
+            EvidenceCommand::Bind {
+                plain_index,
+                provenance,
+                evidence_root,
+                out,
+            } => {
+                let request = EvidenceBindRequest {
+                    plain_index,
+                    provenance,
+                    evidence_root,
+                    out,
+                };
+                let outcome = bind_evidence(&request)?;
+                println!(
+                    "evidence-bind out={} source_commit={} provenance_sha256={} records={} durable={}",
+                    outcome.out.display(),
+                    outcome.source_commit,
+                    outcome.production_provenance_sha256,
+                    outcome.record_count,
+                    outcome.durable,
+                );
+                for warning in outcome.warnings {
+                    eprintln!("xtask: evidence-bind warning: {warning}");
                 }
             }
         },
@@ -273,6 +307,54 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 let manifests = run_local_package(request, &ProcessCommandExecutor)?;
                 println!("{}", serde_json::to_string_pretty(&manifests)?);
             }
+            PackageCommand::SmokeRow {
+                package,
+                kind,
+                package_sha256,
+                source_commit,
+                install_target,
+                binary_path,
+                expected_executable_sha256,
+                evidence_dir,
+                deadline_secs,
+                term_grace_secs,
+            } => {
+                let evidence_dir_display = evidence_dir.display().to_string();
+                let mut request = SmokeRequest::new(
+                    package,
+                    package_sha256,
+                    kind.to_smoke_kind(),
+                    source_commit,
+                    install_target,
+                    binary_path.clone(),
+                    expected_executable_sha256,
+                    evidence_dir,
+                );
+                if let Some(secs) = deadline_secs {
+                    request = request.with_deadline(Duration::from_secs(secs));
+                }
+                if let Some(secs) = term_grace_secs {
+                    request = request.with_term_grace(Duration::from_secs(secs));
+                }
+                let executor = ProductionSmokeExecutor::new(binary_path);
+                let execution = run_smoke(request, &executor)?;
+                println!(
+                    "package-smoke-row passed={} evidence_dir={} receipt={}",
+                    execution.receipt.passed,
+                    evidence_dir_display,
+                    execution.receipt_path.display(),
+                );
+                println!("{}", serde_json::to_string_pretty(&execution.receipt)?);
+                if !execution.receipt.passed {
+                    return Err(execution
+                        .failure
+                        .unwrap_or_else(|| {
+                            "package smoke-row failed: install/open/uninstall did not pass clean"
+                                .to_string()
+                        })
+                        .into());
+                }
+            }
         },
         Command::Runner { command } => match command {
             RunnerCommand::CaptureVerifyMatrix {
@@ -384,6 +466,44 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     out.display(),
                     record.artifact_sha256,
                     record.release_authority_key_fingerprint
+                );
+            }
+        },
+        Command::Readiness { command } => match command {
+            ReadinessCommand::Verify { input, runner_lock } => {
+                let receipt = readiness_keystone::verify_only(&input, &runner_lock)?;
+                println!(
+                    "readiness-verify ready={} source_commit={} source_tree={} runner_lock_sha256={} verifier_fingerprint={}",
+                    receipt.ready,
+                    receipt.source.commit,
+                    receipt.source.tree,
+                    hex::encode(receipt.runner_lock_sha256),
+                    receipt.verifier_key_fingerprint,
+                );
+                if !receipt.ready {
+                    return Err("verified but not ready; actionable blockers remain".into());
+                }
+            }
+            ReadinessCommand::Publish {
+                input,
+                runner_lock,
+                out,
+            } => {
+                let receipt = readiness_keystone::verify_and_publish(&input, &runner_lock, &out)?;
+                let out_display = receipt
+                    .out_path
+                    .as_deref()
+                    .unwrap_or(&out)
+                    .display()
+                    .to_string();
+                println!(
+                    "readiness-publish ready={} source_commit={} source_tree={} runner_lock_sha256={} verifier_fingerprint={} out={}",
+                    receipt.ready,
+                    receipt.source.commit,
+                    receipt.source.tree,
+                    hex::encode(receipt.runner_lock_sha256),
+                    receipt.verifier_key_fingerprint,
+                    out_display,
                 );
             }
         },
