@@ -1,10 +1,19 @@
 fn main() {
+    #[cfg(feature = "test-control")]
     let mut smoke = false;
+    #[cfg(all(
+        not(feature = "test-control"),
+        not(all(target_os = "linux", feature = "linux-gtk"))
+    ))]
+    let smoke = false;
     let mut path = None;
     for argument in std::env::args_os().skip(1) {
+        #[cfg(feature = "test-control")]
         if argument == "--native-smoke" {
             smoke = true;
-        } else if path.is_none() {
+            continue;
+        }
+        if path.is_none() {
             path = Some(std::path::PathBuf::from(argument));
         }
     }
@@ -19,6 +28,7 @@ fn main() {
         // The Linux GTK adapter consumes the smoke entrypoint through a typed
         // environment interface so the default/headless binary stays free of
         // platform dependencies. Translate --native-smoke here once.
+        #[cfg(feature = "test-control")]
         if smoke {
             // SAFETY: this is the process main thread before any worker threads
             // are spawned; the environment is read only by the GTK adapter on

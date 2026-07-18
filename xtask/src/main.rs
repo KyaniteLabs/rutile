@@ -6,8 +6,9 @@ use sha2::Digest;
 use xtask::artifact_inspector::{ArtifactInspector, InspectionMode, PolicyPaths};
 use xtask::cli::{
     ArtifactCommand, ArtifactInspectionMode, Cli, Command, ComparatorCommand, EvidenceCommand,
-    FixtureCommand, GuiCommand, LocalPackageCommand, MetricsCommand, PackageCommand,
-    ProvenanceCommand, ReadinessCommand, ReleaseCommand, RunnerCommand, ScaffoldCommand,
+    FixtureCommand, GuiCommand, LinuxPackageFormats, LocalPackageCommand, MetricsCommand,
+    PackageCommand, ProvenanceCommand, ReadinessCommand, ReleaseCommand, RunnerCommand,
+    ScaffoldCommand,
 };
 use xtask::comparator::{ScaffoldCreate, create_scaffold, verify_scaffold};
 use xtask::evidence_bind::{EvidenceBindRequest, bind as bind_evidence};
@@ -296,13 +297,22 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                         source_commit,
                         output_root,
                         version,
-                    } => LocalPackageCliRequest::Linux(LinuxPackageRequest {
-                        candidate,
-                        build_input_sha256,
-                        source_commit,
-                        output_root,
-                        version,
-                    }),
+                        formats,
+                    } => {
+                        let request = LinuxPackageRequest {
+                            candidate,
+                            build_input_sha256,
+                            source_commit,
+                            output_root,
+                            version,
+                        };
+                        match formats {
+                            LinuxPackageFormats::All => LocalPackageCliRequest::Linux(request),
+                            LinuxPackageFormats::Ubuntu => {
+                                LocalPackageCliRequest::LinuxUbuntu(request)
+                            }
+                        }
+                    }
                 };
                 let manifests = run_local_package(request, &ProcessCommandExecutor)?;
                 println!("{}", serde_json::to_string_pretty(&manifests)?);

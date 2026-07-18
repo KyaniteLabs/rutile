@@ -335,6 +335,13 @@ pub mod cli {
         },
     }
 
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+    pub enum LinuxPackageFormats {
+        #[default]
+        All,
+        Ubuntu,
+    }
+
     #[derive(Subcommand)]
     pub enum LocalPackageCommand {
         Macos {
@@ -370,6 +377,8 @@ pub mod cli {
             output_root: PathBuf,
             #[arg(long)]
             version: String,
+            #[arg(long, value_enum, default_value_t)]
+            formats: LinuxPackageFormats,
         },
     }
 

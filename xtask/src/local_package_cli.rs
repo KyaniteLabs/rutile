@@ -46,6 +46,7 @@ pub enum LocalPackageCliError {
 pub enum LocalPackageCliRequest {
     Macos(MacPackageRequest),
     Linux(LinuxPackageRequest),
+    LinuxUbuntu(LinuxPackageRequest),
 }
 
 pub trait CommandExecutor {
@@ -92,13 +93,16 @@ pub fn run_local_package_with_inspector(
 ) -> Result<Vec<ArtifactManifest>, LocalPackageCliError> {
     let (candidate, output_root) = match &request {
         LocalPackageCliRequest::Macos(request) => (&request.candidate, &request.output_root),
-        LocalPackageCliRequest::Linux(request) => (&request.candidate, &request.output_root),
+        LocalPackageCliRequest::Linux(request) | LocalPackageCliRequest::LinuxUbuntu(request) => {
+            (&request.candidate, &request.output_root)
+        }
     };
     enforce_inspection(inspector, candidate, InspectionMode::Candidate, None)?;
     let output_root = output_root.clone();
     let manifests = match request {
         LocalPackageCliRequest::Macos(request) => run_macos(request, executor),
-        LocalPackageCliRequest::Linux(request) => run_linux(request, executor),
+        LocalPackageCliRequest::Linux(request) => run_linux(request, executor, true),
+        LocalPackageCliRequest::LinuxUbuntu(request) => run_linux(request, executor, false),
     }?;
     for manifest in &manifests {
         enforce_inspection(
@@ -290,6 +294,7 @@ fn run_macos(
 fn run_linux(
     request: LinuxPackageRequest,
     executor: &dyn CommandExecutor,
+    include_rpm: bool,
 ) -> Result<Vec<ArtifactManifest>, LocalPackageCliError> {
     use crate::local_package::{
         create_package_output_root, debian_package_plan, finalize_linux_archive_manifest,
@@ -310,7 +315,9 @@ fn run_linux(
 
     let layout_receipt = prepare_linux_layout(&request)?;
     let deb_receipt = prepare_debian_staging(&request)?;
-    let rpm_receipt = prepare_rpm_staging(&request)?;
+    let rpm_receipt = include_rpm
+        .then(|| prepare_rpm_staging(&request))
+        .transpose()?;
 
     let archive = request.output_root.join(LINUX_ARCHIVE_NAME);
     let deb = request.output_root.join(LINUX_DEB_NAME);
@@ -321,19 +328,23 @@ fn run_linux(
     }
     executor.execute(&debian_package_plan(&deb_receipt.output, &deb)?)?;
 
-    let spec = rpm_receipt.output.join("SPECS/feathermark.spec");
-    executor.execute(&rpm_package_plan(&rpm_receipt.output, &spec)?)?;
+    if let Some(rpm_receipt) = rpm_receipt {
+        let spec = rpm_receipt.output.join("SPECS/feathermark.spec");
+        executor.execute(&rpm_package_plan(&rpm_receipt.output, &spec)?)?;
 
-    // rpmbuild places built RPMs under <topdir>/RPMS/<arch>/; move the exact
-    // artifact to the output root so all final artifacts share one directory.
-    let built_rpm = rpm_receipt.output.join("RPMS/x86_64").join(LINUX_RPM_NAME);
-    if built_rpm != rpm {
-        fs::rename(&built_rpm, &rpm).map_err(LocalPackageError::from)?;
+        // rpmbuild places built RPMs under <topdir>/RPMS/<arch>/; move the exact
+        // artifact to the output root so all final artifacts share one directory.
+        let built_rpm = rpm_receipt.output.join("RPMS/x86_64").join(LINUX_RPM_NAME);
+        if built_rpm != rpm {
+            fs::rename(&built_rpm, &rpm).map_err(LocalPackageError::from)?;
+        }
     }
 
     enforce_artifact_size(&archive)?;
     enforce_artifact_size(&deb)?;
-    enforce_artifact_size(&rpm)?;
+    if include_rpm {
+        enforce_artifact_size(&rpm)?;
+    }
 
     let archive_manifest = finalize_linux_archive_manifest(
         &archive,
@@ -349,17 +360,20 @@ fn run_linux(
         &request.source_commit,
         &request.version,
     )?;
-    let rpm_manifest = finalize_linux_package_manifest(
-        &rpm,
-        &request.build_input_sha256,
-        &packaged_executable_sha256,
-        &request.source_commit,
-        &request.version,
-    )?;
+    let mut manifests = vec![archive_manifest, deb_manifest];
+    if include_rpm {
+        manifests.push(finalize_linux_package_manifest(
+            &rpm,
+            &request.build_input_sha256,
+            &packaged_executable_sha256,
+            &request.source_commit,
+            &request.version,
+        )?);
+    }
 
     remove_staging(&request.output_root)?;
 
-    Ok(vec![archive_manifest, deb_manifest, rpm_manifest])
+    Ok(manifests)
 }
 
 fn enforce_artifact_size(path: &Path) -> Result<(), LocalPackageCliError> {

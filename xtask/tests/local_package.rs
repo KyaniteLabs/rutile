@@ -896,6 +896,39 @@ fn run_local_package_linux_fails_closed_until_archive_traversal_is_supported() {
 }
 
 #[test]
+fn run_local_package_linux_ubuntu_omits_rpm_tooling_and_artifact() {
+    let temporary = tempdir().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    let candidate = root.join("candidate");
+    let bytes = elf_x86_64();
+    fs::write(&candidate, &bytes).unwrap();
+    let output = root.join("linux-ubuntu-output");
+
+    let executor = RecordingExecutor::default();
+    let request = LocalPackageCliRequest::LinuxUbuntu(LinuxPackageRequest {
+        candidate,
+        build_input_sha256: sha256(&bytes),
+        source_commit: valid_source_commit(),
+        output_root: output.clone(),
+        version: "0.2.2".into(),
+    });
+
+    let error = run_local_package(request, &executor).unwrap_err();
+    assert!(error.to_string().contains("unsupported_archive"));
+
+    let calls = executor.calls();
+    assert_eq!(calls.len(), 3);
+    assert_eq!(calls[0].0, "tar");
+    assert_eq!(calls[1].0, "zstd");
+    assert_eq!(calls[2].0, "dpkg-deb");
+
+    assert!(!output.join("_staging").exists());
+    assert!(output.join("Rutile-0.2.2-linux-x86_64.tar.zst").is_file());
+    assert!(output.join("feathermark_0.2.2_amd64.deb").is_file());
+    assert!(!output.join("feathermark-0.2.2-1.x86_64.rpm").exists());
+}
+
+#[test]
 fn linux_manifest_packaged_executable_hash_is_computed_from_candidate_not_build_input() {
     let temporary = tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();
@@ -1091,12 +1124,14 @@ fn clap_parses_local_linux_command() {
                 source_commit,
                 output_root,
                 version,
+                formats,
             } => {
                 assert_eq!(candidate, PathBuf::from("/build/feathermark"));
                 assert_eq!(build_input_sha256, hash);
                 assert_eq!(source_commit, commit);
                 assert_eq!(output_root, PathBuf::from("/out/linux"));
                 assert_eq!(version, "0.2.2");
+                assert_eq!(formats, LinuxPackageFormats::All);
             }
             _ => panic!("expected linux subcommand"),
         },
@@ -1181,7 +1216,7 @@ fn json_receipt_hashes_bind_to_artifact_bytes() {
     assert!(json.contains("0.2.2"));
 }
 
-use xtask::cli::{Cli, Command, LocalPackageCommand, PackageCommand};
+use xtask::cli::{Cli, Command, LinuxPackageFormats, LocalPackageCommand, PackageCommand};
 
 /// Forbidden absolute-path prefixes that indicate builder/operator paths
 /// leaked into shipped package content. On macOS the tempdir resolves under

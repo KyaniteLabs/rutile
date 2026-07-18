@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
+#[cfg(feature = "test-control")]
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -2539,8 +2540,9 @@ fn run_application() -> Result<(), String> {
         ) {
             *error_slot.borrow_mut() = Some(error);
             application.quit();
-        } else if lifecycle_control {
-            if let Ok(cycle) = std::env::var("FEATHERMARK_LIFECYCLE_CYCLE") {
+        } else {
+            #[cfg(feature = "test-control")]
+            if lifecycle_control && let Ok(cycle) = std::env::var("FEATHERMARK_LIFECYCLE_CYCLE") {
                 println!(r#"{{"type":"ready","cycle":{cycle}}}"#);
                 let _ = std::io::stdout().flush();
             }
