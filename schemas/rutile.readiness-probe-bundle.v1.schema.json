@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://feathermark.local/schemas/rutile.readiness-probe-bundle.v1.schema.json",
+  "title": "Rutile readiness probe bundle v1",
+  "description": "Independent readiness probe bundle v1. Carries exactly the 14 release-readiness probes, each in the 'attested' state with a 1:1 repository-relative evidence reference and its SHA-256, bound to a source commit/tree, an authenticated runner lock, and the derived actionable blockers. This bundle is the unsigned observation set consumed by the independent trusted verifier; it is NOT a publication authorization, does not clear the release-prerequisite preflight, and does not set publication_authorized. An attested bundle permits no 'unavailable', 'failed', or 'not_required' probe states: every probe must be 'attested' with non-null evidence.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "version",
+    "generated_at_unix_ms",
+    "source",
+    "runner_lock_ref",
+    "runner_lock_sha256",
+    "probes",
+    "actionable_blockers"
+  ],
+  "properties": {
+    "schema": { "const": "rutile.readiness-probe-bundle.v1" },
+    "version": { "const": 1 },
+    "generated_at_unix_ms": { "type": "integer", "minimum": 0, "maximum": 9007199254740992, "description": "Unix-epoch millisecond timestamp. Bounded by 2^53 to stay exactly representable as a JSON number (double-precision float)." },
+    "source": { "$ref": "#/$defs/source" },
+    "runner_lock_ref": {
+      "description": "Repository-relative reference to the authenticated Forgejo runner-lock record bound to this bundle. Must not embed host-local absolute paths, traversal, private addresses, or secret material.",
+      "$ref": "#/$defs/logicalId"
+    },
+    "runner_lock_sha256": { "$ref": "#/$defs/sha256" },
+    "probes": {
+      "description": "Exactly the 14 release-readiness probes, each appearing exactly once, each in the 'attested' state with a 1:1 evidence reference and SHA-256.",
+      "type": "array",
+      "minItems": 14,
+      "maxItems": 14,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/probe" },
+      "allOf": [
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "trusted-preflight-verifier" } } } },
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "authenticated-forgejo-runner-lock" } } } },
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "apple-developer-id-certificate" } } } },
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "linux-release-gpg-fingerprint" } } } },
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "macos-arm64-runner-capability" } } } },
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "macos-arm64-clean-install" } } } },
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "linux-x86-64-x11-runner-capability" } } } },
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "linux-x86-64-x11-clean-install" } } } },
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "apple-private-key-signing" } } } },
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "apple-notarization" } } } },
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "linux-gpg-signing" } } } },
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "protected-tag-owner-approval" } } } },
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "artifact-retention-policy" } } } },
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "independent-release-authority-approval" } } } }
+      ]
+    },
+    "actionable_blockers": {
+      "description": "Derived actionable blockers remaining against this bundle. A terminal readiness attestation requires this list to be empty; non-empty denotes an incomplete readiness state and must never be read as a publication pass.",
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 32,
+      "items": { "type": "string", "minLength": 1, "maxLength": 200 }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "gitSha40": {
+      "description": "40-character lowercase hexadecimal git object id (commit or tree).",
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "logicalId": {
+      "description": "Repository-relative logical identifier or evidence path. Rejects absolute paths, traversal, host-local prefixes, private/loopback addresses, and secret-looking material.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9._/-]+$",
+      "not": {
+        "pattern": "(?i:(^/|\\.\\.|token|secret|credentials|password|/Users/|/home/|/private/|/var/folders/|(127\\.|10\\.|192\\.168\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|169\\.254\\.)\\d{1,3}\\.\\d{1,3}|^(::1|fc00:|fd00:|fe80:)))"
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "tree"],
+      "properties": {
+        "commit": { "$ref": "#/$defs/gitSha40" },
+        "tree": { "$ref": "#/$defs/gitSha40" }
+      }
+    },
+    "probeId": {
+      "enum": [
+        "trusted-preflight-verifier",
+        "authenticated-forgejo-runner-lock",
+        "apple-developer-id-certificate",
+        "linux-release-gpg-fingerprint",
+        "macos-arm64-runner-capability",
+        "macos-arm64-clean-install",
+        "linux-x86-64-x11-runner-capability",
+        "linux-x86-64-x11-clean-install",
+        "apple-private-key-signing",
+        "apple-notarization",
+        "linux-gpg-signing",
+        "protected-tag-owner-approval",
+        "artifact-retention-policy",
+        "independent-release-authority-approval"
+      ]
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "state", "observed_at_unix_ms", "evidence_ref", "evidence_sha256"],
+      "properties": {
+        "id": { "$ref": "#/$defs/probeId" },
+        "state": {
+          "description": "An attested readiness bundle requires every probe to be 'attested'. The historical 'unavailable'/'failed'/'not_required' states belong only to the v1 preflight and are rejected here.",
+          "const": "attested"
+        },
+        "observed_at_unix_ms": { "type": "integer", "minimum": 0, "maximum": 9007199254740992, "description": "Unix-epoch millisecond timestamp bounded by 2^53 (JSON-safe)." },
+        "evidence_ref": {
+          "description": "Repository-relative reference to the single observation backing this probe. 1:1 with evidence_sha256.",
+          "$ref": "#/$defs/logicalId"
+        },
+        "evidence_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}
