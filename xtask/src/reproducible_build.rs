@@ -9,6 +9,8 @@
 //!   info contains no builder-local absolute paths.
 //! - **`SOURCE_DATE_EPOCH`** derived from `git log -1 --format=%ct HEAD` so
 //!   embedded timestamps are deterministic per commit.
+//! - **Deterministic macOS linking** enables the linker's reproducible mode so
+//!   the required Mach-O UUID and linker-created ad-hoc signature are stable.
 //!
 //! Used by both macOS and Linux release builds via
 //! `xtask reproducible-build [--features <feat>]`.
@@ -102,6 +104,9 @@ pub fn reproducible_rustflags(workspace: &Path) -> String {
             flags.push(format!("--remap-path-prefix {rustup_home}=/rustup"));
         }
     }
+    if cfg!(target_os = "macos") {
+        flags.push("-C link-arg=-Wl,-reproducible".to_owned());
+    }
     flags.join(" ")
 }
 
@@ -193,6 +198,17 @@ mod tests {
         assert!(
             flags.contains("=."),
             "RUSTFLAGS must remap workspace root to '.': {flags}"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn rustflags_enable_reproducible_macho_linking() {
+        let root = workspace_root().unwrap();
+        let flags = reproducible_rustflags(&root);
+        assert!(
+            flags.contains("-C link-arg=-Wl,-reproducible"),
+            "macOS reproducible builds must enable reproducible linking: {flags}"
         );
     }
 }
