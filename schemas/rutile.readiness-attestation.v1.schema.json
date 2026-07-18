@@ -1,0 +1,214 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://feathermark.local/schemas/rutile.readiness-attestation.v1.schema.json",
+  "title": "Rutile readiness attestation v1",
+  "description": "Independent readiness attestation v1. An ed25519 attestation, signed by an independent trusted verifier over the readiness domain, covering the full probe bundle (source commit/tree, runner lock ref and hash, all 14 attested probes with evidence refs/hashes and observation timestamps, actionable blockers) plus issued/expiry timestamps and verifier identity/fingerprint/independence evidence. The verifier key, operator, and provisioning host must be distinct from the release authority; the release-authority key/fingerprint is rejected as a readiness verifier under any domain. readiness != publication: this attestation asserts release-readiness only and does NOT authorize publication, tagging, release, or public distribution, and does not set or imply publication_authorized (which remains structurally false in artifact-inspection v1).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "version",
+    "generated_at_unix_ms",
+    "source",
+    "runner_lock_ref",
+    "runner_lock_sha256",
+    "probes",
+    "actionable_blockers",
+    "verifier",
+    "authority",
+    "ready",
+    "disclaimer"
+  ],
+  "properties": {
+    "schema": { "const": "rutile.readiness-attestation.v1" },
+    "version": { "const": 1 },
+    "generated_at_unix_ms": { "type": "integer", "minimum": 0, "maximum": 9007199254740992, "description": "Unix-epoch millisecond timestamp. Bounded by 2^53 to stay exactly representable as a JSON number (double-precision float)." },
+    "source": { "$ref": "#/$defs/source" },
+    "runner_lock_ref": {
+      "description": "Repository-relative reference to the authenticated Forgejo runner-lock record bound to this attestation.",
+      "$ref": "#/$defs/logicalId"
+    },
+    "runner_lock_sha256": { "$ref": "#/$defs/sha256" },
+    "probes": {
+      "description": "Exactly the 14 release-readiness probes, each appearing exactly once, each 'attested' with a 1:1 evidence reference and SHA-256.",
+      "type": "array",
+      "minItems": 14,
+      "maxItems": 14,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/probe" },
+      "allOf": [
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "trusted-preflight-verifier" } } } },
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "authenticated-forgejo-runner-lock" } } } },
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "apple-developer-id-certificate" } } } },
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "linux-release-gpg-fingerprint" } } } },
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "macos-arm64-runner-capability" } } } },
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "macos-arm64-clean-install" } } } },
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "linux-x86-64-x11-runner-capability" } } } },
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "linux-x86-64-x11-clean-install" } } } },
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "apple-private-key-signing" } } } },
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "apple-notarization" } } } },
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "linux-gpg-signing" } } } },
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "protected-tag-owner-approval" } } } },
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "artifact-retention-policy" } } } },
+        { "contains": { "type": "object", "required": ["id"], "properties": { "id": { "const": "independent-release-authority-approval" } } } }
+      ]
+    },
+    "actionable_blockers": {
+      "description": "Actionable blockers remaining against this attestation. A valid 'ready' attestation must have an empty list; a non-empty list denotes an incomplete readiness state and is never a publication pass.",
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 32,
+      "items": { "type": "string", "minLength": 1, "maxLength": 200 }
+    },
+    "verifier": {
+      "description": "The independent trusted verifier that signed this attestation. Its key, operator, and provisioning host must be distinct from the release authority; the release-authority key/fingerprint must be rejected here under any domain.",
+      "$ref": "#/$defs/verifier"
+    },
+    "authority": { "$ref": "#/$defs/authority" },
+    "ready": {
+      "description": "True only when the attestation is complete: all 14 probes attested with matching evidence, the canonical message verifies against the trusted-verifier public key under the readiness domain, the verifier fingerprint is distinct from the release-authority fingerprint, and actionable_blockers is empty.",
+      "type": "boolean"
+    },
+    "disclaimer": {
+      "const": "This readiness attestation asserts release-readiness only. It does not authorize publication, does not clear the release-prerequisite preflight, does not set or imply publication_authorized, and does not permit tagging, releasing, or publicly distributing the product."
+    }
+  },
+  "allOf": [
+    {
+      "description": "Internal consistency: a 'ready' attestation cannot carry actionable blockers.",
+      "if": {
+        "required": ["ready"],
+        "properties": { "ready": { "const": true } }
+      },
+      "then": {
+        "properties": { "actionable_blockers": { "maxItems": 0 } }
+      }
+    },
+    {
+      "description": "Converse consistency: a not-ready attestation must carry at least one actionable blocker, mirroring the code's NotReadyWithoutBlockers invariant.",
+      "if": {
+        "required": ["ready"],
+        "properties": { "ready": { "const": false } }
+      },
+      "then": {
+        "properties": { "actionable_blockers": { "minItems": 1 } }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "gitSha40": {
+      "description": "40-character lowercase hexadecimal git object id (commit or tree).",
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "logicalId": {
+      "description": "Repository-relative logical identifier or evidence path. Rejects absolute paths, traversal, host-local prefixes, private/loopback addresses, and secret-looking material.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9._/-]+$",
+      "not": {
+        "pattern": "(?i:(^/|\\.\\.|token|secret|credentials|password|/Users/|/home/|/private/|/var/folders/|(127\\.|10\\.|192\\.168\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|169\\.254\\.)\\d{1,3}\\.\\d{1,3}|^(::1|fc00:|fd00:|fe80:)))"
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "tree"],
+      "properties": {
+        "commit": { "$ref": "#/$defs/gitSha40" },
+        "tree": { "$ref": "#/$defs/gitSha40" }
+      }
+    },
+    "probeId": {
+      "enum": [
+        "trusted-preflight-verifier",
+        "authenticated-forgejo-runner-lock",
+        "apple-developer-id-certificate",
+        "linux-release-gpg-fingerprint",
+        "macos-arm64-runner-capability",
+        "macos-arm64-clean-install",
+        "linux-x86-64-x11-runner-capability",
+        "linux-x86-64-x11-clean-install",
+        "apple-private-key-signing",
+        "apple-notarization",
+        "linux-gpg-signing",
+        "protected-tag-owner-approval",
+        "artifact-retention-policy",
+        "independent-release-authority-approval"
+      ]
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "state", "observed_at_unix_ms", "evidence_ref", "evidence_sha256"],
+      "properties": {
+        "id": { "$ref": "#/$defs/probeId" },
+        "state": {
+          "description": "Every probe in a readiness attestation must be 'attested'. The historical 'unavailable'/'failed'/'not_required' states belong only to the v1 preflight and are rejected here.",
+          "const": "attested"
+        },
+        "observed_at_unix_ms": { "type": "integer", "minimum": 0, "maximum": 9007199254740992, "description": "Unix-epoch millisecond timestamp bounded by 2^53 (JSON-safe)." },
+        "evidence_ref": {
+          "description": "Repository-relative reference to the single observation backing this probe. 1:1 with evidence_sha256.",
+          "$ref": "#/$defs/logicalId"
+        },
+        "evidence_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "ed25519PublicKey": {
+      "description": "32-byte ed25519 verifying key as 64 lowercase hexadecimal characters.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "ed25519Signature": {
+      "description": "64-byte ed25519 signature as 128 lowercase hexadecimal characters.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{128}$"
+    },
+    "verifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "key_fingerprint", "signing_public_key_hex", "independence_evidence_ref"],
+      "properties": {
+        "identity": {
+          "description": "Logical identity of the independent trusted verifier (distinct operator and provisioning host from the release authority).",
+          "$ref": "#/$defs/logicalId"
+        },
+        "key_fingerprint": {
+          "description": "SHA-256 of the verifier's 32-byte ed25519 public key, as 64 lowercase hex characters (mirrors release_authority.rs key_fingerprint). Must differ from the release-authority key fingerprint; equality is a hard rejection at verification time.",
+          "$ref": "#/$defs/sha256"
+        },
+        "signing_public_key_hex": { "$ref": "#/$defs/ed25519PublicKey" },
+        "independence_evidence_ref": {
+          "description": "Repository-relative reference to the evidence record proving independence: distinct operator, distinct provisioning host, separately generated key, and no shared credential with the release authority.",
+          "$ref": "#/$defs/logicalId"
+        }
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["domain", "canonical_message_sha256", "signature_hex", "signed_at_unix_ms", "expires_at_unix_ms"],
+      "properties": {
+        "domain": {
+          "description": "Exact domain-separation tag prefixed to the canonical message before signing. NUL bytes (\u0000) are part of the tag. Distinct from the preview-publication-authorization domain; a readiness attestation signed under any other domain is invalid.",
+          "const": "FeatherMark Independent Readiness Attestation\u0000v1\u0000"
+        },
+        "canonical_message_sha256": {
+          "description": "SHA-256 of the domain-separated canonical message that was signed, so a reviewer can confirm the exact bytes covered by signature_hex.",
+          "$ref": "#/$defs/sha256"
+        },
+        "signature_hex": { "$ref": "#/$defs/ed25519Signature" },
+        "signed_at_unix_ms": { "type": "integer", "minimum": 0, "maximum": 9007199254740992, "description": "Unix-epoch millisecond timestamp bounded by 2^53 (JSON-safe)." },
+        "expires_at_unix_ms": {
+          "description": "Expiry of this attestation. A stale attestation (current time past expiry) must not be accepted as readiness evidence. Unix-epoch milliseconds bounded by 2^53 (JSON-safe).",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740992
+        }
+      }
+    }
+  }
+}

@@ -18,6 +18,7 @@ pub mod metrics;
 pub mod native_smoke;
 pub mod package;
 pub mod provenance;
+pub mod readiness;
 pub mod release_authority;
 pub mod release_preflight;
 pub mod reproducible_build;
