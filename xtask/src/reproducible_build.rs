@@ -1,6 +1,6 @@
-//! Reproducible release build: strips builder-specific paths and pins the
-//! source date so the same commit produces byte-identical binaries across
-//! machines and CI runners.
+//! Reproducible release build controls builder-specific paths and timestamps.
+//! Byte-identical cross-host output additionally requires the same Rust, SDK,
+//! and linker versions; differing Apple linker versions correctly produce drift.
 //!
 //! Hardening applied:
 //! - **Separate target root** (`target/prod`) so dev/test artifacts never
