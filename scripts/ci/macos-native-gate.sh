@@ -92,7 +92,11 @@ if [ "$profile" = "release" ]; then
 fi
 
 echo "=== macos-native-gate: cargo build (${build_profile}, macos-shell) ==="
-cargo build --locked -p feathermark-app --features macos-shell --bin feathermark
+if [ "$profile" = "release" ]; then
+  cargo build --locked --release -p feathermark-app --features macos-shell --bin feathermark
+else
+  cargo build --locked -p feathermark-app --features macos-shell --bin feathermark
+fi
 
 if [ ! -x "$bin_path" ]; then
   echo "macos-native-gate: expected binary not found at ${bin_path}" >&2

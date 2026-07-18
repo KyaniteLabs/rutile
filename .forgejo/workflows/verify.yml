@@ -48,7 +48,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: bootstrap toolchain
         run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
-      - name: portable gate (fmt + clippy -D warnings + docs + test)
+      - name: portable gate (fmt + clippy -D warnings + docs + test + xtask-test)
+        # portable-gate.sh emits one gate-result whose runs[] includes an
+        # xtask-test row (the test stage was expanded to run cargo test -p xtask
+        # inline). There is no separate post-gate xtask step: a failure inside
+        # the gate is the gate's own run row, never a false-green afterthought.
         run: bash scripts/ci/portable-gate.sh --stage lint,docs,test --profile "$PROFILE" --job portable
       - name: retain evidence
         if: always()
@@ -136,7 +140,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: bootstrap toolchains + cargo-fuzz (pinned)
         run: |
-          rustup toolchain install 1.88.0 --profile minimal --no-self-upgrade
+          rustup toolchain install 1.88.0 --profile minimal --no-self-update
           rustup toolchain install nightly-2026-07-01 --profile minimal --component llvm-tools-preview
           cargo install --locked cargo-fuzz --version 0.13.2
       - name: bounded fuzz smoke (60s/target)
@@ -206,7 +210,9 @@ jobs:
 
   # --- packaging + inspection (provisioned runners, signing external) --------
   # needs: external — produces platform packages; install/open/uninstall smoke
-  # and provenance binding are wired in Phase B/C.
+  # is wired through `xtask package smoke-row` inside package-inspect.sh.
+  # Provenance binding runs in the release pipeline (evidence-finalize.sh
+  # --provenance); publication_authorized stays false.
   package:
     # needs: external — packaging runner per kind (macOS .dmg / Linux .deb+.rpm).
     needs: production-build
@@ -235,10 +241,12 @@ jobs:
           fi
       - name: build featured release candidate
         run: cargo build --locked --release -p feathermark-app --features ${{ matrix.features }} --bin feathermark
-      - name: package + inspect + SBOM + evidence
-        # Candidate leak audit (artifact inspect --mode candidate); package-mode
-        # publication authorization + install/open/uninstall + provenance are
-        # Phase B/C and recorded as outstanding by the script.
+      - name: package + inspect + smoke-row + SBOM + evidence
+        # Candidate leak audit (artifact inspect --mode candidate) + one
+        # `xtask package smoke-row` per produced artifact (real
+        # install/open/uninstall receipt). Package-mode publication authorization
+        # stays out of scope (publication_authorized=false); provenance binding
+        # runs in the release pipeline via evidence-finalize.sh --provenance.
         run: |
           bash scripts/ci/package-inspect.sh \
             --candidate target/release/feathermark \
@@ -249,7 +257,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: packages-${{ matrix.kind }}
-          path: target/evidence/**/packages/
+          # Package artifacts + package-smoke-row.v1 receipts per artifact.
+          path: |
+            target/evidence/**/packages/
+            target/evidence/**/smoke/
           if-no-files-found: warn
           retention-days: 30
       - name: retain evidence
@@ -285,10 +296,13 @@ jobs:
           merge-multiple: true
       - name: finalize + validate (fail-on-skip required rows)
         # Validates every gate-result; fails closed if any required job is
-        # missing, failed, or structurally invalid.
+        # missing, failed, or structurally invalid. Passes the caller profile
+        # (pr) to the gate-result. No --provenance in the verify pipeline —
+        # evidence bind is a truthful PR-time skip.
         run: |
           bash scripts/ci/evidence-finalize.sh \
             --required portable,production-build,dependency-policy,fuzz-dependency-policy,fuzz-smoke,macos-native-smoke,linux-native-smoke,package-macos,package-linux \
+            --profile "$PROFILE" \
             --job evidence-aggregate
       - name: retain final evidence
         if: always()

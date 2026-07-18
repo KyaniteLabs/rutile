@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://feathermark.local/schemas/rutile.package-smoke-row.v1.schema.json",
+  "title": "Rutile package smoke row v1",
+  "description": "Bounded platform package install/open/uninstall smoke receipt. Proves a platform package was actually installed, opened, and uninstalled on the current host. The receipt is fail-closed: passed is true only when all three stages pass, the binary was hash-bound and observed after install and after open, and no residue survived uninstall.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "version",
+    "kind",
+    "platform",
+    "architecture",
+    "source_commit",
+    "expected_executable_sha256",
+    "package",
+    "install",
+    "open",
+    "uninstall",
+    "evidence_refs",
+    "started_unix_ms",
+    "ended_unix_ms",
+    "passed"
+  ],
+  "properties": {
+    "schema": { "const": "rutile.package-smoke-row.v1" },
+    "version": { "const": 1 },
+    "kind": {
+      "enum": ["macos_app_zip", "macos_dmg", "linux_deb", "linux_rpm", "linux_tar_zst"]
+    },
+    "platform": { "enum": ["macos", "linux"] },
+    "architecture": { "type": "string", "minLength": 1 },
+    "source_commit": { "$ref": "#/$defs/gitCommit40" },
+    "expected_executable_sha256": { "$ref": "#/$defs/sha256" },
+    "package": { "$ref": "#/$defs/packageRef" },
+    "install": { "$ref": "#/$defs/stageReceipt" },
+    "open": { "$ref": "#/$defs/stageReceipt" },
+    "uninstall": { "$ref": "#/$defs/stageReceipt" },
+    "evidence_refs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/evidenceRef" }
+    },
+    "started_unix_ms": { "type": "integer", "minimum": 0 },
+    "ended_unix_ms": { "type": "integer", "minimum": 0 },
+    "passed": { "type": "boolean" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "gitCommit40": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "packageRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "bytes", "device", "inode"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "device": { "type": "integer", "minimum": 0 },
+        "inode": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "stageReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "exit_code",
+        "reaped",
+        "observed_binary",
+        "executable_sha256",
+        "error"
+      ],
+      "properties": {
+        "status": { "enum": ["passed", "failed", "timed_out", "skipped"] },
+        "exit_code": { "type": ["integer", "null"] },
+        "reaped": { "type": "boolean" },
+        "observed_binary": { "type": "boolean" },
+        "executable_sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "error": { "type": ["string", "null"] }
+      }
+    },
+    "evidenceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage", "stream", "path", "bytes", "sha256"],
+      "properties": {
+        "stage": { "enum": ["install", "open", "uninstall"] },
+        "stream": { "enum": ["stdout", "stderr"] },
+        "path": { "type": "string", "minLength": 1 },
+        "bytes": { "type": "integer", "minimum": 0, "maximum": 16384 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}

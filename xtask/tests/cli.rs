@@ -155,6 +155,44 @@ fn bootstrap_driver_cli_exposes_gui_metric_and_package_assertions() {
     );
 }
 
+#[test]
+fn evidence_validate_fails_closed_on_accessibility_source_mismatch() {
+    let root = tempdir().unwrap();
+    let input = root.path().join("accessibility.json");
+    fs::write(
+        &input,
+        serde_json::to_vec(&serde_json::json!({
+            "schema": "rutile.accessibility-attestation.v1",
+            "version": 1,
+            "source_commit": "0000000000000000000000000000000000000000",
+            "platform": "macos",
+            "tool": "voiceover",
+            "rows": [{
+                "action": "file/open",
+                "passed": true,
+                "evidence_ref": "release/evidence/readiness/file-open.wav"
+            }],
+            "summary": { "passed": 1, "total": 1, "failed": 0 },
+            "unverified_rows": []
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let output = xtask()
+        .args(["evidence", "validate", "--input"])
+        .arg(&input)
+        .args(["--schema", "accessibility-attestation"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("source commit/tree do not match"),
+        "source mismatch must be reported: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn metric_record() -> Vec<u8> {
     let mut bytes = serde_json::to_vec(&serde_json::json!({
         "schema":"feathermark.metric.v1","v":1,"scenario":"paced-latency",

@@ -896,6 +896,73 @@ fn run_local_package_linux_fails_closed_until_archive_traversal_is_supported() {
 }
 
 #[test]
+fn linux_manifest_packaged_executable_hash_is_computed_from_candidate_not_build_input() {
+    let temporary = tempdir().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    let candidate = root.join("candidate");
+    let bytes = elf_x86_64();
+    fs::write(&candidate, &bytes).unwrap();
+    let candidate_hash = sha256(&bytes);
+    let output = root.join("linux-packaged-hash");
+
+    let executor = RecordingExecutor::default();
+    let request = LocalPackageCliRequest::Linux(LinuxPackageRequest {
+        candidate,
+        build_input_sha256: candidate_hash.clone(),
+        source_commit: valid_source_commit(),
+        output_root: output.clone(),
+        version: "0.2.2".into(),
+    });
+
+    // run_local_package fails at inspection (unsupported archive) but the
+    // finalize manifests are already written to disk before inspection runs.
+    let _ = run_local_package(request, &executor);
+
+    // Read the deb sibling manifest and verify packaged_executable_sha256
+    // equals the independently computed candidate hash, not just a copy of
+    // build_input_sha256. Both happen to be the same value because
+    // read_hash_bound_candidate enforces equality, but the code must compute
+    // packaged_executable_sha256 via sha256_regular_file(&candidate) so the
+    // binding chain remains correct if build_input semantics ever diverge.
+    let deb_manifest_path = output.join("feathermark_0.2.2_amd64.deb.manifest-v1.json");
+    assert!(deb_manifest_path.is_file(), "deb manifest should exist");
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&deb_manifest_path).unwrap()).unwrap();
+
+    assert_eq!(
+        manifest["packaged_executable_sha256"], candidate_hash,
+        "packaged_executable_sha256 must equal the measured candidate hash"
+    );
+    assert_eq!(
+        manifest["build_input_sha256"], candidate_hash,
+        "build_input_sha256 is the operator-asserted hash (equals candidate here)"
+    );
+    // Verify packaged hash differs from the artifact hash (whole .deb).
+    assert_ne!(
+        manifest["packaged_executable_sha256"], manifest["artifact_sha256"],
+        "packaged_executable_sha256 must differ from artifact_sha256 (the whole .deb hash)"
+    );
+}
+
+#[test]
+fn package_inspect_hashes_the_candidate_as_the_packager_build_input() {
+    let script_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("scripts/ci/package-inspect.sh");
+    let script = fs::read_to_string(script_path).unwrap();
+
+    assert!(
+        script.contains("build_input_sha256=\"$(sha256_arg \"$candidate\")\""),
+        "package inspection must satisfy the packager's candidate hash binding"
+    );
+    assert!(
+        !script.contains("build_input_sha256=\"$(sha256_arg \"${REPO_ROOT}/Cargo.lock\")\""),
+        "Cargo.lock is provenance input, not the package candidate hash"
+    );
+}
+
+#[test]
 fn run_local_package_retains_staging_on_failure() {
     let temporary = tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();

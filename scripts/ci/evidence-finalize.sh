@@ -12,12 +12,17 @@
 #
 # It then writes a plain evidence index (a list of the discovered gate-results
 # with their sha256) and emits its own rutile.gate-result.v1 attesting that
-# every required gate passed. Binding this index into the canonical
-# rutile.evidence-index.v1 schema is a Phase B wiring step.
+# every required gate passed. When --provenance is supplied (release pipeline)
+# it binds the plain index into the canonical rutile.evidence-index.v1 schema
+# via `xtask evidence bind`; in the verify pipeline no provenance is generated
+# (PR-time), so evidence bind is outstanding with a truthful reason and the
+# gate does not fail on that basis alone. A real bind failure (schema mismatch,
+# source mismatch, create-only collision) DOES fail the gate closed.
 #
 # Usage:
 #   scripts/ci/evidence-finalize.sh
-#   scripts/ci/evidence-finalize.sh --required portable,fuzz-smoke,macos-native-smoke
+#   scripts/ci/evidence-finalize.sh --required portable,fuzz-smoke,macos-native-smoke \
+#       --provenance release/evidence/provenance/production-provenance.json
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -30,11 +35,20 @@ commit=""
 job="evidence-finalize"
 required=""
 fail_on_dirty="false"
+# Profile propagated to the gate-result (pr for verify pipeline, release for
+# release pipeline). Defaults to release for backward compatibility.
+profile="release"
+# Optional production-provenance record (rutile.production-provenance.v1).
+# Three-way logic:
+#   empty/unset  -> truthful PR skip (verify pipeline: no provenance generated)
+#   non-empty but missing/unreadable -> FAILED row + final_exit=1 (release pipeline)
+#   non-empty and readable -> run `xtask evidence bind` (if gate validation passed)
+provenance=""
 
 usage() {
   cat >&2 <<EOF
-usage: $0 [--commit SHA] [--evidence-root PATH] [--job NAME]
-          [--required comma,of,job,names] [--fail-on-dirty]
+usage: $0 [--commit SHA] [--evidence-root PATH] [--job NAME] [--profile pr|release]
+          [--required comma,of,job,names] [--fail-on-dirty] [--provenance PATH]
 EOF
   exit 2
 }
@@ -46,6 +60,8 @@ while [ "$#" -gt 0 ]; do
     --job) job="${2:-}"; shift 2 ;;
     --required) required="${2:-}"; shift 2 ;;
     --fail-on-dirty) fail_on_dirty="true"; shift ;;
+    --provenance) provenance="${2:-}"; shift 2 ;;
+    --profile) profile="${2:-}"; shift 2 ;;
     --help|-h) usage ;;
     *) echo "evidence-finalize: unknown argument: $1" >&2; usage ;;
   esac
@@ -325,15 +341,73 @@ sys.exit(0 if failed == 0 else 1)
 PY
 validate_code=$?
 
-ended_ms="$(now_ms)"
-
 final_exit=0
 [ "$validate_code" -eq 0 ] || final_exit=1
 
+case "$profile" in
+  pr|release) ;;
+  *) echo "evidence-finalize: --profile must be pr or release" >&2; exit 2 ;;
+esac
+
+# Bind the plain gate index into the canonical rutile.evidence-index.v1
+# schema. Three-way provenance logic:
+#   1. Gate validation failed (final_exit != 0): skip bind entirely. A failed
+#      gate must never produce a canonical index that could be mistaken for
+#      release-ready evidence.
+#   2. Provenance empty/unset: truthful PR-time skip (verify pipeline). No run
+#      row; the note is retained in stdout/logs only.
+#   3. Provenance non-empty but missing/unreadable: FAILED row + final_exit=1.
+#      The release pipeline asserted a provenance path that does not exist —
+#      that is a real wiring failure, not a skip.
+#   4. Provenance non-empty and readable: run `xtask evidence bind`. A real
+#      bind failure (schema/source mismatch, create-only collision) appends a
+#      FAILED row and sets final_exit=1.
+#
+# Inputs:  $index_json     - plain gate index written by the python pass above
+#          $provenance     - optional rutile.production-provenance.v1 record
+#          $evidence_root  - root for resolving gate-result paths
+# Artifact: ${job_dir}/evidence-index.canonical.json (when bind runs)
+canonical_index="${job_dir}/evidence-index.canonical.json"
+if [ "$final_exit" -ne 0 ]; then
+  echo "evidence-finalize: evidence-bind skipped (gate validation failed; canonical index not produced)" >>"$stdout_raw"
+elif [ -z "$provenance" ]; then
+  # Empty/unset provenance is a truthful PR-time skip, not a gate failure. No
+  # run row is appended because the bind did not execute.
+  echo "evidence-finalize: evidence-bind outstanding (provenance not provided; PR-time skip)" >>"$stdout_raw"
+elif [ ! -f "$provenance" ] || [ ! -r "$provenance" ]; then
+  # Non-empty provenance that is missing or unreadable is a real wiring failure
+  # in the release pipeline. Record a FAILED row and fail the gate closed.
+  echo "evidence-finalize: evidence-bind FAILED (provenance missing/unreadable: $provenance)" >&2
+  bind_run_n="$(wc -l <"$runs_tsv" | tr -d ' ')"
+  bind_run_n=$((bind_run_n + 1))
+  printf '%s\tfailed\t0\t0\t0\tevidence-bind:provenance-missing\n' "$bind_run_n" >>"$runs_tsv"
+  final_exit=1
+else
+  echo "=== evidence-finalize: xtask evidence bind (canonical rutile.evidence-index.v1) ==="
+  bind_run_n="$(wc -l <"$runs_tsv" | tr -d ' ')"
+  bind_run_n=$((bind_run_n + 1))
+  set +e
+  cargo run --locked -p xtask --bin xtask -- evidence bind \
+    --plain-index "$index_json" \
+    --provenance "$provenance" \
+    --evidence-root "$evidence_root" \
+    --out "$canonical_index" \
+    > >(tee -a "$stdout_raw") 2> >(tee -a "$stderr_raw" >&2)
+  bind_code=$?
+  set -e
+  if [ "$bind_code" -eq 0 ]; then
+    printf '%s\tpassed\t0\t0\t0\tcanonical=%s\n' "$bind_run_n" "$canonical_index" >>"$runs_tsv"
+  else
+    printf '%s\tfailed\t0\t0\t0\tevidence-bind:exit=%s\n' "$bind_run_n" "$bind_code" >>"$runs_tsv"
+    final_exit=1
+  fi
+fi
+
+ended_ms="$(now_ms)"
 command_id="evidence-${job}"
 gate_path="$(emit_gate_result \
   --command-id "$command_id" \
-  --profile "release" \
+  --profile "$profile" \
   --required-row "$command_id" \
   --exit-code "$final_exit" \
   --started-ms "$started_ms" \
@@ -356,6 +430,7 @@ gate_path="$(emit_gate_result \
   --dirty "$dirty")" || final_exit=1
 
 echo "evidence-finalize: index=${index_json}"
+[ -f "$canonical_index" ] && echo "evidence-finalize: canonical=${canonical_index}"
 echo "evidence-finalize: gate-result=${gate_path}"
 echo "evidence-finalize: exit=${final_exit}"
 exit "$final_exit"

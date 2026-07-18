@@ -294,14 +294,19 @@ fn run_linux(
     use crate::local_package::{
         create_package_output_root, debian_package_plan, finalize_linux_archive_manifest,
         finalize_linux_package_manifest, linux_archive_plan, prepare_debian_staging,
-        prepare_linux_layout, prepare_rpm_staging, rpm_package_plan,
+        prepare_linux_layout, prepare_rpm_staging, rpm_package_plan, sha256_regular_file,
     };
 
     create_package_output_root(&request.output_root)?;
 
-    // Linux packaging does not mutate the executable, so the build-input hash is
-    // also the packaged-executable hash.
-    let packaged_executable_sha256 = request.build_input_sha256.clone();
+    // Compute the packaged-executable hash from the actual hash-bound candidate
+    // file. Linux packaging does not mutate the executable (no codesign step),
+    // so this equals the candidate hash. Computing it independently from
+    // build_input_sha256 makes the binding chain explicit: build_input_sha256
+    // is the operator-asserted build-input hash (could be a Cargo.lock hash),
+    // while packaged_executable_sha256 is always the measured hash of the
+    // binary that actually lands in the package.
+    let packaged_executable_sha256 = sha256_regular_file(&request.candidate)?;
 
     let layout_receipt = prepare_linux_layout(&request)?;
     let deb_receipt = prepare_debian_staging(&request)?;
