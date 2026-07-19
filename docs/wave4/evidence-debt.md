@@ -3,12 +3,15 @@
 > **Policy:** validation that requires a real assistive-technology environment,
 > an independent operator, or a specific physical host is never fabricated.
 > Unavailable evidence remains debt with an owner, revalidation rule, and
-> expiry. This register is current at `main`
-> `19e69ece7ea14121a438d72dcda6dc40e5ea75d5` (2026-07-18).
+> expiry. This register was reconciled on 2026-07-19 against the readiness
+> engineering baseline `c026250a2bdcfe56b8f3690f45d765c0ceb60d12` (tree
+> `13bb6b8ab4deb8d03aebb65f707a26df07647c20`). Documentation-only commits may
+> follow that baseline without changing the evidence state.
 >
 > These items do not reopen completed code work. They block the readiness exit
-> gate and any future publication decision. `publication_authorized:false`
-> remains structural.
+> gate and any future publication decision. `publication_authorized:false` and
+> `preview_authorized:false` remain structural. No new tag, public release, or
+> publication-authorization record belongs to this plan.
 
 ## Code-complete baseline
 
@@ -60,8 +63,9 @@ VoiceOver, Orca/AT-SPI, or keyboard-only run.
   keyboard-only on a real x86_64 Linux X11 desktop under Orca/AT-SPI, with
   programmatic role/name/state assertions and source-bound attestations.
 - **Why open:** Xvfb lifecycle automation without Orca does not prove the
-  assistive-technology surface. No real Orca walkthrough or AT-SPI tree dump
-  exists.
+  assistive-technology surface. Structural AT-SPI evidence captured on the XPS
+  physical X11 session proves roles/names/tree exposure only; it is not spoken
+  Orca acceptance and does not close this item.
 - **Owner:** accessibility specialist + Linux platform owner.
 - **Revalidate:** run the full matrix with Orca and an AT-SPI inspector,
   capture roles/names/states/focus transitions, and validate every receipt
@@ -108,34 +112,65 @@ VoiceOver, Orca/AT-SPI, or keyboard-only run.
 - **Expiry:** reconsider before the next major Rutile release, or earlier if
   winit exposes supported delegate composition.
 
-### ED-PERF-RSS — bounded approximately-10-GB reproduction campaign
+### ED-PERF-RSS — bounded approximately-10-GB reproduction campaign (resolved)
 
 - **Item:** run three 10-minute sessions and one 30-minute session under the
   fixed harness on a real macOS arm64 host.
-- **Current truth:** the deterministic idle-redraw loop was fixed and
-  180-second soak-gated. The separate one-time approximately 10 GB RSS
-  observation was not reproduced; its allocation path was never identified,
-  fixed, or reproduced. No attribution to WKWebView is supported.
+- **Resolution:** the campaign ran in full — four real macOS arm64 runs
+  totaling 60 minutes — and **closed as `passed-unreproduced`**. Peak RSS
+  stayed near 153–154 MiB and final idle CPU was 0.0% on every run; all runs
+  passed the standing soak thresholds. Evidence:
+  `target/g007-rss-campaign.json`.
+- **Exact caveat (mandatory and preserved):** the one-time approximately 10 GB
+  RSS observation was **not** reproduced; its allocation path and root cause
+  remain unknown and were never identified, fixed, or reproduced. This closure
+  is **not** an attribution to WKWebView or any other component.
 - **Standing idle-soak gate:** at least 180 seconds; RSS ≤512 MiB;
   post-warmup RSS growth ≤128 MiB; final idle CPU ≤25%. This guard does not
   by itself reproduce or close the approximately-10-GB observation.
 - **Owner:** performance/release owner.
 - **Revalidate:** record peak RSS at one-second intervals with exact
-  host/OS/build identity.
+  host/OS/build identity if a future regression appears.
 - **Expiry:** before the next readiness audit or release decision.
 - **Closure rule:** no real host means debt, not a run; reproduction means the
-  defect remains open; non-reproduction requires the prescribed exact closure
-  text with run count and total duration.
+  defect reopens; non-reproduction requires the prescribed exact closure text
+  with run count, total duration, host/OS/build, and the no-WKWebView-attribution
+  caveat above.
+
+### ED-BUILD-INDEPENDENT — independent-builder reproduction (resolved)
+
+- **Item:** reproduce the build on at least two independent clean hosts with
+  matching build-input and packaged-executable hashes.
+- **Resolution:** resolved by G010 (PR #54 merge `aeafce3`). Two clean physical
+  hosts — MacBook Air M4 and MacBook Pro M1 Pro, Rust 1.88.0, SDK 26.5, Apple
+  ld 1266.8 — produced byte-identical 4,357,856-byte raw executables and
+  matching packaged-executable hashes with valid code signatures. Evidence:
+  `target/g010-independent-build-report.json`.
+- **Note:** this closed the readiness-plan independent-builder reproduction
+  goal (formerly tracked under G007, now superseded). It does not relax the
+  legacy v1 preflight, runner-trust, signing, or accessibility requirements.
 
 ## Relationship to external release blockers
 
-ED-A11Y-1..4 and the residual decisions do not relax the historical 14
-preflight blockers. The legacy prerequisite inventory remains `ready:false`.
-The additive readiness verifier, package-smoke, and evidence-binding code is
-present, but real runner trust, credentials, an independent verifier
-key/operator/host, accessibility receipts, independent-builder reproduction,
-and the RSS campaign are still required before the final readiness audit.
+ED-A11Y-1..4 and the accepted openURLs limitation do not relax the historical
+14 preflight blockers. The legacy prerequisite inventory remains `ready:false`.
 
-Even complete readiness evidence would leave `publication_authorized:false`.
-No tag, public release, or publication-authorization record belongs to this
-plan.
+The previously open independent-builder reproduction (ED-BUILD-INDEPENDENT,
+G007) and the bounded RSS campaign (ED-PERF-RSS, G007) are **resolved** by G010
+and the RSS evidence respectively. The Linux package construction blockers
+(formerly G011) are **resolved** by G012 at `main` `c026250`. The only remaining
+blockers are external and human-only:
+
+- **G004 — authenticated runners and trust manifests.**
+- **G005 — signing credentials and a distinct independent-verifier
+  key/operator/host plus signed readiness statement, protected-tag approval,
+  and retention approval.**
+- **G006 — human spoken/keyboard VoiceOver and Orca/AT-SPI acceptance,
+  including MAC-004 and the zero-trap / zero-unlabelled-control matrix
+  (ED-A11Y-1..4).**
+- **G008 — final readiness audit, dependent on G004–G006.**
+
+Aggregate completion is prohibited until G004, G005, G006, and the dependent
+G008 genuinely close. Even complete readiness evidence would leave
+`publication_authorized:false`. No tag, public release, or
+publication-authorization record belongs to this plan.
