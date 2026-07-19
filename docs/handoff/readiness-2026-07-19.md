@@ -101,6 +101,36 @@ WKWebView or any other component.
   the focused reruns above and reflects `ready:false` / `blocked-human-external`.
   No green end-to-end readiness receipt is claimed.
 
+## Durable execution learnings
+
+- Keep readiness engineering separate from publication authority. A candidate
+  can pass focused construction and lifecycle checks while remaining
+  `publication_authorized:false`, `preview_authorized:false`, and unsuitable
+  for public distribution.
+- Compile test-control entrypoints and receipt markers out of production
+  binaries instead of weakening artifact inspection. Fail-closed inspection
+  exposed the marker leak that G012 corrected.
+- Model host-specific package formats explicitly. Ubuntu packaging should not
+  require RPM tooling, while the default cross-distribution path must retain
+  its tar/deb/rpm contract.
+- Distinguish artifact construction from publication acceptance. Retaining
+  locally constructed packages for scoped readiness evidence does not make
+  unsupported or unprovenanced archives publishable.
+- State native lifecycle evidence at its exact strength. The XPS run proved an
+  isolated non-root `dpkg` unpack/open/purge on physical X11, not privileged
+  dependency resolution or a clean-system installation.
+- Preserve the boundary between structural accessibility automation and human
+  assistive-technology acceptance. Roles, names, and state exposure do not
+  prove spoken VoiceOver or Orca behavior.
+- Treat performance non-reproduction honestly. The approximately 10 GB RSS
+  observation was not reproduced, but its allocation path and root cause remain
+  unknown; no component attribution is justified.
+- Keep `.gjc/` session ledgers local and durable but outside version control.
+  Source-controlled handoffs should summarize their state without committing
+  runtime machinery or credentials.
+- Before opening a documentation PR, avoid reserving the next PR number in
+  prose. Describe historical changes by merge method so the documentation PR
+  cannot invalidate its own claim.
 ## Exact remaining blockers
 
 1. **G004 — authenticated runners and trust manifests.** Five production
