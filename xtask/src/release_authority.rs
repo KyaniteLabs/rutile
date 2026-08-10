@@ -223,7 +223,7 @@ fn read_key_text_nofollow(
             _ => ReleaseAuthorityError::Io(err),
         });
     }
-    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+    let file = unsafe { std::fs::File::from_raw_fd(fd) };
     let mut stat: libc::stat = unsafe { std::mem::zeroed() };
     if unsafe { libc::fstat(file.as_raw_fd(), &mut stat) } < 0 {
         return Err(ReleaseAuthorityError::Io(std::io::Error::last_os_error()));
@@ -233,13 +233,29 @@ fn read_key_text_nofollow(
             path.display().to_string(),
         ));
     }
+    // Defense-in-depth size cap: a real signing/public key is KB-scale, so
+    // reject an oversized regular file so a substituted 0600 file cannot force
+    // an unbounded read (mirrors the readiness_keystone/evidence_bind caps).
+    const MAX_KEY_BYTES: u64 = 1 << 20; // 1 MiB
+    if stat.st_size as u64 > MAX_KEY_BYTES {
+        return Err(ReleaseAuthorityError::UnsafeKeyFile(
+            path.display().to_string(),
+        ));
+    }
     if require_private && (stat.st_mode as u32 & 0o077) != 0 {
         return Err(ReleaseAuthorityError::UnsafeKeyFile(
             path.display().to_string(),
         ));
     }
-    let mut text = String::new();
-    file.read_to_string(&mut text)?;
+    let mut bytes = Vec::new();
+    file.take(MAX_KEY_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_KEY_BYTES {
+        return Err(ReleaseAuthorityError::UnsafeKeyFile(
+            path.display().to_string(),
+        ));
+    }
+    let text = String::from_utf8(bytes)
+        .map_err(|_| ReleaseAuthorityError::UnsafeKeyFile(path.display().to_string()))?;
     Ok(text)
 }
 
