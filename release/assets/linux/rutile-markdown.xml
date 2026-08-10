@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Rutile / Rutile — freedesktop shared-mime-info package.
+
+  Registers the text/markdown MIME type for the .md and .markdown extensions so
+  that, once update-mime-database runs in the package postinst, file managers
+  classify Markdown documents consistently and can route them to Rutile through
+  the rutile.desktop MimeType association.
+
+  text/markdown is the canonical IANA type; it owns the glob bindings.
+  text/x-markdown is declared as a plain-text subclass without competing globs
+  so the legacy entry still present in the desktop file's MimeType list resolves
+  to a known type instead of being treated as unregistered.
+-->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="text/markdown">
+    <comment>Markdown document</comment>
+    <acronym>MD</acronym>
+    <expanded-acronym>Markdown</expanded-acronym>
+    <sub-class-of type="text/plain"/>
+    <glob pattern="*.md"/>
+    <glob pattern="*.markdown"/>
+  </mime-type>
+  <mime-type type="text/x-markdown">
+    <comment>Markdown source</comment>
+    <sub-class-of type="text/plain"/>
+  </mime-type>
+</mime-info>

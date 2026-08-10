@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://feathermark.local/schemas/rutile.release-prerequisite-preflight.v1.schema.json",
+  "$id": "https://rutile.local/schemas/rutile.release-prerequisite-preflight.v1.schema.json",
   "title": "Rutile release prerequisite preflight v1",
   "type": "object",
   "additionalProperties": false,

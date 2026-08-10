@@ -494,7 +494,7 @@ impl ArtifactInspector {
                 manifests.push(entry.path().to_owned());
             }
             let relative = relative_subject(artifact, entry.path());
-            if relative == "Contents/MacOS/FeatherMark" || relative == "bin/feathermark" {
+            if relative == "Contents/MacOS/Rutile" || relative == "bin/rutile" {
                 executables += 1;
                 if executable_path.is_none() {
                     executable_path = Some(entry.path().to_owned());
@@ -573,7 +573,7 @@ impl ArtifactInspector {
         };
         self.check_manifest_json(&value, report);
 
-        let is_macos = root.join("Contents/MacOS/FeatherMark").is_file();
+        let is_macos = root.join("Contents/MacOS/Rutile").is_file();
         let platform_ok = if is_macos {
             let info = fs::read(root.join("Contents/Info.plist")).unwrap_or_default();
             Self::check_macos_info_plist(&info)
@@ -587,10 +587,10 @@ impl ArtifactInspector {
                     .and_then(|value| value.as_bool())
                     == Some(true)
                 && root
-                    .join("share/applications/feathermark.desktop")
+                    .join("share/applications/rutile.desktop")
                     .is_file()
                 && root
-                    .join("share/mime/packages/feathermark-markdown.xml")
+                    .join("share/mime/packages/rutile-markdown.xml")
                     .is_file()
         };
         if !platform_ok {
@@ -657,7 +657,7 @@ impl ArtifactInspector {
         use std::sync::atomic::{AtomicU64, Ordering};
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let mount_path = std::env::temp_dir().join(format!(
-            "feathermark-dmg-inspect-{}-{}",
+            "rutile-dmg-inspect-{}-{}",
             std::process::id(),
             SEQ.fetch_add(1, Ordering::Relaxed)
         ));
@@ -828,7 +828,7 @@ impl ArtifactInspector {
             // be a leak blind spot (the 0.2.0 quarantine class).
             self.scan_bytes(&buf, report);
 
-            if relative == "Contents/MacOS/FeatherMark" {
+            if relative == "Contents/MacOS/Rutile" {
                 executables += 1;
                 if executable_bytes.is_none() {
                     executable_bytes = Some(buf.clone());
@@ -1444,11 +1444,11 @@ fn bind_artifact_manifest(report: &mut InspectionReport, artifact: &Path) {
             return;
         }
     };
-    if value.get("schema").and_then(|v| v.as_str()) != Some("feathermark-local-artifact-v1") {
+    if value.get("schema").and_then(|v| v.as_str()) != Some("rutile-local-artifact-v1") {
         push(
             report,
             FindingCode::ArtifactManifestMalformed,
-            "sibling manifest is not a feathermark-local-artifact-v1 record",
+            "sibling manifest is not a rutile-local-artifact-v1 record",
         );
         return;
     }

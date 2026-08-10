@@ -1,9 +1,9 @@
 # Wave 4 — Accessibility Audit of the Native Adapters (READ-ONLY)
 
 > **Scope:** a static, read-only audit of the two production UI adapters —
-> `crates/feathermark-app/src/platform/macos/native.rs` (with the macOS File
-> menu in `crates/feathermark-app/src/platform/macos/open_events.rs`) and
-> `crates/feathermark-app/src/platform/linux_gtk.rs`. No production code was
+> `crates/rutile-app/src/platform/macos/native.rs` (with the macOS File
+> menu in `crates/rutile-app/src/platform/macos/open_events.rs`) and
+> `crates/rutile-app/src/platform/linux_gtk.rs`. No production code was
 > changed for this audit. Each control is classified by (a) whether it exposes a
 > programmatic accessible name/role, (b) whether it is keyboard-focusable, and
 > (c) whether it is a semantic platform control or a pseudo-field/pseudo-dialog.
@@ -42,7 +42,7 @@ prerequisite for any macOS pass.
 | File menu: Open… / Save / Save As… / Close | `open_events.rs:110`-`125` (`NSMenuItem`, title + key equivalent) | ✓ (AppKit menu item) | ✓ (menu bar navigation; ⌘O/⌘S/⌘⇧S/⌘W equivalents at `open_events.rs:110`-`115`) | ✓ |
 | Open panel (`NSOpenPanel`) | `native.rs:2625`-`2640` `choose_open_path` | ✓ (system panel) | ✓ | ✓ |
 | Save panel (`NSSavePanel`) | `native.rs:2646`-`2658` `choose_save_path` | ✓ (system panel) | ✓ | ✓ |
-| Source editor | `native.rs:2137`-`2141` (`text_editor`, id `feathermark-source-editor`) | ✗ — no NSAccessibility element surfaced; iced a11y tree not bridged to AppKit | ✓ within the iced focus chain (`native.rs:2355`-`2358` focus op; editor focused on window focus at `native.rs:1562`-`1567`) | △ — semantic iced widget, but rendered off the platform AT tree |
+| Source editor | `native.rs:2137`-`2141` (`text_editor`, id `rutile-source-editor`) | ✗ — no NSAccessibility element surfaced; iced a11y tree not bridged to AppKit | ✓ within the iced focus chain (`native.rs:2355`-`2358` focus op; editor focused on window focus at `native.rs:1562`-`1567`) | △ — semantic iced widget, but rendered off the platform AT tree |
 | Toolbar buttons: Bold/Italic/Code/Heading/Quote/List/Ordered/Checklist | `native.rs:2006`-`2015` (`TOOLBAR_ITEMS`); rendered `native.rs:2082`-`2090` | ✗ — no `accessibility_label` set; name would come only from the visible text, and none of it is on the NSAccessibility tree | △ — focusable in iced's focus chain, but no explicit Tab-order wiring between toolbar and editor in code | ✗ as seen by VoiceOver (iced `button` rendered via custom compositor) |
 | Find/replace bar — query + replace fields | `native.rs:2094`-`2133` (rendered as `iced_widget::text` lines `"▸ Find: …"` / `"▸ Replace: …"`) | ✗ — drawn text, no field name/role | ✗ at the AT level — "focus" is internal state (`FindField::Query`/`Replace`, `native.rs:1932`-`1937`) toggled by Tab (`native.rs:1001`-`1004`), not real widget focus | **✗ PSEUDO-FIELD** — input is a hand-rolled char-by-char handler (`native.rs:810`-`826` `find_input`, `native.rs:828`-`846` `find_backspace`), not an editable text widget |
 | Find/replace bar — replace-all / next / prev | No on-screen buttons; bound to keys (⌘⇧Enter replace-all, Enter/⌘G next/prev, `native.rs:967`-`1000`) | ✗ — no control to label | ✓ via keys | ✗ — no visible/AT-actionable control (key bindings only) |

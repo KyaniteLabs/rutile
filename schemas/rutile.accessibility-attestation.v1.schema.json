@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://feathermark.local/schemas/rutile.accessibility-attestation.v1.schema.json",
+  "$id": "https://rutile.local/schemas/rutile.accessibility-attestation.v1.schema.json",
   "title": "Rutile accessibility attestation v1",
   "description": "Attestation that a set of accessibility acceptance rows were validated for a candidate on one platform. Per Wave 4: keyboard-only reachability for every registered action, VoiceOver on macOS, AT-SPI/Orca on Linux, with zero keyboard traps and zero unlabeled actionable controls. Interactive rows that were not yet exercised are recorded as evidence debt in unverified_rows rather than fabricated passes. Paths are repository-relative evidence locations and must not embed host-local absolute paths.",
   "type": "object",

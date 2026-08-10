@@ -1,14 +1,14 @@
-# FeatherMark Local Beta 0.1.0 — Handoff Document
+# Rutile Local Beta 0.1.0 — Handoff Document
 
 > **Status: Historical release snapshot.** Superseded by Rutile 0.2.0. Commands, paths, hashes, and state below intentionally describe the 0.1.0 release only.
 
 **Date:** 2026-07-10  
-**Branch:** `feat/feathermark-build`  
-**Worktree:** `<repo>/.worktrees/feathermark-build`
-**Release commit:** `6a47ef8` — `release: package FeatherMark local beta artifacts`  
+**Branch:** `feat/rutile-build`  
+**Worktree:** `<repo>/.worktrees/rutile-build`
+**Release commit:** `6a47ef8` — `release: package Rutile local beta artifacts`  
 **Source commit for artifacts:** `1fd504996666d1d95cbc520e084c9e15f1ccc763`
 
-This document records the end state of the FeatherMark local beta build (Waves 0–5), the exact commands used to reproduce it, the final artifact hashes, and the known debt. It is intended for the next person or agent who picks up the branch.
+This document records the end state of the Rutile local beta build (Waves 0–5), the exact commands used to reproduce it, the final artifact hashes, and the known debt. It is intended for the next person or agent who picks up the branch.
 
 ---
 
@@ -16,7 +16,7 @@ This document records the end state of the FeatherMark local beta build (Waves 0
 
 ### Wave 0 — Read-only audit and tool verification
 - Verified Rust toolchain `1.88.0`, `cargo-deny 0.20.2`, `cargo-audit 0.22.2`, `cargo-fuzz 0.13.2`.
-- Confirmed repo layout: `crates/feathermark-app`, `crates/feathermark-core`, `crates/feathermark-protocol`, `crates/feathermark-types`, `xtask/`, `fuzz/`.
+- Confirmed repo layout: `crates/rutile-app`, `crates/rutile-core`, `crates/rutile-protocol`, `crates/rutile-types`, `xtask/`, `fuzz/`.
 
 ### Wave 1 + C1 — Shared-contract freeze
 - Locked shared interfaces at commit `5d6e7ca`.
@@ -70,8 +70,8 @@ All artifacts are in the hosts' `target/package-final/` directories.
 
 | Artifact | Size | SHA-256 |
 |----------|------|---------|
-| `FeatherMark-0.1.0-macos-arm64.app.zip` | 1,835,805 bytes | `2531e793a2a4f037dd4aee89a5bf1ec8efc7135b1510eb09df6f8810958d9e47` |
-| `FeatherMark-0.1.0-macos-arm64.dmg` | 2,314,976 bytes | `708dbbf6d324bf6d6af5f6b291e873c1744765fa560618bfe9f1502cf03e5c2d` |
+| `Rutile-0.1.0-macos-arm64.app.zip` | 1,835,805 bytes | `2531e793a2a4f037dd4aee89a5bf1ec8efc7135b1510eb09df6f8810958d9e47` |
+| `Rutile-0.1.0-macos-arm64.dmg` | 2,314,976 bytes | `708dbbf6d324bf6d6af5f6b291e873c1744765fa560618bfe9f1502cf03e5c2d` |
 
 - Build-input executable SHA-256: `151a8d9832d73175cff2d6e2a4bdfe95534d79c7dabffcb14643f6c214ab5695`
 - Packaged executable SHA-256: `18efc0b3b50857f5e00790452e9733cf16af802744e54ce0fa25f08a100df401`
@@ -80,9 +80,9 @@ All artifacts are in the hosts' `target/package-final/` directories.
 
 | Artifact | Size | SHA-256 |
 |----------|------|---------|
-| `FeatherMark-0.1.0-linux-x86_64.tar.zst` | 659,903 bytes | `732199c93d54ad3ee4aa1a3dd89bb12e948c7fd366a3a7dae57f95b902264e27` |
-| `feathermark_0.1.0_amd64.deb` | 660,308 bytes | `6d9322584fbf875990a0f9ef813df6820cb1bd00606de8734f76ed974389b95f` |
-| `feathermark-0.1.0-1.x86_64.rpm` | 789,248 bytes | `3369d028b9ff9ff07e32c585c337eea200526a9a53b37e518fc83b27cda276f9` |
+| `Rutile-0.1.0-linux-x86_64.tar.zst` | 659,903 bytes | `732199c93d54ad3ee4aa1a3dd89bb12e948c7fd366a3a7dae57f95b902264e27` |
+| `rutile_0.1.0_amd64.deb` | 660,308 bytes | `6d9322584fbf875990a0f9ef813df6820cb1bd00606de8734f76ed974389b95f` |
+| `rutile-0.1.0-1.x86_64.rpm` | 789,248 bytes | `3369d028b9ff9ff07e32c585c337eea200526a9a53b37e518fc83b27cda276f9` |
 
 - Build-input / packaged executable SHA-256: `d3f9106118d6bbe042b97810ad5f14757a72cbfc3e79bf9bdc073601c4346b0e`
 
@@ -93,18 +93,18 @@ All artifacts are in the hosts' `target/package-final/` directories.
 ### macOS
 
 ```bash
-cd /path/to/feathermark/.worktrees/feathermark-build
+cd /path/to/rutile/.worktrees/rutile-build
 
 git checkout 6a47ef8
 
-cargo build --release -p feathermark-app \
+cargo build --release -p rutile-app \
   --no-default-features --features macos-shell --locked
 
-BUILD_INPUT_SHA=$(shasum -a 256 target/release/feathermark | awk '{print $1}')
+BUILD_INPUT_SHA=$(shasum -a 256 target/release/rutile | awk '{print $1}')
 SOURCE_COMMIT=$(git rev-parse HEAD)
 
 cargo run -p xtask --bin xtask -- package local macos \
-  --candidate "$PWD/target/release/feathermark" \
+  --candidate "$PWD/target/release/rutile" \
   --build-input-sha256 "$BUILD_INPUT_SHA" \
   --source-commit "$SOURCE_COMMIT" \
   --output-root "$PWD/target/package-final" \
@@ -117,16 +117,16 @@ shasum -a 256 target/package-final/*
 
 ```bash
 ssh root@100.113.174.74
-cd /root/feathermark-source
+cd /root/rutile-source
 
-cargo build --release -p feathermark-app \
+cargo build --release -p rutile-app \
   --no-default-features --features linux-gtk --locked
 
-BUILD_INPUT_SHA=$(shasum -a 256 target/release/feathermark | awk '{print $1}')
+BUILD_INPUT_SHA=$(shasum -a 256 target/release/rutile | awk '{print $1}')
 SOURCE_COMMIT=1fd504996666d1d95cbc520e084c9e15f1ccc763
 
 cargo run -p xtask --bin xtask -- package local linux \
-  --candidate "$PWD/target/release/feathermark" \
+  --candidate "$PWD/target/release/rutile" \
   --build-input-sha256 "$BUILD_INPUT_SHA" \
   --source-commit "$SOURCE_COMMIT" \
   --output-root "$PWD/target/package-final" \
@@ -145,12 +145,12 @@ cargo test --workspace --all-targets --locked
 cargo deny check
 
 # Linux product gate
-cargo test -p feathermark-app --no-default-features --features linux-gtk,test-control --locked
+cargo test -p rutile-app --no-default-features --features linux-gtk,test-control --locked
 cargo deny check
 
 # Linux lifecycle gate (50 WebKitGTK cycles under Xvfb)
 Xvfb :99 -screen 0 1280x720x24 &
-DISPLAY=:99 cargo test -p feathermark-app --no-default-features --features linux-gtk,test-control --locked lifecycle
+DISPLAY=:99 cargo test -p rutile-app --no-default-features --features linux-gtk,test-control --locked lifecycle
 
 # Fuzz smoke (macOS)
 cd fuzz
@@ -193,11 +193,11 @@ docs/handoff/local-beta-0.1.0.md   (this file)
 ## 7. Prompt for the Next Agent
 
 ```text
-You are picking up the FeatherMark local beta branch.
+You are picking up the Rutile local beta branch.
 
 Current state:
-- Branch: feat/feathermark-build
-- Worktree: `<repo>/.worktrees/feathermark-build`
+- Branch: feat/rutile-build
+- Worktree: `<repo>/.worktrees/rutile-build`
 - Release commit: 6a47ef8
 - Source commit for beta artifacts: 1fd504996666d1d95cbc520e084c9e15f1ccc763
 

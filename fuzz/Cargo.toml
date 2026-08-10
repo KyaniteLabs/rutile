@@ -1,5 +1,5 @@
 [package]
-name = "feathermark-fuzz"
+name = "rutile-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2024"
@@ -8,9 +8,9 @@ edition = "2024"
 cargo-fuzz = true
 
 [dependencies]
-feathermark-core = { path = "../crates/feathermark-core", version = "=0.2.2" }
-feathermark-protocol = { path = "../crates/feathermark-protocol", version = "=0.2.2" }
-feathermark-types = { path = "../crates/feathermark-types", version = "=0.2.2" }
+rutile-core = { path = "../crates/rutile-core", version = "=0.2.2" }
+rutile-protocol = { path = "../crates/rutile-protocol", version = "=0.2.2" }
+rutile-types = { path = "../crates/rutile-types", version = "=0.2.2" }
 html-escape = "=0.2.13"
 libfuzzer-sys = "=0.4.10"
 

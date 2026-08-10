@@ -19,7 +19,7 @@
        `CFBundleDocumentTypes`, and `UTTypeConformsTo`.
 
   Why two document entries:
-    * Entry 0 owns `net.feathermark.markdown` — the UTI Rutile exports below —
+    * Entry 0 owns `net.rutile.markdown` — the UTI Rutile exports below —
       so `LSHandlerRank` is `Owner`.
     * Entry 1 catches `.md` files that already carry a system/legacy Markdown
       UTI (`public.markdown-text`, `net.daringfireball.markdown`). Rutile does
@@ -49,7 +49,7 @@
       <string>Owner</string>
       <key>LSItemContentTypes</key>
       <array>
-        <string>net.feathermark.markdown</string>
+        <string>net.rutile.markdown</string>
       </array>
       <key>CFBundleTypeExtensions</key>
       <array>
@@ -80,12 +80,12 @@
     </dict>
   </array>
 
-  <!-- Exported UTI: declares `net.feathermark.markdown` to LaunchServices. -->
+  <!-- Exported UTI: declares `net.rutile.markdown` to LaunchServices. -->
   <key>UTExportedTypeDeclarations</key>
   <array>
     <dict>
       <key>UTTypeIdentifier</key>
-      <string>net.feathermark.markdown</string>
+      <string>net.rutile.markdown</string>
       <key>UTTypeDescription</key>
       <string>Markdown document</string>
       <!-- Markdown is structured plain text; conform to both the generic

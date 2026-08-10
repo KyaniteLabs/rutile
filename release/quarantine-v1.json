@@ -22,13 +22,13 @@
     },
     {
       "sha256": "6f42d2bc68ffa31f86779a93c7f38af288a77779b652dbe98963348e8ced887a",
-      "artifact": "feathermark_0.2.0_amd64.deb",
+      "artifact": "rutile_0.2.0_amd64.deb",
       "reason": "Instrumented test-control behavior and absolute builder-path leakage were found during the 2026-07-12 release audit.",
       "discovered_at": "2026-07-12"
     },
     {
       "sha256": "2b8fbf0405e8e87abb323d9be7ee47aaee12dc2ceaf7aa403e89d3901c8eca11",
-      "artifact": "feathermark-0.2.0-1.x86_64.rpm",
+      "artifact": "rutile-0.2.0-1.x86_64.rpm",
       "reason": "Instrumented test-control behavior and absolute builder-path leakage were found during the 2026-07-12 release audit.",
       "discovered_at": "2026-07-12"
     }

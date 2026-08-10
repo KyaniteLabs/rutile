@@ -7,7 +7,7 @@
 //!   must be safe on arbitrary input).
 //! * `render_export_page` never panics on a small, fixed source document.
 
-use feathermark_core::{ExportPage, ExportRequest, render_export_page};
+use rutile_core::{ExportPage, ExportRequest, render_export_page};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|input: &[u8]| {

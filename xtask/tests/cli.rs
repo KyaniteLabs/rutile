@@ -49,8 +49,8 @@ fn comparator_cli_creates_and_verifies_the_locked_repository() {
     let root = tempdir().unwrap();
     for path in [
         "fixtures/small.md",
-        "feathermark-types/src/lib.rs",
-        "feathermark-protocol/src/lib.rs",
+        "rutile-types/src/lib.rs",
+        "rutile-protocol/src/lib.rs",
         "xtask/src/main.rs",
     ] {
         let path = root.path().join(path);
@@ -58,21 +58,21 @@ fn comparator_cli_creates_and_verifies_the_locked_repository() {
         fs::write(path, b"deterministic\n").unwrap();
     }
     // Contract manifests are required now that `create_scaffold` resolves a
-    // Cargo.lock for the scaffolded xtask (xtask path-deps feathermark-protocol).
+    // Cargo.lock for the scaffolded xtask (xtask path-deps rutile-protocol).
     fs::write(
-        root.path().join("feathermark-types/Cargo.toml"),
-        "[package]\nname = \"feathermark-types\"\nversion = \"0.1.0\"\nedition.workspace = true\nrust-version.workspace = true\nlicense.workspace = true\n\n[dependencies]\nhtml-escape.workspace = true\nthiserror.workspace = true\nurl.workspace = true\n",
+        root.path().join("rutile-types/Cargo.toml"),
+        "[package]\nname = \"rutile-types\"\nversion = \"0.1.0\"\nedition.workspace = true\nrust-version.workspace = true\nlicense.workspace = true\n\n[dependencies]\nhtml-escape.workspace = true\nthiserror.workspace = true\nurl.workspace = true\n",
     )
     .unwrap();
     fs::write(
-        root.path().join("feathermark-protocol/Cargo.toml"),
-        "[package]\nname = \"feathermark-protocol\"\nversion = \"0.1.0\"\nedition.workspace = true\nrust-version.workspace = true\nlicense.workspace = true\n\n[dependencies]\nfeathermark-types = { path = \"../feathermark-types\" }\nserde.workspace = true\nserde_json.workspace = true\nthiserror.workspace = true\n",
+        root.path().join("rutile-protocol/Cargo.toml"),
+        "[package]\nname = \"rutile-protocol\"\nversion = \"0.1.0\"\nedition.workspace = true\nrust-version.workspace = true\nlicense.workspace = true\n\n[dependencies]\nrutile-types = { path = \"../rutile-types\" }\nserde.workspace = true\nserde_json.workspace = true\nthiserror.workspace = true\n",
     )
     .unwrap();
     let contracts = format!(
         "{},{}",
-        root.path().join("feathermark-types").display(),
-        root.path().join("feathermark-protocol").display()
+        root.path().join("rutile-types").display(),
+        root.path().join("rutile-protocol").display()
     );
     let repo = root.path().join("repo");
     let lock = root.path().join("lock.json");
@@ -195,7 +195,7 @@ fn evidence_validate_fails_closed_on_accessibility_source_mismatch() {
 
 fn metric_record() -> Vec<u8> {
     let mut bytes = serde_json::to_vec(&serde_json::json!({
-        "schema":"feathermark.metric.v1","v":1,"scenario":"paced-latency",
+        "schema":"rutile.metric.v1","v":1,"scenario":"paced-latency",
         "git_commit":"0123456789012345678901234567890123456789","dirty":false,
         "rustc_version":"rustc 1.88.0","toolchain":"1.88.0","target_triple":"aarch64-apple-darwin",
         "release_profile":"release","features":["test-control"],"build_kind":"instrumented",

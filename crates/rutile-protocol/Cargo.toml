@@ -1,0 +1,12 @@
+[package]
+name = "rutile-protocol"
+version = "0.2.2"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+rutile-types = { path = "../rutile-types", version = "=0.2.2" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

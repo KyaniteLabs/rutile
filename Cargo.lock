@@ -1034,72 +1034,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 
 [[package]]
-name = "feathermark-app"
-version = "0.2.2"
-dependencies = [
- "feathermark-core",
- "feathermark-protocol",
- "feathermark-types",
- "getrandom 0.3.3",
- "gtk",
- "iced_renderer",
- "iced_widget",
- "iced_winit",
- "objc2 0.6.4",
- "objc2-app-kit 0.3.2",
- "objc2-foundation 0.3.2",
- "raw-window-handle",
- "serde_json",
- "sourceview4",
- "thiserror 2.0.12",
- "url",
- "wry",
-]
-
-[[package]]
-name = "feathermark-core"
-version = "0.2.2"
-dependencies = [
- "blake3",
- "feathermark-types",
- "fs2",
- "html-escape",
- "libc",
- "pulldown-cmark",
- "ropey",
- "serde",
- "serde_json",
- "thiserror 2.0.12",
-]
-
-[[package]]
-name = "feathermark-protocol"
-version = "0.2.2"
-dependencies = [
- "feathermark-types",
- "serde",
- "serde_json",
- "thiserror 2.0.12",
-]
-
-[[package]]
-name = "feathermark-spike-support"
-version = "0.2.2"
-dependencies = [
- "feathermark-protocol",
- "feathermark-types",
-]
-
-[[package]]
-name = "feathermark-types"
-version = "0.2.2"
-dependencies = [
- "html-escape",
- "thiserror 2.0.12",
- "url",
-]
-
-[[package]]
 name = "fiat-crypto"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2272,9 +2206,9 @@ checksum = "d4a5ff6bcca6c4867b1c4fd4ef63e4db7436ef363e0ad7531d1558856bae64f4"
 name = "linux-gtk-wry-spike"
 version = "0.2.2"
 dependencies = [
- "feathermark-protocol",
- "feathermark-spike-support",
  "gtk",
+ "rutile-protocol",
+ "rutile-spike-support",
  "sourceview4",
  "wry",
 ]
@@ -2337,11 +2271,11 @@ dependencies = [
 name = "macos-iced-wry-spike"
 version = "0.2.2"
 dependencies = [
- "feathermark-protocol",
- "feathermark-spike-support",
  "iced_renderer",
  "iced_widget",
  "iced_winit",
+ "rutile-protocol",
+ "rutile-spike-support",
  "wry",
 ]
 
@@ -2349,8 +2283,8 @@ dependencies = [
 name = "macos-open-events-spike"
 version = "0.2.2"
 dependencies = [
- "feathermark-app",
  "iced_winit",
+ "rutile-app",
 ]
 
 [[package]]
@@ -3450,6 +3384,72 @@ name = "rustversion"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
+
+[[package]]
+name = "rutile-app"
+version = "0.2.2"
+dependencies = [
+ "getrandom 0.3.3",
+ "gtk",
+ "iced_renderer",
+ "iced_widget",
+ "iced_winit",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "raw-window-handle",
+ "rutile-core",
+ "rutile-protocol",
+ "rutile-types",
+ "serde_json",
+ "sourceview4",
+ "thiserror 2.0.12",
+ "url",
+ "wry",
+]
+
+[[package]]
+name = "rutile-core"
+version = "0.2.2"
+dependencies = [
+ "blake3",
+ "fs2",
+ "html-escape",
+ "libc",
+ "pulldown-cmark",
+ "ropey",
+ "rutile-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.12",
+]
+
+[[package]]
+name = "rutile-protocol"
+version = "0.2.2"
+dependencies = [
+ "rutile-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.12",
+]
+
+[[package]]
+name = "rutile-spike-support"
+version = "0.2.2"
+dependencies = [
+ "rutile-protocol",
+ "rutile-types",
+]
+
+[[package]]
+name = "rutile-types"
+version = "0.2.2"
+dependencies = [
+ "html-escape",
+ "thiserror 2.0.12",
+ "url",
+]
 
 [[package]]
 name = "ryu"
@@ -5352,11 +5352,11 @@ version = "0.2.2"
 dependencies = [
  "clap",
  "ed25519-dalek",
- "feathermark-protocol",
  "getrandom 0.3.3",
  "hex",
  "jsonschema",
  "libc",
+ "rutile-protocol",
  "serde",
  "serde_json",
  "sha2",

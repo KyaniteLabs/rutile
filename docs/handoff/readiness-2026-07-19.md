@@ -12,7 +12,7 @@
 
 ## Identifiers
 
-- **Repository:** `feathermark` (public name **Rutile**).
+- **Repository:** `rutile` (public name **Rutile**).
 - **Execution worktree:** `rutile-remediation` (local path intentionally omitted).
 - **Execution branch at evidence capture:** `fix/linux-package-readiness`
 - **Readiness engineering baseline:** `c026250a2bdcfe56b8f3690f45d765c0ceb60d12`
@@ -64,7 +64,7 @@
   `7cd8b4854cee8801f8b2c16f047af5a18167db0e755ae881106fefff4f303a77`.
 - Retained deb SHA-256
   `a54f583aad81a8b4c0f3b1868358fdf1bff09449d8f21f7ae9f61b03b626e639`
-  (`target/g011-feathermark_0.2.2_amd64.deb`).
+  (`target/g011-rutile_0.2.2_amd64.deb`).
 - Retained tar.zst SHA-256
   `c8c13682a681a42467c778b9bb8a700ae91f86822460c4579f9d51ca581454d3`
   (`target/g011-Rutile-0.2.2-linux-x86_64.tar.zst`).
@@ -93,7 +93,7 @@ WKWebView or any other component.
 ## Verification caveats
 
 - A workspace all-target run hit a pre-existing, unrelated
-  `feathermark-core` `save_atomic` 1 MiB benchmark budget failure
+  `rutile-core` `save_atomic` 1 MiB benchmark budget failure
   (≈79.7 ms vs the 30 ms budget). G012 does not touch that surface; the focused
   and full affected gates are clean.
 - A broad readiness run timed out before completion; the fail-closed final

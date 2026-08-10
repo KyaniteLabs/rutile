@@ -15,8 +15,8 @@ linux-gtk = ["dep:gtk", "dep:sourceview4", "dep:wry"]
 test-control = []
 
 [dependencies]
-feathermark-protocol = { path = "../../crates/feathermark-protocol", version = "=0.2.2" }
-feathermark-spike-support = { path = "../feathermark-spike-support", version = "=0.2.2" }
+rutile-protocol = { path = "../../crates/rutile-protocol", version = "=0.2.2" }
+rutile-spike-support = { path = "../rutile-spike-support", version = "=0.2.2" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = { version = "=0.18.2", optional = true }

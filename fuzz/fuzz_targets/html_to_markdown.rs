@@ -13,7 +13,7 @@
 //!   substring scan of the Markdown (a fenced code block may legitimately
 //!   contain the text `<script>`, which is inert once rendered).
 
-use feathermark_core::{MAX_OUTPUT_BYTES, html_to_markdown, render_markdown};
+use rutile_core::{MAX_OUTPUT_BYTES, html_to_markdown, render_markdown};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|input: &[u8]| {

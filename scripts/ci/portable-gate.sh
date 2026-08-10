@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 #
-# FeatherMark Rutile portable CI gate.
+# Rutile portable CI gate.
 #
-# Runs platform-agnostic FeatherMark gates (fmt / clippy(-D warnings) / docs /
+# Runs platform-agnostic Rutile gates (fmt / clippy(-D warnings) / docs /
 # test, or a bounded libFuzzer smoke) and emits one rutile.gate-result.v1
 # document for the whole invocation under
 #   ${CARGO_TARGET_DIR:-target}/evidence/<commit>/<job>/run-<ms>-<pid>-<n>/
@@ -368,11 +368,11 @@ for stage in "${stage_list[@]}"; do
       ;;
     docs)
       run_stage docs cargo doc --locked --no-deps \
-        -p feathermark-types -p feathermark-core -p feathermark-protocol
+        -p rutile-types -p rutile-core -p rutile-protocol
       ;;
     test)
       run_stage test cargo test --locked \
-        -p feathermark-types -p feathermark-core -p feathermark-protocol
+        -p rutile-types -p rutile-core -p rutile-protocol
       ;;
     xtask-test)
       # G002 keystone crate (evidence_bind, package_smoke, readiness_keystone)
@@ -385,7 +385,7 @@ for stage in "${stage_list[@]}"; do
       # target root (target/prod) so test scaffolding can never contaminate the
       # shipped artifact. The produced binary feeds the package job.
       run_stage build env CARGO_TARGET_DIR="${TARGET_DIR}/prod" \
-        cargo build --locked --release -p feathermark-app --bin feathermark
+        cargo build --locked --release -p rutile-app --bin rutile
       ;;
     deny)
       run_deny_stage deny ""

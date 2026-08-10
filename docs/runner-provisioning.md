@@ -1,4 +1,4 @@
-# FeatherMark runner provisioning
+# Rutile runner provisioning
 
 > **Status: Current specialized subsystem, unprovisioned.** The fail-closed runner code remains in `xtask`, but the two trust/dispatch manifests are absent. This subsystem is not required for ordinary product builds or the 0.2.0 local-beta release evidence.
 
@@ -32,10 +32,10 @@ identity alone is never lock authority.
 ## Per-runner root service
 
 Install the launcher and probe from the same reviewed release build using the definitions under
-`xtask/launcher/`. Linux paths are `/usr/libexec/feathermark-runner-launcher` and
-`/usr/libexec/feathermark-runner-probe`. macOS paths are
-`/Library/PrivilegedHelperTools/com.feathermark.runner-launcher` and
-`/Library/Application Support/FeatherMark Runner/bin/feathermark-runner-probe`.
+`xtask/launcher/`. Linux paths are `/usr/libexec/rutile-runner-launcher` and
+`/usr/libexec/rutile-runner-probe`. macOS paths are
+`/Library/PrivilegedHelperTools/com.rutile.runner-launcher` and
+`/Library/Application Support/Rutile Runner/bin/rutile-runner-probe`.
 
 The complete installed probe path must be root-owned, non-symlinked, and not group/world writable.
 The probe file must be regular, root-owned, link-count one, and match the coordinator and local
@@ -52,8 +52,8 @@ minimum-OS tests pass.
 The launcher is a one-request stdin/stdout forced-command service. The coordinator reaches it only
 through OpenSSH with `StrictHostKeyChecking=yes`, a generated one-entry known-hosts stream, and the
 exact Ed25519 host public key compiled from the independently reviewed dispatch manifest. The
-server account is `feathermark-runner`; its authorized-key policy forces
-`feathermark-runner-launcher` and forbids forwarding, PTY, and user-selected commands. The supplied
+server account is `rutile-runner`; its authorized-key policy forces
+`rutile-runner-launcher` and forbids forwarding, PTY, and user-selected commands. The supplied
 systemd socket unit and launchd plist remain suitable for root-only local smoke tests, but plaintext
 TCP and peer-asserted fingerprint bytes are not an authorized production transport.
 
@@ -64,11 +64,11 @@ xtask/launcher/install-{linux,macos}.sh LAUNCHER_CONFIG RUNNER_KEY SNAPSHOT_ATTE
 ```
 
 `RUNNER_KEY` is exactly 32 nonzero secret bytes encoded as 64 lowercase hex characters. The
-snapshot file has schema `feathermark.runner-snapshot-attestation.v1` and closed fields
+snapshot file has schema `rutile.runner-snapshot-attestation.v1` and closed fields
 `runner_id`, `snapshot_id`, `snapshot_provider`, `snapshot_image_sha256`, `virtualized`, and
 `virtualization_image_sha256`. The final field is present exactly when `virtualized` is true.
 
-`LAUNCHER_CONFIG` has schema `feathermark.runner-launcher-config.v1` and only the closed local fields
+`LAUNCHER_CONFIG` has schema `rutile.runner-launcher-config.v1` and only the closed local fields
 `runner_id`, `key_id`, `probe_sha256`, `macos_designated_requirement`, and `macos_cdhash`. The
 dispatch manifest separately contains `ssh_host_ed25519_public_key_hex`; the launcher cannot echo or
 override that coordinator-side authentication pin. macOS rows require both Security-framework

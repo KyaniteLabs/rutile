@@ -1,6 +1,6 @@
 //! Independent readiness attestation verification.
 //!
-//! Verification-only module implementing the FeatherMark independent readiness
+//! Verification-only module implementing the Rutile independent readiness
 //! attestation contract (schemas `rutile.readiness-probe-bundle.v1` and
 //! `rutile.readiness-attestation.v1`).
 //!
@@ -44,7 +44,7 @@
 //!
 //! `text`, `uint`, and `array` use deterministic CBOR major-type encoding
 //! identical to the audited `runner::encoding` helpers. The domain prefix is
-//! byte-distinct from every other FeatherMark signing domain.
+//! byte-distinct from every other Rutile signing domain.
 
 use std::path::Path;
 
@@ -69,14 +69,14 @@ pub const READINESS_SCHEMA_VERSION: u64 = 1;
 /// String form of the readiness signing domain. Stored verbatim in
 /// `authority.domain`; contains literal NUL separators that serde/JSON encode
 /// as `\u0000`.
-pub const READINESS_DOMAIN_STR: &str = "FeatherMark Independent Readiness Attestation\0v1\0";
+pub const READINESS_DOMAIN_STR: &str = "Rutile Independent Readiness Attestation\0v1\0";
 
 /// Byte form of the readiness signing domain. Byte-distinct from the runner
-/// probe domain (`b"FeatherMark Runner Probe\0v1\0"`), the enrollment
+/// probe domain (`b"Rutile Runner Probe\0v1\0"`), the enrollment
 /// commitment domain, and any release-authority or preview-authorization
 /// domain. Cross-domain signature substitution is rejected because this prefix
 /// is part of the signed canonical message.
-pub const READINESS_DOMAIN: &[u8] = b"FeatherMark Independent Readiness Attestation\0v1\0";
+pub const READINESS_DOMAIN: &[u8] = b"Rutile Independent Readiness Attestation\0v1\0";
 
 /// Canonical disclaimer carried by every readiness attestation. This constant
 /// is the single source of truth and is reproduced verbatim as the `disclaimer`
@@ -903,7 +903,7 @@ mod tests {
 
     /// An alien signing domain (the runner-probe domain) used for cross-domain
     /// substitution tests.
-    const ALIEN_DOMAIN: &[u8] = b"FeatherMark Runner Probe\0v1\0";
+    const ALIEN_DOMAIN: &[u8] = b"Rutile Runner Probe\0v1\0";
 
     /// SHA-256 fingerprint of a deterministic release-authority key
     /// (`SigningKey::from_bytes(&[0xff; 32])`). Used as the
@@ -1427,7 +1427,7 @@ mod tests {
     fn wrong_authority_domain_is_rejected() {
         let signing_key = SigningKey::from_bytes(&[0x01; 32]);
         let mut claim = build_valid_attestation(&signing_key);
-        claim.authority.domain = "FeatherMark Runner Probe\0v1\0".to_string();
+        claim.authority.domain = "Rutile Runner Probe\0v1\0".to_string();
         assert_rejects(&claim, ReadinessError::AuthorityDomain);
     }
 

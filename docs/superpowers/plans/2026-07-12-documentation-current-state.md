@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Product-facing name is `Rutile`; migration-sensitive crate, binary, package, protocol, and path identifiers remain `feathermark`.
+- Product-facing name is `Rutile`; migration-sensitive crate, binary, package, protocol, and path identifiers remain `rutile`.
 - Current release is `0.2.0` at tag `v0.2.0`; historical release evidence remains unchanged.
 - No product-code behavior changes are authorized by this documentation pass.
 - Existing untracked `.omx/` state must remain untouched.
@@ -51,12 +51,12 @@
 - Modify: `docs/research/landscape.md`
 - Modify: `docs/superpowers/specs/2026-07-10-rutile-next-SPEC.md`
 - Modify: `docs/superpowers/specs/2026-07-10-rutile-working-brand-design.md`
-- Modify: `docs/superpowers/plans/2026-07-10-feathermark-end-to-end-completion.md`
+- Modify: `docs/superpowers/plans/2026-07-10-rutile-end-to-end-completion.md`
 - Modify: `docs/superpowers/plans/2026-07-10-rutile-0.2-plan.md`
 - Modify: `docs/superpowers/plans/2026-07-10-rutile-working-brand.md`
 - Modify: `docs/runner-provisioning.md`
 - Modify: `fuzz/README.md`
-- Modify: `crates/feathermark-app/src/app.rs` (Rustdoc-only correction)
+- Modify: `crates/rutile-app/src/app.rs` (Rustdoc-only correction)
 
 **Interfaces:**
 - Consumes: canonical current-state documentation from Task 1.

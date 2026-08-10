@@ -107,7 +107,7 @@ pub(crate) fn spawn(authorized: AuthorizedAppLaunch) -> Result<AppChild, AppLaun
     let prepared = prepare_verified_macos_executable(
         &authorized.spec.executable,
         authorized.spec.executable_sha256,
-        Path::new("/private/var/run/feathermark-runner"),
+        Path::new("/private/var/run/rutile-runner"),
         0,
     )?;
     ensure_fresh(authorized.capability.expires_at, Instant::now())?;
@@ -483,7 +483,7 @@ fn unique_private_directory_in(root: &Path) -> Result<PathBuf, AppLaunchError> {
     for _ in 0..32 {
         let mut nonce = [0_u8; 16];
         getrandom::fill(&mut nonce).map_err(|_| AppLaunchError::Executable)?;
-        let path = root.join(format!("feathermark-app-launch-{}", hex::encode(nonce)));
+        let path = root.join(format!("rutile-app-launch-{}", hex::encode(nonce)));
         let mut builder = fs::DirBuilder::new();
         builder.mode(0o700);
         match builder.create(&path) {

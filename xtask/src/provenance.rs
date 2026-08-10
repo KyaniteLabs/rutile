@@ -495,7 +495,7 @@ mod tests {
             .success();
         tool_process::git_isolated(
             dir,
-            &["config", "user.email", "test@feathermark.local"],
+            &["config", "user.email", "test@rutile.local"],
             &[],
         )
         .unwrap();
@@ -508,7 +508,7 @@ mod tests {
     /// Helper: set the required env vars for a happy-path measurement.
     fn set_provenance_env() {
         unsafe {
-            std::env::set_var("CARGO_PKG_NAME", "feathermark");
+            std::env::set_var("CARGO_PKG_NAME", "rutile");
             std::env::set_var("CARGO_PKG_VERSION", "0.2.0");
             std::env::set_var("SOURCE_DATE_EPOCH", "1720915200"); // 2024-07-14T00:00:00Z
             std::env::set_var("RUSTFLAGS", "--remap-path-prefix=/Users/x=src");
@@ -599,7 +599,7 @@ mod tests {
         clear_provenance_env();
         // Set everything except SOURCE_DATE_EPOCH.
         unsafe {
-            std::env::set_var("CARGO_PKG_NAME", "feathermark");
+            std::env::set_var("CARGO_PKG_NAME", "rutile");
             std::env::set_var("CARGO_PKG_VERSION", "0.2.0");
             std::env::set_var("RUSTFLAGS", "--remap-path-prefix=/x=y");
             std::env::remove_var("SOURCE_DATE_EPOCH");
@@ -625,7 +625,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         clear_provenance_env();
         unsafe {
-            std::env::set_var("CARGO_PKG_NAME", "feathermark");
+            std::env::set_var("CARGO_PKG_NAME", "rutile");
             std::env::set_var("CARGO_PKG_VERSION", "0.2.0");
             std::env::set_var("SOURCE_DATE_EPOCH", "1720915200");
             std::env::remove_var("RUSTFLAGS");
@@ -695,7 +695,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         clear_provenance_env();
         unsafe {
-            std::env::set_var("CARGO_PKG_NAME", "feathermark");
+            std::env::set_var("CARGO_PKG_NAME", "rutile");
             std::env::set_var("SOURCE_DATE_EPOCH", "1720915200");
             std::env::set_var("RUSTFLAGS", "--remap-path-prefix=/x=y");
             std::env::remove_var("CARGO_PKG_VERSION");
@@ -729,7 +729,7 @@ mod tests {
         // Core fields measured correctly.
         assert_eq!(provenance.schema, "rutile.production-provenance.v1");
         assert_eq!(provenance.version, 1);
-        assert_eq!(provenance.product, "feathermark");
+        assert_eq!(provenance.product, "rutile");
         assert_eq!(provenance.product_version, "0.2.0");
         assert_eq!(provenance.source_commit.len(), 40);
         assert!(
@@ -795,7 +795,7 @@ mod tests {
         let provenance = ProductionProvenance {
             schema: SCHEMA.into(),
             version: VERSION,
-            product: "feathermark".into(),
+            product: "rutile".into(),
             product_version: "0.2.0".into(),
             source_commit: "a".repeat(40),
             source_tree_clean: true,

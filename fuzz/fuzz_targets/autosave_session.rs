@@ -4,11 +4,11 @@
 //!
 //! These decoders are the untrusted on-disk input boundary: a hostile, torn,
 //! or half-written journal or session file is fed byte-for-byte to
-//! [`feathermark_core::decode_autosave_entry`] and
-//! [`feathermark_core::decode_session_state`]. Crash recovery calls the same
+//! [`rutile_core::decode_autosave_entry`] and
+//! [`rutile_core::decode_session_state`]. Crash recovery calls the same
 //! per-line decoder, so every rejection surfaced here is a typed
-//! [`feathermark_core::SessionError`] that a real recovery run would classify
-//! into a [`feathermark_core::RejectionReason`] — never a panic, never a
+//! [`rutile_core::SessionError`] that a real recovery run would classify
+//! into a [`rutile_core::RejectionReason`] — never a panic, never a
 //! silent accept.
 //!
 //! Invariants asserted on every input:
@@ -23,7 +23,7 @@
 //!   `document_path` / `last_file` / `recent_files` entry is absolute and
 //!   NUL-free — the path-traversal protection the wire contract guarantees.
 
-use feathermark_core::{
+use rutile_core::{
     AutosaveEntryV1, MAX_AUTOSAVE_ENTRY_BYTES, MAX_SESSION_PATH_BYTES, MAX_SESSION_STATE_BYTES,
     SessionStateV1, decode_autosave_entry, decode_session_state, encode_autosave_entry,
     encode_session_state,

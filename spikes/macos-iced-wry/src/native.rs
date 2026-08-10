@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use feathermark_protocol::{PreviewEventV1, RenderUrl};
+use rutile_protocol::{PreviewEventV1, RenderUrl};
 use iced_winit::winit;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -19,7 +19,7 @@ use crate::{
 };
 
 const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'none'; font-src 'none'; connect-src 'none'; media-src 'none'; frame-src 'none'; child-src 'none'; object-src 'none'; worker-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; navigate-to 'none'";
-const DOCUMENT: &[u8] = br#"<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'none'; font-src 'none'; connect-src 'none'; media-src 'none'; frame-src 'none'; child-src 'none'; object-src 'none'; worker-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; navigate-to 'none'"><script src="feathermark://preview/v1/assets/bridge.js"></script></head><body><main>FeatherMark native seam</main></body></html>"#;
+const DOCUMENT: &[u8] = br#"<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'none'; font-src 'none'; connect-src 'none'; media-src 'none'; frame-src 'none'; child-src 'none'; object-src 'none'; worker-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; navigate-to 'none'"><script src="rutile://preview/v1/assets/bridge.js"></script></head><body><main>Rutile native seam</main></body></html>"#;
 const BRIDGE: &[u8] = br#"window.ipc.postMessage('{"type":"bridge_ready","v":1,"revision":1}\n');"#;
 const CSS: &[u8] = b"html { color-scheme: light dark; }";
 
@@ -134,7 +134,7 @@ impl ApplicationHandler for SmokeRunner {
         }
 
         let attributes = Window::default_attributes()
-            .with_title("FeatherMark iced/Wry seam proof")
+            .with_title("Rutile iced/Wry seam proof")
             .with_inner_size(winit::dpi::LogicalSize::new(640_u32, 480_u32));
         let window = match event_loop.create_window(attributes) {
             Ok(window) => Arc::new(window),
@@ -157,7 +157,7 @@ impl ApplicationHandler for SmokeRunner {
         let ipc_overflow = Arc::clone(&self.ipc_overflow);
         let builder = WebViewBuilder::new()
             .with_bounds(full_bounds(640, 480))
-            .with_custom_protocol("feathermark".to_owned(), move |_id, request| {
+            .with_custom_protocol("rutile".to_owned(), move |_id, request| {
                 let route = protocol_boundary.route(
                     request.method().as_str(),
                     request.uri().host(),

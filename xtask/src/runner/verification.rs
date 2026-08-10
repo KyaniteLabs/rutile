@@ -13,8 +13,8 @@ use super::protocol::{
     SignedRunnerProbeV1,
 };
 
-const PROBE_DOMAIN: &[u8] = b"FeatherMark Runner Probe\0v1\0";
-const COMMITMENT_DOMAIN: &[u8] = b"FeatherMark Runner Enrollment Commitment\0v1\0";
+const PROBE_DOMAIN: &[u8] = b"Rutile Runner Probe\0v1\0";
+const COMMITMENT_DOMAIN: &[u8] = b"Rutile Runner Enrollment Commitment\0v1\0";
 
 #[derive(Clone, Debug)]
 pub(crate) struct VerifiedRunnerLock {
@@ -28,7 +28,7 @@ pub(crate) fn verify_runner_lock_bytes_with(
     config: &ProvisionedRunnerConfig,
 ) -> Result<VerifiedRunnerLock, RunnerError> {
     let lock: RunnerLockV1 = serde_json::from_slice(bytes)?;
-    if lock.schema != "feathermark.runner-lock.v1"
+    if lock.schema != "rutile.runner-lock.v1"
         || lock.runner_ids.iter().map(String::as_str).ne(RUNNERS)
         || lock.trust_manifest_sha256 != config.trust_manifest_sha256
         || lock.dispatch_manifest_sha256 != config.dispatch_manifest_sha256

@@ -1,4 +1,4 @@
-# FeatherMark Local Beta 0.1.0 — Locked Evidence Debt
+# Rutile Local Beta 0.1.0 — Locked Evidence Debt
 
 The following items are explicitly **not** covered by this local beta evidence bundle. They are recorded here so they cannot be mistaken for completed work.
 

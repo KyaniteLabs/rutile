@@ -1,7 +1,7 @@
 #![no_main]
 
-use feathermark_protocol::{MAX_DOCUMENT_BYTES, PreviewEventV1, decode_preview_event};
-use feathermark_types::SafeLinkTarget;
+use rutile_protocol::{MAX_DOCUMENT_BYTES, PreviewEventV1, decode_preview_event};
+use rutile_types::SafeLinkTarget;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {

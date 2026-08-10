@@ -20,7 +20,7 @@ Simon. The full externally-attested release bar stays **out of scope**.
   Simon authorized cutting the preview tag + opening the Forgejo pre-release
   draft in this effort. So the map is charted, then the frontier is worked — not
   handed off to future sessions.
-- Repo: `feathermark` @ `git.kyanitelabs.tech:simon/feathermark` (private).
+- Repo: `rutile` @ `git.kyanitelabs.tech:simon/rutile` (private).
   Forgejo auth via `git credential fill` → 0600 curl `--config` only; never a
   token in args/env/URL. Verify merges/releases via `git log`/API re-fetch, not
   the single API response (the #34 Forgejo no-op lesson).

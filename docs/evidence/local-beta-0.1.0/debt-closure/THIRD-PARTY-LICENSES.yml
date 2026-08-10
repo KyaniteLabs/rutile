@@ -1,4 +1,4 @@
-root_name: feathermark-types, feathermark-core, feathermark-protocol, feathermark-app, xtask, feathermark-spike-support, linux-gtk-wry-spike, macos-iced-wry-spike
+root_name: rutile-types, rutile-core, rutile-protocol, rutile-app, xtask, rutile-spike-support, linux-gtk-wry-spike, macos-iced-wry-spike
 third_party_libraries:
 - package_name: anstream
   package_version: 0.6.21

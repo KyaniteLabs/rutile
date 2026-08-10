@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 #
-# FeatherMark Rutile macOS native smoke gate.
+# Rutile macOS native smoke gate.
 #
-# Builds the feathermark binary with the macOS product shell (--features
+# Builds the rutile binary with the macOS product shell (--features
 # macos-shell) and runs the externally supervised native-smoke gate through
 # `xtask native-smoke`, which is the canonical rutile.gate-result.v1 producer
 # for supervised native smoke. The xtask owns per-run supervision, success
@@ -13,7 +13,7 @@
 #   ${CARGO_TARGET_DIR:-target}/evidence/<commit>/<job>/run-<ms>-<pid>-<n>/ .
 #
 # The macOS native adapter is the only platform path that emits the
-# `feathermark-native-smoke-ok` success marker the supervisor requires, so this
+# `rutile-native-smoke-ok` success marker the supervisor requires, so this
 # gate is macOS-only by construction (Linux uses scripts/ci/linux-native-gate.sh).
 #
 # Usage:
@@ -85,17 +85,17 @@ mkdir -p "$evidence_dir"
 # Build the native binary. pr smokes the debug artifact (fast feedback);
 # release exercises the shipped optimization profile (panic=abort, thin LTO).
 build_profile="debug"
-bin_path="${TARGET_DIR}/debug/feathermark"
+bin_path="${TARGET_DIR}/debug/rutile"
 if [ "$profile" = "release" ]; then
   build_profile="release"
-  bin_path="${TARGET_DIR}/release/feathermark"
+  bin_path="${TARGET_DIR}/release/rutile"
 fi
 
 echo "=== macos-native-gate: cargo build (${build_profile}, macos-shell) ==="
 if [ "$profile" = "release" ]; then
-  cargo build --locked --release -p feathermark-app --features macos-shell --bin feathermark
+  cargo build --locked --release -p rutile-app --features macos-shell --bin rutile
 else
-  cargo build --locked -p feathermark-app --features macos-shell --bin feathermark
+  cargo build --locked -p rutile-app --features macos-shell --bin rutile
 fi
 
 if [ ! -x "$bin_path" ]; then

@@ -3,11 +3,11 @@
 //! Fuzz the [`FileService`] save/load state machine and the path gate that
 //! guards it.
 //!
-//! The fuzzed bytes drive two real surfaces in `feathermark-core`:
+//! The fuzzed bytes drive two real surfaces in `rutile-core`:
 //!
 //! * a candidate path string is validated against the product's path contract
 //!   (NUL-free, absolute, non-empty, byte-bounded) — the same rules
-//!   [`feathermark_core`] enforces before it ever persists a path. Every
+//!   [`rutile_core`] enforces before it ever persists a path. Every
 //!   hostile shape is classified with a typed rejection and never reaches a
 //!   filesystem write.
 //! * a controlled, process-unique temporary file is then saved and reloaded
@@ -34,7 +34,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
-use feathermark_core::{
+use rutile_core::{
     Document, FileError, FileService, LocalFileService, SaveError, SaveFault, SaveOutcome,
     MAX_DOCUMENT_BYTES,
 };
@@ -197,7 +197,7 @@ fn assert_typed_outcome(fault: SaveFault, path: &Path, outcome: &SaveOutcome, pa
 /// A UTF-8-safe, byte-bounded slice of the input used as the saved document.
 fn save_payload(input: &[u8]) -> String {
     let Ok(text) = std::str::from_utf8(input) else {
-        return String::from("# FeatherMark fuzz payload\n");
+        return String::from("# Rutile fuzz payload\n");
     };
     let mut end = PAYLOAD_CAP.min(text.len());
     while end > 0 && !text.is_char_boundary(end) {
@@ -220,7 +220,7 @@ fn fuzz_temp_dir() -> &'static Path {
     static DIR: OnceLock<PathBuf> = OnceLock::new();
     let dir = DIR.get_or_init(|| {
         let dir = std::env::temp_dir().join(format!(
-            "feathermark-fuzz-file-save-state-{}",
+            "rutile-fuzz-file-save-state-{}",
             std::process::id()
         ));
         let _ = fs::create_dir_all(&dir);

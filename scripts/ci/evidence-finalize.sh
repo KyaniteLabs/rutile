@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 #
-# FeatherMark Rutile evidence finalizer.
+# Rutile evidence finalizer.
 #
 # Scans ${CARGO_TARGET_DIR:-target}/evidence/<commit>/ for every
 # rutile.gate-result.v1 document produced by the verify/release run, validates

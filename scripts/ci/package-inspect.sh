@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 #
-# FeatherMark Rutile package + inspect gate.
+# Rutile package + inspect gate.
 #
 # Wraps the real xtask packaging and artifact-inspection surface for one
 # platform kind and emits one rutile.gate-result.v1 document for the whole
@@ -27,7 +27,7 @@
 # path is wired here to change that.
 #
 # Usage:
-#   scripts/ci/package-inspect.sh --candidate target/prod/feathermark \
+#   scripts/ci/package-inspect.sh --candidate target/prod/rutile \
 #       --kind macos --version 0.2.0 --profile pr
 set -euo pipefail
 
@@ -92,7 +92,7 @@ case "$kind" in
 esac
 
 if [ -z "$version" ]; then
-  version="$(grep -m1 '^version' "${REPO_ROOT}/crates/feathermark-app/Cargo.toml" \
+  version="$(grep -m1 '^version' "${REPO_ROOT}/crates/rutile-app/Cargo.toml" \
     | sed -n 's/^version *= *"\([^"]*\)".*/\1/p' || true)"
   [ -n "$version" ] || version="0.2.0"
 fi
@@ -346,7 +346,7 @@ echo "=== package-inspect: SBOM (best-effort) ==="
 sbom_json="${job_dir}/sbom.cdx.json"
 sbom_code=0
 if cargo cyclonedx --output-format json --output-path "$sbom_json" \
-   --manifest-path "${REPO_ROOT}/crates/feathermark-app/Cargo.toml" \
+   --manifest-path "${REPO_ROOT}/crates/rutile-app/Cargo.toml" \
    >/dev/null 2>>"$stderr_raw"; then
   outstanding="${outstanding}cyclonedx-sbom-produced"
 else
@@ -371,12 +371,12 @@ if name:
 doc = {
     "bomFormat": "CycloneDX",
     "specVersion": "1.4",
-    "serialNumber": "urn:uuid:feathermark-cargolock-fallback",
+    "serialNumber": "urn:uuid:rutile-cargolock-fallback",
     "version": 1,
     "metadata": {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "tools": [{"vendor": "FeatherMark", "name": "cargo-lock-sbom-fallback", "version": "0.2.0"}],
-        "component": {"type": "application", "name": "feathermark", "version": "0.2.0",
+        "tools": [{"vendor": "Rutile", "name": "cargo-lock-sbom-fallback", "version": "0.2.0"}],
+        "component": {"type": "application", "name": "rutile", "version": "0.2.0",
                       "bom-ref": "pkg:cargo-lock@" + src[:12]},
     },
     "components": [{"type": "library", "name": r["name"],
@@ -403,13 +403,13 @@ record "sbom" "$sbom_code" ""
 # Per-kind install footprint (confirmed with the smoke engine owner):
 #   macos-app-zip / macos-dmg:
 #     install_target = /Applications/Rutile.app
-#     binary_path    = /Applications/Rutile.app/Contents/MacOS/FeatherMark
+#     binary_path    = /Applications/Rutile.app/Contents/MacOS/Rutile
 #   linux-deb / linux-rpm:
 #     install_target = /
-#     binary_path    = /usr/bin/feathermark
+#     binary_path    = /usr/bin/rutile
 #   linux-tar-zst:
-#     install_target = /opt/feathermark
-#     binary_path    = /opt/feathermark/bin/feathermark
+#     install_target = /opt/rutile
+#     binary_path    = /opt/rutile/bin/rutile
 #
 # The expected executable SHA-256 is parsed from each artifact's sibling
 # manifest (packaged_executable_sha256 field) written by `xtask package local`.
@@ -456,11 +456,11 @@ if [ -d "$output_root" ]; then
                   "$output_root"/*.deb "$output_root"/*.rpm \
                   "$output_root"/*.tar.zst; do
     case "$artifact" in
-      *.app.zip) smoke_kind="macos-app-zip"; install_target="/Applications/Rutile.app"; binary_path="/Applications/Rutile.app/Contents/MacOS/FeatherMark" ;;
-      *.dmg)     smoke_kind="macos-dmg";     install_target="/Applications/Rutile.app"; binary_path="/Applications/Rutile.app/Contents/MacOS/FeatherMark" ;;
-      *.deb)     smoke_kind="linux-deb";     install_target="/"; binary_path="/usr/bin/feathermark" ;;
-      *.rpm)     smoke_kind="linux-rpm";     install_target="/"; binary_path="/usr/bin/feathermark" ;;
-      *.tar.zst) smoke_kind="linux-tar-zst"; install_target="/opt/feathermark"; binary_path="/opt/feathermark/bin/feathermark" ;;
+      *.app.zip) smoke_kind="macos-app-zip"; install_target="/Applications/Rutile.app"; binary_path="/Applications/Rutile.app/Contents/MacOS/Rutile" ;;
+      *.dmg)     smoke_kind="macos-dmg";     install_target="/Applications/Rutile.app"; binary_path="/Applications/Rutile.app/Contents/MacOS/Rutile" ;;
+      *.deb)     smoke_kind="linux-deb";     install_target="/"; binary_path="/usr/bin/rutile" ;;
+      *.rpm)     smoke_kind="linux-rpm";     install_target="/"; binary_path="/usr/bin/rutile" ;;
+      *.tar.zst) smoke_kind="linux-tar-zst"; install_target="/opt/rutile"; binary_path="/opt/rutile/bin/rutile" ;;
       *) continue ;;
     esac
     artifact_sha="$(sha256_arg "$artifact")"

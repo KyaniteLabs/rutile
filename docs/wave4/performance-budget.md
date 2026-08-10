@@ -1,7 +1,7 @@
 # Wave 4 — Performance Budgets
 
 > **Status: Active budget.** Established 2026-07-14 for the Rutile 0.2.0 core.
-> Verified against `feathermark-core` `0.2.0` on `codex/rutile-w4-perf`.
+> Verified against `rutile-core` `0.2.0` on `codex/rutile-w4-perf`.
 
 ## BLUF
 
@@ -40,7 +40,7 @@ dependency is introduced.
 
 | API | Input | p95 budget |
 | --- | --- | --- |
-| [`render_markdown`](../../crates/feathermark-core/src/render.rs) `(source, revision)` | 4 KiB (typical note) | **< 2 ms** |
+| [`render_markdown`](../../crates/rutile-core/src/render.rs) `(source, revision)` | 4 KiB (typical note) | **< 2 ms** |
 | `render_markdown` | 256 KiB (large document) | **< 40 ms** |
 | `render_markdown` | 1 MiB (very large document) | **< 200 ms** |
 
@@ -61,7 +61,7 @@ budget.
 
 | API | Input | p95 budget |
 | --- | --- | --- |
-| [`FileService::save_atomic`](../../crates/feathermark-core/src/files.rs) `(path, snapshot)` via `LocalFileService::new()` | 4 KiB document | **< 20 ms** |
+| [`FileService::save_atomic`](../../crates/rutile-core/src/files.rs) `(path, snapshot)` via `LocalFileService::new()` | 4 KiB document | **< 20 ms** |
 | `FileService::save_atomic` | 1 MiB document | **< 30 ms** |
 
 **Basis.** The save path creates a 0600 temporary file, writes the snapshot,
@@ -82,8 +82,8 @@ ceilings directly at 4 KiB and 1 MiB against a process-owned temp directory.
 
 | API | Input | p95 budget |
 | --- | --- | --- |
-| [`decode_autosave_entry`](../../crates/feathermark-core/src/session_contract.rs) `(bytes)` | 4 KiB record (`MAX_AUTOSAVE_ENTRY_BYTES`) | **< 100 µs** |
-| [`decode_session_state`](../../crates/feathermark-core/src/session_contract.rs) `(bytes)` | 64 KiB record (`MAX_SESSION_STATE_BYTES`) | **< 500 µs** |
+| [`decode_autosave_entry`](../../crates/rutile-core/src/session_contract.rs) `(bytes)` | 4 KiB record (`MAX_AUTOSAVE_ENTRY_BYTES`) | **< 100 µs** |
+| [`decode_session_state`](../../crates/rutile-core/src/session_contract.rs) `(bytes)` | 64 KiB record (`MAX_SESSION_STATE_BYTES`) | **< 500 µs** |
 
 **Basis.** Each decoder performs an NDJSON framing check, a bounded
 `serde_json` deserialize, and symmetric field validation (schema/version/path
@@ -104,7 +104,7 @@ its reachable ≈44 KiB maximum).
 
 | API | Input | p95 budget |
 | --- | --- | --- |
-| [`AutosaveStore::record`](../../crates/feathermark-core/src/autosave.rs) `(snapshot, document_path, captured_at_unix_ms)` | 4 KiB snapshot | **< 60 ms** |
+| [`AutosaveStore::record`](../../crates/rutile-core/src/autosave.rs) `(snapshot, document_path, captured_at_unix_ms)` | 4 KiB snapshot | **< 60 ms** |
 
 **Basis.** `record` acquires the advisory store lock, reads the journal, writes
 the snapshot atomically (temp + `fsync` + rename + parent `fsync`), encodes the
@@ -122,7 +122,7 @@ into a fresh store and asserts the p95 ceiling.
 
 | API | Input | p95 budget |
 | --- | --- | --- |
-| [`AutosaveStore::recover`](../../crates/feathermark-core/src/autosave.rs) `()` | full eight-snapshot journal | **< 50 ms** |
+| [`AutosaveStore::recover`](../../crates/rutile-core/src/autosave.rs) `()` | full eight-snapshot journal | **< 50 ms** |
 
 **Basis.** `recover` acquires the store lock, decodes every journal line
 (family 3, single-digit µs each), sorts by sequence, and verifies the
@@ -141,16 +141,16 @@ to the retention cap and asserts the p95 ceiling.
 
 ```sh
 # Compile-check every bench target without running:
-cargo bench -p feathermark-core --no-run
+cargo bench -p rutile-core --no-run
 
 # Run the new Wave 4 benches (they assert their budgets and exit non-zero on breach):
-cargo bench -p feathermark-core --bench save_atomic
-cargo bench -p feathermark-core --bench autosave
+cargo bench -p rutile-core --bench save_atomic
+cargo bench -p rutile-core --bench autosave
 
 # Existing benches (regression ceilings):
-cargo bench -p feathermark-core --bench render
-cargo bench -p feathermark-core --bench edit
-cargo bench -p feathermark-core --bench scroll
+cargo bench -p rutile-core --bench render
+cargo bench -p rutile-core --bench edit
+cargo bench -p rutile-core --bench scroll
 ```
 
 Each bench prints its measured p95 to stderr. The durability-bound benches write
@@ -160,7 +160,7 @@ real autosave store or user documents.
 ## Out of scope
 
 - Native-shell (Iced/GTK) render, layout, and WebView paint latency — those are
-  platform-shell concerns, not `feathermark-core` budgets.
+  platform-shell concerns, not `rutile-core` budgets.
 - Network/cloud operations — none exist in the core (a stated non-goal).
 - Memory budgets beyond the existing `edit.rs` allocation gate (ordinary edits
   must not copy the full buffer), which is unchanged.

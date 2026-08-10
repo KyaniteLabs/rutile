@@ -1,4 +1,4 @@
-use feathermark_protocol::{MetricRecordV1, ProtocolError, decode_metric_record};
+use rutile_protocol::{MetricRecordV1, ProtocolError, decode_metric_record};
 use thiserror::Error;
 
 pub const NEAREST_RANK_PERCENTILE: f64 = 0.95;

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://feathermark.local/schemas/rutile.package-smoke-row.v1.schema.json",
+  "$id": "https://rutile.local/schemas/rutile.package-smoke-row.v1.schema.json",
   "title": "Rutile package smoke row v1",
   "description": "Bounded platform package install/open/uninstall smoke receipt. Proves a platform package was actually installed, opened, and uninstalled on the current host. The receipt is fail-closed: passed is true only when all three stages pass, the binary was hash-bound and observed after install and after open, and no residue survived uninstall.",
   "type": "object",

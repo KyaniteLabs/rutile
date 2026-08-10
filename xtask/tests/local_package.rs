@@ -175,7 +175,7 @@ fn assembles_deterministic_arm64_app_bound_to_candidate_hash() {
             output
                 .join("_staging")
                 .join("app")
-                .join("Rutile.app/Contents/MacOS/FeatherMark")
+                .join("Rutile.app/Contents/MacOS/Rutile")
         )
         .unwrap(),
         bytes
@@ -185,7 +185,7 @@ fn assembles_deterministic_arm64_app_bound_to_candidate_hash() {
             output
                 .join("_staging")
                 .join("app")
-                .join("Rutile.app/Contents/MacOS/FeatherMark")
+                .join("Rutile.app/Contents/MacOS/Rutile")
         )
         .unwrap()
         .permissions()
@@ -202,14 +202,14 @@ fn assembles_deterministic_arm64_app_bound_to_candidate_hash() {
     .unwrap();
     assert!(plist.contains("<string>arm64</string>"));
     assert!(plist.contains("<key>CFBundleDisplayName</key><string>Rutile</string>"));
-    assert!(plist.contains("<key>CFBundleExecutable</key><string>FeatherMark</string>"));
-    assert!(plist.contains("<string>com.kyanitelabs.feathermark</string>"));
+    assert!(plist.contains("<key>CFBundleExecutable</key><string>Rutile</string>"));
+    assert!(plist.contains("<string>com.kyanitelabs.rutile</string>"));
     assert!(plist.contains("<key>CFBundleName</key><string>Rutile</string>"));
     // Document-type fragment from release/assets/macos/document-types.plist
     // must be merged in so the artifact-inspector gate passes.
     assert!(plist.contains("CFBundleDocumentTypes"));
     assert!(plist.contains("UTTypeConformsTo"));
-    assert!(plist.contains("net.feathermark.markdown"));
+    assert!(plist.contains("net.rutile.markdown"));
 
     let metadata: serde_json::Value = serde_json::from_slice(
         &fs::read(
@@ -222,7 +222,7 @@ fn assembles_deterministic_arm64_app_bound_to_candidate_hash() {
     )
     .unwrap();
     assert_eq!(metadata["label"], MACOS_PACKAGE_LABEL);
-    assert_eq!(metadata["schema"], "feathermark-local-package-v1");
+    assert_eq!(metadata["schema"], "rutile-local-package-v1");
     assert_eq!(metadata["build_input_sha256"], sha256(&mach_o_arm64()));
     assert_eq!(metadata["source_commit"], valid_source_commit());
     assert_eq!(metadata["version"], "0.2.2");
@@ -308,7 +308,7 @@ fn macos_plans_are_argument_vectors_and_dmg_manifest_hashes_existing_artifact() 
 fn prepares_linux_layout_with_locked_gtk3_webkitgtk41_dependencies() {
     let temporary = tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();
-    let candidate = root.join("feathermark");
+    let candidate = root.join("rutile");
     let bytes = elf_x86_64();
     fs::write(&candidate, &bytes).unwrap();
     let output = root.join("linux-output");
@@ -327,7 +327,7 @@ fn prepares_linux_layout_with_locked_gtk3_webkitgtk41_dependencies() {
     let executable = output
         .join("_staging")
         .join("archive")
-        .join("Rutile-linux-x86_64/bin/feathermark");
+        .join("Rutile-linux-x86_64/bin/rutile");
     assert_eq!(fs::read(&executable).unwrap(), bytes);
     assert_eq!(
         fs::metadata(executable).unwrap().permissions().mode() & 0o777,
@@ -345,7 +345,7 @@ fn prepares_linux_layout_with_locked_gtk3_webkitgtk41_dependencies() {
     )
     .unwrap();
     assert_eq!(manifest["label"], LINUX_PACKAGE_LABEL);
-    assert_eq!(manifest["schema"], "feathermark-local-package-v1");
+    assert_eq!(manifest["schema"], "rutile-local-package-v1");
     assert_eq!(manifest["wayland_verified"], false);
     assert_eq!(manifest["rpm_runtime_verified"], false);
     let dependencies = manifest["runtime_dependencies"].as_array().unwrap();
@@ -396,7 +396,7 @@ fn linux_runtime_dependency_table_rejects_gtk4_and_webkitgtk6() {
 fn prepares_debian_staging_with_locked_dependencies() {
     let temporary = tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();
-    let candidate = root.join("feathermark");
+    let candidate = root.join("rutile");
     let bytes = elf_x86_64();
     fs::write(&candidate, &bytes).unwrap();
     let output = root.join("deb-output");
@@ -411,14 +411,14 @@ fn prepares_debian_staging_with_locked_dependencies() {
     })
     .unwrap();
 
-    let binary = receipt.output.join("usr/bin/feathermark");
+    let binary = receipt.output.join("usr/bin/rutile");
     assert_eq!(fs::read(&binary).unwrap(), bytes);
     let control = fs::read_to_string(receipt.output.join("DEBIAN/control")).unwrap();
     assert!(control.contains(
         "Depends: libgtk-3-0, libgtksourceview-4-0, libwebkit2gtk-4.1-0, libjavascriptcoregtk-4.1-0"
     ));
     assert!(control.contains("Architecture: amd64"));
-    assert!(control.contains("Package: feathermark"));
+    assert!(control.contains("Package: rutile"));
     assert!(control.contains("Maintainer: Kyanite Build <build@kyanitelabs.ai>"));
     assert!(control.contains("Description: Rutile — A local-first writing studio by Kyanite."));
 
@@ -433,7 +433,7 @@ fn prepares_debian_staging_with_locked_dependencies() {
 fn prepares_rpm_staging_with_locked_requirements() {
     let temporary = tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();
-    let candidate = root.join("feathermark");
+    let candidate = root.join("rutile");
     let bytes = elf_x86_64();
     fs::write(&candidate, &bytes).unwrap();
     let output = root.join("rpm-output");
@@ -448,8 +448,8 @@ fn prepares_rpm_staging_with_locked_requirements() {
     })
     .unwrap();
 
-    let spec = fs::read_to_string(receipt.output.join("SPECS/feathermark.spec")).unwrap();
-    assert!(spec.contains("Name:           feathermark"));
+    let spec = fs::read_to_string(receipt.output.join("SPECS/rutile.spec")).unwrap();
+    assert!(spec.contains("Name:           rutile"));
     assert!(spec.contains("Version:        0.2.2"));
     assert!(spec.contains("BuildArch:      x86_64"));
     assert!(spec.contains("License:        MIT"));
@@ -459,23 +459,23 @@ fn prepares_rpm_staging_with_locked_requirements() {
     assert!(spec.contains("%description\nRutile — A local-first writing studio by Kyanite."));
     // The spec must install from %{_sourcedir} — never the builder's absolute
     // candidate path.
-    assert!(spec.contains("install -D -m 0755 %{_sourcedir}/feathermark"));
+    assert!(spec.contains("install -D -m 0755 %{_sourcedir}/rutile"));
     assert!(!spec.contains(&candidate.display().to_string()));
-    assert!(spec.contains("feathermark.desktop"));
-    assert!(spec.contains("feathermark.appdata.xml"));
-    assert!(spec.contains("feathermark-markdown.xml"));
+    assert!(spec.contains("rutile.desktop"));
+    assert!(spec.contains("rutile.appdata.xml"));
+    assert!(spec.contains("rutile-markdown.xml"));
     assert!(spec.contains("sbom.spdx.json"));
     assert!(!spec.contains("%post"));
 
     // The candidate binary must be staged into SOURCES/ under a stable name.
     assert_eq!(
-        fs::read(receipt.output.join("SOURCES/feathermark")).unwrap(),
+        fs::read(receipt.output.join("SOURCES/rutile")).unwrap(),
         bytes
     );
 
     let plan = rpm_package_plan(
         &receipt.output,
-        &receipt.output.join("SPECS/feathermark.spec"),
+        &receipt.output.join("SPECS/rutile.spec"),
     )
     .unwrap();
     assert_eq!(plan.program, "rpmbuild");
@@ -492,9 +492,9 @@ fn prepares_rpm_staging_with_locked_requirements() {
 fn linux_archive_plan_is_deterministic_and_manifest_hashes_existing_tar_zst() {
     let temporary = tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();
-    let layout = root.join("FeatherMark-linux-x86_64");
+    let layout = root.join("Rutile-linux-x86_64");
     fs::create_dir(&layout).unwrap();
-    let archive = root.join("FeatherMark linux.tar.zst");
+    let archive = root.join("Rutile linux.tar.zst");
     let plan = linux_archive_plan(&layout, &archive).unwrap();
 
     assert_eq!(plan.len(), 2);
@@ -520,7 +520,7 @@ fn linux_archive_plan_is_deterministic_and_manifest_hashes_existing_tar_zst() {
     assert_eq!(manifest.label, LINUX_PACKAGE_LABEL);
     assert_eq!(
         manifest.artifact,
-        std::path::PathBuf::from("FeatherMark linux.tar.zst")
+        std::path::PathBuf::from("Rutile linux.tar.zst")
     );
     assert_eq!(manifest.artifact_sha256, sha256(b"test-only tar.zst bytes"));
     assert_eq!(manifest.target_triple, "x86_64-unknown-linux-gnu");
@@ -771,7 +771,7 @@ fn create_dummy_output_if_needed(plan: &xtask::local_package::CommandPlan) {
                     let def = pair[1].to_string_lossy();
                     def.strip_prefix("_topdir ").map(|topdir| {
                         std::path::PathBuf::from(topdir)
-                            .join("RPMS/x86_64/feathermark-0.2.2-1.x86_64.rpm")
+                            .join("RPMS/x86_64/rutile-0.2.2-1.x86_64.rpm")
                     })
                 })
         }
@@ -819,9 +819,9 @@ fn fake_executor_propagates_nonzero_failure() {
 
     let temporary = tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();
-    let app = root.join("FeatherMark.app");
+    let app = root.join("Rutile.app");
     fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
-    let zip = root.join("FeatherMark.zip");
+    let zip = root.join("Rutile.zip");
 
     let result = executor.execute(&macos_zip_plan(&app, &zip).unwrap());
     assert!(result.is_err());
@@ -891,8 +891,8 @@ fn run_local_package_linux_fails_closed_until_archive_traversal_is_supported() {
 
     assert!(!output.join("_staging").exists());
     assert!(output.join("Rutile-0.2.2-linux-x86_64.tar.zst").is_file());
-    assert!(output.join("feathermark_0.2.2_amd64.deb").is_file());
-    assert!(output.join("feathermark-0.2.2-1.x86_64.rpm").is_file());
+    assert!(output.join("rutile_0.2.2_amd64.deb").is_file());
+    assert!(output.join("rutile-0.2.2-1.x86_64.rpm").is_file());
 }
 
 #[test]
@@ -924,8 +924,8 @@ fn run_local_package_linux_ubuntu_omits_rpm_tooling_and_artifact() {
 
     assert!(!output.join("_staging").exists());
     assert!(output.join("Rutile-0.2.2-linux-x86_64.tar.zst").is_file());
-    assert!(output.join("feathermark_0.2.2_amd64.deb").is_file());
-    assert!(!output.join("feathermark-0.2.2-1.x86_64.rpm").exists());
+    assert!(output.join("rutile_0.2.2_amd64.deb").is_file());
+    assert!(!output.join("rutile-0.2.2-1.x86_64.rpm").exists());
 }
 
 #[test]
@@ -957,7 +957,7 @@ fn linux_manifest_packaged_executable_hash_is_computed_from_candidate_not_build_
     // read_hash_bound_candidate enforces equality, but the code must compute
     // packaged_executable_sha256 via sha256_regular_file(&candidate) so the
     // binding chain remains correct if build_input semantics ever diverge.
-    let deb_manifest_path = output.join("feathermark_0.2.2_amd64.deb.manifest-v1.json");
+    let deb_manifest_path = output.join("rutile_0.2.2_amd64.deb.manifest-v1.json");
     assert!(deb_manifest_path.is_file(), "deb manifest should exist");
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(&deb_manifest_path).unwrap()).unwrap();
@@ -1057,7 +1057,7 @@ fn clap_parses_local_macos_command() {
         "local",
         "macos",
         "--candidate",
-        "/build/feathermark",
+        "/build/rutile",
         "--build-input-sha256",
         &hash,
         "--source-commit",
@@ -1080,7 +1080,7 @@ fn clap_parses_local_macos_command() {
                 version,
                 ..
             } => {
-                assert_eq!(candidate, PathBuf::from("/build/feathermark"));
+                assert_eq!(candidate, PathBuf::from("/build/rutile"));
                 assert_eq!(build_input_sha256, hash);
                 assert_eq!(source_commit, commit);
                 assert_eq!(output_root, PathBuf::from("/out/macos"));
@@ -1103,7 +1103,7 @@ fn clap_parses_local_linux_command() {
         "local",
         "linux",
         "--candidate",
-        "/build/feathermark",
+        "/build/rutile",
         "--build-input-sha256",
         &hash,
         "--source-commit",
@@ -1126,7 +1126,7 @@ fn clap_parses_local_linux_command() {
                 version,
                 formats,
             } => {
-                assert_eq!(candidate, PathBuf::from("/build/feathermark"));
+                assert_eq!(candidate, PathBuf::from("/build/rutile"));
                 assert_eq!(build_input_sha256, hash);
                 assert_eq!(source_commit, commit);
                 assert_eq!(output_root, PathBuf::from("/out/linux"));
@@ -1153,7 +1153,7 @@ fn process_executor_rejects_nonzero_status() {
 fn artifact_manifest_contains_exact_locked_fields() {
     let temporary = tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();
-    let artifact = root.join("FeatherMark-0.2.2-macos-arm64.dmg");
+    let artifact = root.join("Rutile-0.2.2-macos-arm64.dmg");
     fs::write(&artifact, b"x").unwrap();
 
     let manifest = finalize_macos_dmg_manifest(
@@ -1245,7 +1245,7 @@ fn assert_no_builder_paths(label: &str, content: &str) {
 fn rls005_rpm_spec_has_no_builder_paths() {
     let temporary = tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();
-    let candidate = root.join("feathermark");
+    let candidate = root.join("rutile");
     let bytes = elf_x86_64();
     fs::write(&candidate, &bytes).unwrap();
     let output = root.join("rpm-no-leak");
@@ -1260,7 +1260,7 @@ fn rls005_rpm_spec_has_no_builder_paths() {
     })
     .unwrap();
 
-    let spec = fs::read_to_string(receipt.output.join("SPECS/feathermark.spec")).unwrap();
+    let spec = fs::read_to_string(receipt.output.join("SPECS/rutile.spec")).unwrap();
     assert_no_builder_paths("rpm spec", &spec);
     // The candidate's absolute path must not appear anywhere in the spec.
     assert!(!spec.contains(&candidate.display().to_string()));
@@ -1275,7 +1275,7 @@ fn rls005_rpm_spec_has_no_builder_paths() {
 fn rls005_deb_staging_has_no_builder_paths() {
     let temporary = tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();
-    let candidate = root.join("feathermark");
+    let candidate = root.join("rutile");
     let bytes = elf_x86_64();
     fs::write(&candidate, &bytes).unwrap();
     let output = root.join("deb-no-leak");
@@ -1296,7 +1296,7 @@ fn rls005_deb_staging_has_no_builder_paths() {
     let manifest = fs::read_to_string(
         receipt
             .output
-            .join("usr/share/doc/feathermark/package-manifest-v1.json"),
+            .join("usr/share/doc/rutile/package-manifest-v1.json"),
     )
     .unwrap();
     assert_no_builder_paths("deb manifest", &manifest);
@@ -1305,7 +1305,7 @@ fn rls005_deb_staging_has_no_builder_paths() {
     let sbom = fs::read_to_string(
         receipt
             .output
-            .join("usr/share/doc/feathermark/sbom.spdx.json"),
+            .join("usr/share/doc/rutile/sbom.spdx.json"),
     )
     .unwrap();
     assert_no_builder_paths("deb sbom", &sbom);
@@ -1314,19 +1314,19 @@ fn rls005_deb_staging_has_no_builder_paths() {
     assert!(
         receipt
             .output
-            .join("usr/share/applications/feathermark.desktop")
+            .join("usr/share/applications/rutile.desktop")
             .is_file()
     );
     assert!(
         receipt
             .output
-            .join("usr/share/metainfo/feathermark.appdata.xml")
+            .join("usr/share/metainfo/rutile.appdata.xml")
             .is_file()
     );
     assert!(
         receipt
             .output
-            .join("usr/share/mime/packages/feathermark-markdown.xml")
+            .join("usr/share/mime/packages/rutile-markdown.xml")
             .is_file()
     );
 }
@@ -1375,7 +1375,7 @@ fn rls005_macos_info_plist_has_no_builder_paths() {
 fn int002_rpm_plan_is_sane_install_open_uninstall() {
     let temporary = tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();
-    let candidate = root.join("feathermark");
+    let candidate = root.join("rutile");
     let bytes = elf_x86_64();
     fs::write(&candidate, &bytes).unwrap();
     let output = root.join("rpm-plan");
@@ -1390,22 +1390,22 @@ fn int002_rpm_plan_is_sane_install_open_uninstall() {
     })
     .unwrap();
 
-    let spec_path = receipt.output.join("SPECS/feathermark.spec");
+    let spec_path = receipt.output.join("SPECS/rutile.spec");
     let spec = fs::read_to_string(&spec_path).unwrap();
 
     // Install: the %install section must place the binary and all platform
     // assets into the buildroot from %{_sourcedir}.
     assert!(spec.contains("%install"));
-    assert!(spec.contains("%{buildroot}/usr/bin/feathermark"));
-    assert!(spec.contains("%{buildroot}/usr/share/applications/feathermark.desktop"));
+    assert!(spec.contains("%{buildroot}/usr/bin/rutile"));
+    assert!(spec.contains("%{buildroot}/usr/share/applications/rutile.desktop"));
     // Open: the desktop entry + mime registration let launchers open .md files.
-    assert!(spec.contains("feathermark.desktop"));
-    assert!(spec.contains("feathermark-markdown.xml"));
+    assert!(spec.contains("rutile.desktop"));
+    assert!(spec.contains("rutile-markdown.xml"));
     // Uninstall: every installed file must be in %files so rpm -e removes it.
     assert!(spec.contains("%files"));
-    assert!(spec.contains("/usr/bin/feathermark"));
-    assert!(spec.contains("/usr/share/applications/feathermark.desktop"));
-    assert!(spec.contains("/usr/share/mime/packages/feathermark-markdown.xml"));
+    assert!(spec.contains("/usr/bin/rutile"));
+    assert!(spec.contains("/usr/share/applications/rutile.desktop"));
+    assert!(spec.contains("/usr/share/mime/packages/rutile-markdown.xml"));
 
     // The CommandPlan must be a direct argument vector — never a shell.
     let plan = rpm_package_plan(&receipt.output, &spec_path).unwrap();
@@ -1423,7 +1423,7 @@ fn int002_rpm_plan_is_sane_install_open_uninstall() {
 fn int002_deb_plan_is_sane_install_open_uninstall() {
     let temporary = tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();
-    let candidate = root.join("feathermark");
+    let candidate = root.join("rutile");
     let bytes = elf_x86_64();
     fs::write(&candidate, &bytes).unwrap();
     let output = root.join("deb-plan");
@@ -1439,23 +1439,23 @@ fn int002_deb_plan_is_sane_install_open_uninstall() {
     .unwrap();
 
     // Install: binary + assets present in staging tree.
-    assert!(receipt.output.join("usr/bin/feathermark").is_file());
+    assert!(receipt.output.join("usr/bin/rutile").is_file());
     assert!(
         receipt
             .output
-            .join("usr/share/applications/feathermark.desktop")
+            .join("usr/share/applications/rutile.desktop")
             .is_file()
     );
     // Open: mime + desktop registration.
     assert!(
         receipt
             .output
-            .join("usr/share/mime/packages/feathermark-markdown.xml")
+            .join("usr/share/mime/packages/rutile-markdown.xml")
             .is_file()
     );
     // The control file must declare the package for dpkg install/remove.
     let control = fs::read_to_string(receipt.output.join("DEBIAN/control")).unwrap();
-    assert!(control.contains("Package: feathermark"));
+    assert!(control.contains("Package: rutile"));
 
     // The CommandPlan must be a direct argument vector — never a shell.
     let plan = debian_package_plan(&receipt.output, &root.join("out.deb")).unwrap();
@@ -1473,7 +1473,7 @@ fn int002_deb_plan_is_sane_install_open_uninstall() {
 fn sbom_includes_license_and_dependency_inventory() {
     let temporary = tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();
-    let candidate = root.join("feathermark");
+    let candidate = root.join("rutile");
     let bytes = elf_x86_64();
     fs::write(&candidate, &bytes).unwrap();
     let output = root.join("sbom-check");
@@ -1492,7 +1492,7 @@ fn sbom_includes_license_and_dependency_inventory() {
         &fs::read(
             receipt
                 .output
-                .join("usr/share/doc/feathermark/sbom.spdx.json"),
+                .join("usr/share/doc/rutile/sbom.spdx.json"),
         )
         .unwrap(),
     )
@@ -1501,11 +1501,11 @@ fn sbom_includes_license_and_dependency_inventory() {
     assert_eq!(sbom["data_license"], "CC0-1.0");
     assert_eq!(sbom["packages"][0]["license_declared"], "MIT");
     assert_eq!(sbom["packages"][0]["license_concluded"], "MIT");
-    let workspace_crates = sbom["packages"][0]["feathermark_workspace_crates"]
+    let workspace_crates = sbom["packages"][0]["rutile_workspace_crates"]
         .as_array()
         .unwrap();
-    assert!(workspace_crates.iter().any(|c| c == "feathermark-app"));
-    let runtime_libs = sbom["packages"][0]["feathermark_runtime_libraries"]
+    assert!(workspace_crates.iter().any(|c| c == "rutile-app"));
+    let runtime_libs = sbom["packages"][0]["rutile_runtime_libraries"]
         .as_array()
         .unwrap();
     assert!(runtime_libs.iter().any(|l| l == "libgtk-3.so.0"));

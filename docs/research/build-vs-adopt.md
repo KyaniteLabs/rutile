@@ -1,4 +1,4 @@
-# FeatherMark Build vs Adopt Decision
+# Rutile Build vs Adopt Decision
 
 > **Status: Historical research snapshot (2026-07-09).** Its BUILD verdict was implemented; competitor and dependency-currentness claims were not refreshed for this documentation pass.
 
@@ -87,7 +87,7 @@ Use deterministic selection rules:
 - A system webview avoids bundling Chromium but does not guarantee low total RSS. Most comparison projects publish package sizes, not process-tree memory.
 - The exact Linux packaging floor depends on WebKitGTK 4.1 availability and the minimum supported distro.
 - Offset wrappers generated from pulldown-cmark events need adversarial tests for nested blocks, Unicode, and malformed Markdown.
-- Raw HTML is escaped in FeatherMark v1. Supporting a sanitized subset later would require a new security ADR and tests; it is not implied by this BUILD decision.
+- Raw HTML is escaped in Rutile v1. Supporting a sanitized subset later would require a new security ADR and tests; it is not implied by this BUILD decision.
 
 ## Decision boundary
 

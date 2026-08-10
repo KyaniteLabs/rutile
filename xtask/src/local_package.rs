@@ -25,8 +25,8 @@ pub const MACOS_DMG_NAME: &str = "Rutile-0.2.2-macos-arm64.dmg";
 
 pub const LINUX_ARCHIVE_DIR_NAME: &str = "Rutile-linux-x86_64";
 pub const LINUX_ARCHIVE_NAME: &str = "Rutile-0.2.2-linux-x86_64.tar.zst";
-pub const LINUX_DEB_NAME: &str = "feathermark_0.2.2_amd64.deb";
-pub const LINUX_RPM_NAME: &str = "feathermark-0.2.2-1.x86_64.rpm";
+pub const LINUX_DEB_NAME: &str = "rutile_0.2.2_amd64.deb";
+pub const LINUX_RPM_NAME: &str = "rutile-0.2.2-1.x86_64.rpm";
 
 /// License declared in every package manifest and SBOM. Derived from the
 /// xtask crate's `CARGO_PKG_LICENSE` (which inherits `MIT` from
@@ -42,10 +42,10 @@ pub const SBOM_FILE_NAME: &str = "sbom.spdx.json";
 
 /// First-party workspace crates listed in the SBOM dependency inventory.
 const SBOM_WORKSPACE_CRATES: &[&str] = &[
-    "feathermark-types",
-    "feathermark-core",
-    "feathermark-protocol",
-    "feathermark-app",
+    "rutile-types",
+    "rutile-core",
+    "rutile-protocol",
+    "rutile-app",
 ];
 
 // Platform assets are embedded at compile time via build.rs so the assembled
@@ -59,15 +59,15 @@ const MACOS_APP_ICON: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/release-assets/AppIcon.icns"));
 const LINUX_DESKTOP_ENTRY: &str = include_str!(concat!(
     env!("OUT_DIR"),
-    "/release-assets/feathermark.desktop"
+    "/release-assets/rutile.desktop"
 ));
 const LINUX_APPDATA: &str = include_str!(concat!(
     env!("OUT_DIR"),
-    "/release-assets/feathermark.appdata.xml"
+    "/release-assets/rutile.appdata.xml"
 ));
 const LINUX_MIME: &str = include_str!(concat!(
     env!("OUT_DIR"),
-    "/release-assets/feathermark-markdown.xml"
+    "/release-assets/rutile-markdown.xml"
 ));
 
 #[derive(Debug, Error)]
@@ -245,7 +245,7 @@ pub fn assemble_macos_app(
         return Err(LocalPackageError::OutputExists(app));
     }
     let contents = app.join("Contents");
-    let executable = contents.join("MacOS/FeatherMark");
+    let executable = contents.join("MacOS/Rutile");
     let resources = contents.join("Resources");
     fs::create_dir_all(executable.parent().expect("executable has parent"))?;
     fs::create_dir_all(&resources)?;
@@ -262,9 +262,9 @@ pub fn assemble_macos_app(
 <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"https://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
 <plist version=\"1.0\"><dict>\n\
   <key>CFBundleDisplayName</key><string>Rutile</string>\n\
-  <key>CFBundleExecutable</key><string>FeatherMark</string>\n\
+  <key>CFBundleExecutable</key><string>Rutile</string>\n\
   <key>CFBundleIconFile</key><string>AppIcon</string>\n\
-  <key>CFBundleIdentifier</key><string>com.kyanitelabs.feathermark</string>\n\
+  <key>CFBundleIdentifier</key><string>com.kyanitelabs.rutile</string>\n\
   <key>CFBundleName</key><string>Rutile</string>\n\
   <key>CFBundlePackageType</key><string>APPL</string>\n\
   <key>CFBundleShortVersionString</key><string>{}</string>\n\
@@ -279,7 +279,7 @@ pub fn assemble_macos_app(
     write_json(
         &resources.join("package-manifest-v1.json"),
         &MacAppManifest {
-            schema: "feathermark-local-package-v1",
+            schema: "rutile-local-package-v1",
             label: MACOS_PACKAGE_LABEL,
             architecture: "aarch64-apple-darwin",
             build_input_sha256: &request.build_input_sha256,
@@ -323,13 +323,13 @@ pub fn prepare_linux_layout(
     if layout.exists() {
         return Err(LocalPackageError::OutputExists(layout));
     }
-    let executable = layout.join("bin/feathermark");
+    let executable = layout.join("bin/rutile");
     fs::create_dir_all(executable.parent().expect("executable has parent"))?;
     write_executable(&executable, &candidate)?;
     write_json(
         &layout.join("package-manifest-v1.json"),
         &LinuxLayoutManifest {
-            schema: "feathermark-local-package-v1",
+            schema: "rutile-local-package-v1",
             label: LINUX_PACKAGE_LABEL,
             architecture: "x86_64-unknown-linux-gnu",
             build_input_sha256: &request.build_input_sha256,
@@ -374,8 +374,8 @@ pub fn prepare_debian_staging(
     if staging.exists() {
         return Err(LocalPackageError::OutputExists(staging));
     }
-    let binary = staging.join("usr/bin/feathermark");
-    let doc_dir = staging.join("usr/share/doc/feathermark");
+    let binary = staging.join("usr/bin/rutile");
+    let doc_dir = staging.join("usr/share/doc/rutile");
     let control_dir = staging.join("DEBIAN");
     let applications_dir = staging.join("usr/share/applications");
     let metainfo_dir = staging.join("usr/share/metainfo");
@@ -391,20 +391,20 @@ pub fn prepare_debian_staging(
     // Install freedesktop platform assets so launchers and file managers can
     // offer "Open with Rutile" and classify Markdown documents.
     write_new_file(
-        &applications_dir.join("feathermark.desktop"),
+        &applications_dir.join("rutile.desktop"),
         LINUX_DESKTOP_ENTRY.as_bytes(),
     )?;
     write_new_file(
-        &metainfo_dir.join("feathermark.appdata.xml"),
+        &metainfo_dir.join("rutile.appdata.xml"),
         LINUX_APPDATA.as_bytes(),
     )?;
     write_new_file(
-        &mime_packages_dir.join("feathermark-markdown.xml"),
+        &mime_packages_dir.join("rutile-markdown.xml"),
         LINUX_MIME.as_bytes(),
     )?;
 
     let manifest = LinuxLayoutManifest {
-        schema: "feathermark-local-package-v1",
+        schema: "rutile-local-package-v1",
         label: LINUX_PACKAGE_LABEL,
         architecture: "x86_64-unknown-linux-gnu",
         build_input_sha256: &request.build_input_sha256,
@@ -430,7 +430,7 @@ pub fn prepare_debian_staging(
     )?;
 
     let control = format!(
-        "Package: feathermark\n\
+        "Package: rutile\n\
 Version: {}\n\
 Section: editors\n\
 Priority: optional\n\
@@ -487,17 +487,17 @@ pub fn prepare_rpm_staging(
     // rpmbuild resolves to <topdir>/SOURCES at build time) so NO absolute
     // builder path is ever interpolated into the spec file.
     let sources = topdir.join("SOURCES");
-    write_new_file(&sources.join("feathermark"), &candidate)?;
+    write_new_file(&sources.join("rutile"), &candidate)?;
     write_new_file(
-        &sources.join("feathermark.desktop"),
+        &sources.join("rutile.desktop"),
         LINUX_DESKTOP_ENTRY.as_bytes(),
     )?;
     write_new_file(
-        &sources.join("feathermark.appdata.xml"),
+        &sources.join("rutile.appdata.xml"),
         LINUX_APPDATA.as_bytes(),
     )?;
     write_new_file(
-        &sources.join("feathermark-markdown.xml"),
+        &sources.join("rutile-markdown.xml"),
         LINUX_MIME.as_bytes(),
     )?;
     let runtime_sonames: Vec<&str> = LINUX_RUNTIME_DEPENDENCIES
@@ -512,9 +512,9 @@ pub fn prepare_rpm_staging(
         &runtime_sonames,
     )?;
 
-    let spec = topdir.join("SPECS/feathermark.spec");
+    let spec = topdir.join("SPECS/rutile.spec");
     let spec_body = format!(
-        "Name:           feathermark\n\
+        "Name:           rutile\n\
 Version:        {}\n\
 Release:        1%{{?dist}}\n\
 Summary:        Rutile — A local-first writing studio by Kyanite.\n\
@@ -528,18 +528,18 @@ Requires:       gtk3, gtksourceview4, webkit2gtk4.1\n\
 Rutile — A local-first writing studio by Kyanite.\n\
 \n\
 %install\n\
-install -D -m 0755 %{{_sourcedir}}/feathermark %{{buildroot}}/usr/bin/feathermark\n\
-install -D -m 0644 %{{_sourcedir}}/feathermark.desktop %{{buildroot}}/usr/share/applications/feathermark.desktop\n\
-install -D -m 0644 %{{_sourcedir}}/feathermark.appdata.xml %{{buildroot}}/usr/share/metainfo/feathermark.appdata.xml\n\
-install -D -m 0644 %{{_sourcedir}}/feathermark-markdown.xml %{{buildroot}}/usr/share/mime/packages/feathermark-markdown.xml\n\
-install -D -m 0644 %{{_sourcedir}}/{sbom} %{{buildroot}}/usr/share/doc/feathermark/{sbom}\n\
+install -D -m 0755 %{{_sourcedir}}/rutile %{{buildroot}}/usr/bin/rutile\n\
+install -D -m 0644 %{{_sourcedir}}/rutile.desktop %{{buildroot}}/usr/share/applications/rutile.desktop\n\
+install -D -m 0644 %{{_sourcedir}}/rutile.appdata.xml %{{buildroot}}/usr/share/metainfo/rutile.appdata.xml\n\
+install -D -m 0644 %{{_sourcedir}}/rutile-markdown.xml %{{buildroot}}/usr/share/mime/packages/rutile-markdown.xml\n\
+install -D -m 0644 %{{_sourcedir}}/{sbom} %{{buildroot}}/usr/share/doc/rutile/{sbom}\n\
 \n\
 %files\n\
-/usr/bin/feathermark\n\
-/usr/share/applications/feathermark.desktop\n\
-/usr/share/metainfo/feathermark.appdata.xml\n\
-/usr/share/mime/packages/feathermark-markdown.xml\n\
-/usr/share/doc/feathermark/{sbom}\n",
+/usr/bin/rutile\n\
+/usr/share/applications/rutile.desktop\n\
+/usr/share/metainfo/rutile.appdata.xml\n\
+/usr/share/mime/packages/rutile-markdown.xml\n\
+/usr/share/doc/rutile/{sbom}\n",
         request.version,
         PACKAGE_LICENSE,
         sbom = SBOM_FILE_NAME
@@ -802,7 +802,7 @@ fn finalize_artifact(
         .expect("validated artifact has filename")
         .to_owned();
     let manifest = ArtifactManifest {
-        schema: "feathermark-local-artifact-v1",
+        schema: "rutile-local-artifact-v1",
         label,
         artifact: PathBuf::from(&artifact_name),
         artifact_sha256: hex_sha256(&bytes),
@@ -1075,8 +1075,8 @@ struct SpdxPackage {
     files_analyzed: bool,
     copyright_text: &'static str,
     supplier: &'static str,
-    feathermark_workspace_crates: &'static [&'static str],
-    feathermark_runtime_libraries: Vec<String>,
+    rutile_workspace_crates: &'static [&'static str],
+    rutile_runtime_libraries: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -1103,17 +1103,17 @@ fn write_sbom(
         spdx_version: "SPDX-2.3",
         data_license: "CC0-1.0",
         spdx_id: "SPDXRef-DOCUMENT",
-        name: "feathermark",
+        name: "rutile",
         document_namespace: format!(
-            "https://kyanitelabs.ai/spdx/feathermark-{version}-{source_commit}-{target_triple}"
+            "https://kyanitelabs.ai/spdx/rutile-{version}-{source_commit}-{target_triple}"
         ),
         creation_info: SpdxCreationInfo {
-            creators: &["Tool: feathermark-xtask", "Organization: Kyanite"],
+            creators: &["Tool: rutile-xtask", "Organization: Kyanite"],
             created: "1970-01-01T00:00:00Z",
         },
         packages: vec![SpdxPackage {
-            name: "feathermark",
-            spdx_id: "SPDXRef-Package-feathermark",
+            name: "rutile",
+            spdx_id: "SPDXRef-Package-rutile",
             version_info: version.to_owned(),
             license_concluded: PACKAGE_LICENSE,
             license_declared: PACKAGE_LICENSE,
@@ -1121,8 +1121,8 @@ fn write_sbom(
             files_analyzed: false,
             copyright_text: "NOASSERTION",
             supplier: "Organization: Kyanite",
-            feathermark_workspace_crates: SBOM_WORKSPACE_CRATES,
-            feathermark_runtime_libraries: runtime_libraries
+            rutile_workspace_crates: SBOM_WORKSPACE_CRATES,
+            rutile_runtime_libraries: runtime_libraries
                 .iter()
                 .map(|soname| (*soname).to_owned())
                 .collect(),
@@ -1130,7 +1130,7 @@ fn write_sbom(
         relationships: vec![SpdxRelationship {
             spdx_element_id: "SPDXRef-DOCUMENT",
             relationship_type: "DESCRIBES",
-            related_spdx_element: "SPDXRef-Package-feathermark",
+            related_spdx_element: "SPDXRef-Package-rutile",
         }],
     };
     let mut bytes = serde_json::to_vec_pretty(&document)?;

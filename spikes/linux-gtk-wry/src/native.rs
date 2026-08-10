@@ -3,7 +3,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
-use feathermark_protocol::{PreviewEventV1, RenderUrl};
+use rutile_protocol::{PreviewEventV1, RenderUrl};
 use gtk::prelude::*;
 use sourceview4::prelude::*;
 use wry::http::header::{CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE};
@@ -13,7 +13,7 @@ use wry::{NewWindowResponse, Rect, WebView, WebViewBuilder, WebViewBuilderExtUni
 use crate::{BoundedIpcInbox, GtkWryControl, NativeBounds, PreviewBoundary, Route};
 
 const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'none'; font-src 'none'; connect-src 'none'; media-src 'none'; frame-src 'none'; child-src 'none'; object-src 'none'; worker-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; navigate-to 'none'";
-const DOCUMENT: &[u8] = br#"<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'none'; font-src 'none'; connect-src 'none'; media-src 'none'; frame-src 'none'; child-src 'none'; object-src 'none'; worker-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; navigate-to 'none'"><script src="feathermark://preview/v1/assets/bridge.js"></script></head><body><main>FeatherMark native GTK seam</main></body></html>"#;
+const DOCUMENT: &[u8] = br#"<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'none'; font-src 'none'; connect-src 'none'; media-src 'none'; frame-src 'none'; child-src 'none'; object-src 'none'; worker-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; navigate-to 'none'"><script src="rutile://preview/v1/assets/bridge.js"></script></head><body><main>Rutile native GTK seam</main></body></html>"#;
 const BRIDGE: &[u8] = br#"requestAnimationFrame(() => requestAnimationFrame(() => window.ipc.postMessage('{"type":"bridge_ready","v":1,"revision":1}\n')));"#;
 const CSS: &[u8] = b"html { color-scheme: light dark; }";
 
@@ -40,7 +40,7 @@ pub fn run_native_seam_smoke() -> Result<NativeSmokeReceipt, NativeSmokeError> {
     gtk::init().map_err(|error| NativeSmokeError(format!("GTK init failed: {error}")))?;
 
     let application = gtk::Application::new(
-        Some("tech.kyanitelabs.feathermark.spike"),
+        Some("tech.kyanitelabs.rutile.spike"),
         gtk::gio::ApplicationFlags::NON_UNIQUE,
     );
     let webview = Rc::new(RefCell::new(None::<WebView>));
@@ -65,7 +65,7 @@ pub fn run_native_seam_smoke() -> Result<NativeSmokeReceipt, NativeSmokeError> {
         let ipc_inbox = Rc::clone(&ipc_inbox);
         application.connect_activate(move |application| {
             let native_window = gtk::ApplicationWindow::new(application);
-            native_window.set_title("FeatherMark GTK/Wry seam proof");
+            native_window.set_title("Rutile GTK/Wry seam proof");
             native_window.set_default_size(900, 700);
 
             let paned = gtk::Paned::new(gtk::Orientation::Horizontal);
@@ -91,7 +91,7 @@ pub fn run_native_seam_smoke() -> Result<NativeSmokeReceipt, NativeSmokeError> {
             let new_window_boundary = Rc::clone(&boundary);
             let builder = WebViewBuilder::new()
                 .with_bounds(full_bounds(450, 700))
-                .with_custom_protocol("feathermark".to_owned(), move |_id, request| {
+                .with_custom_protocol("rutile".to_owned(), move |_id, request| {
                     let route = protocol_boundary.route(
                         request.method().as_str(),
                         request.uri().host(),

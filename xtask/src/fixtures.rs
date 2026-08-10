@@ -127,7 +127,7 @@ fn reject_unmanifested_entries(directory: &Path) -> Result<(), FixtureError> {
 
 fn expected_manifest() -> FixtureManifest {
     FixtureManifest {
-        schema: "feathermark.fixtures.v1".into(),
+        schema: "rutile.fixtures.v1".into(),
         fixtures: FIXTURE_SPECS
             .iter()
             .map(|spec| {
@@ -154,7 +154,7 @@ fn fixture_bytes(spec: &FixtureSpec) -> Vec<u8> {
         return output;
     }
     let seed: &[u8] = match spec.name {
-        "small" => b"# FeatherMark\n\nSmall deterministic fixture.\n\n- alpha\n- beta\n",
+        "small" => b"# Rutile\n\nSmall deterministic fixture.\n\n- alpha\n- beta\n",
         "unicode" => "# Unicode\n\n日本語の入力🙂\nCafe\u{301} and café.\nمرحبا\n\n".as_bytes(),
         "one-mib" | "five-mib" => {
             b"## Deterministic paragraph\n\nThe quick brown fox edits Markdown safely. 0123456789\n\n"

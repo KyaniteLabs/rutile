@@ -1,10 +1,10 @@
-# FeatherMark fuzz targets
+# Rutile fuzz targets
 
 > **Status: Current.** The fuzz workspace uses a pinned nightly toolchain and exercises four production protocol/core surfaces.
 
 | Target | Production surface | Main invariants |
 |---|---|---|
-| `preview_event` | `feathermark-protocol` decoder | Bounded typed decode, loaded-revision equality, scroll bounds, canonical safe links |
+| `preview_event` | `rutile-protocol` decoder | Bounded typed decode, loaded-revision equality, scroll bounds, canonical safe links |
 | `render_markdown` | Markdown renderer and source-block validator | Output byte caps, balanced allowlisted HTML, fixed internal assets/CSP, valid source mapping |
 | `source_blocks` | Source-block builder/validator | Ordered non-overlapping blocks, byte caps, continuation typing |
 | `html_to_markdown` | Smart-paste converter plus renderer | Bounded conversion, no executable HTML/schemes, safe re-rendering |

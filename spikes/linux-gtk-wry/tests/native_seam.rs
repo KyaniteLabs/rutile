@@ -8,7 +8,7 @@ use linux_gtk_wry_spike::{
 use linux_gtk_wry_spike::{BoundedIpcInbox, GtkWryControl, NativeBounds, PreviewBoundary, Route};
 
 #[cfg(feature = "linux-gtk")]
-use feathermark_protocol::{PreviewEventV1, RenderUrl};
+use rutile_protocol::{PreviewEventV1, RenderUrl};
 
 #[derive(Clone)]
 struct DropSpy {

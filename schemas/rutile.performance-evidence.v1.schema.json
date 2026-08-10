@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://feathermark.local/schemas/rutile.performance-evidence.v1.schema.json",
+  "$id": "https://rutile.local/schemas/rutile.performance-evidence.v1.schema.json",
   "title": "Rutile performance evidence v1",
   "description": "Record of benchmark measurements taken against a declared performance budget for a candidate on one platform. Each measurement carries its p50/p99 latency, the input size that produced it, the per-operation budget, and whether it passed. A measurement over budget is recorded as passed=false and counted in summary.over_budget; it is never silently dropped. budget_ref names the repository-relative budget source so a reviewer can re-derive every threshold. Paths must not embed host-local absolute paths.",
   "type": "object",

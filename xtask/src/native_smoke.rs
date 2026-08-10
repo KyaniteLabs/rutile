@@ -26,7 +26,7 @@ const KILL_SETTLE: Duration = Duration::from_millis(50);
 const POLL_INTERVAL: Duration = Duration::from_millis(2);
 const GIT_DEADLINE: Duration = Duration::from_secs(2);
 const GIT_CLEANUP_GRACE: Duration = Duration::from_secs(1);
-const SUCCESS_MARKER: &str = "feathermark-native-smoke-ok";
+const SUCCESS_MARKER: &str = "rutile-native-smoke-ok";
 
 /// Git environment overrides that can redirect or slow provenance capture
 /// (`GIT_DIR`, inherited config, alternate object stores, ...). Removed from

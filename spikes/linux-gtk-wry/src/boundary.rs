@@ -1,6 +1,6 @@
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel};
 
-use feathermark_protocol::{PreviewEventError, PreviewEventV1, RenderUrl, decode_preview_event};
+use rutile_protocol::{PreviewEventError, PreviewEventV1, RenderUrl, decode_preview_event};
 
 pub const PREVIEW_HOST: &str = "preview";
 pub const CSS_PATH: &str = "/v1/assets/preview.css";
@@ -22,7 +22,7 @@ pub struct PreviewBoundary {
 
 impl PreviewBoundary {
     pub fn new(render_url: RenderUrl) -> Self {
-        let pending_url = format!("feathermark://{PREVIEW_HOST}{}", render_url.document_path());
+        let pending_url = format!("rutile://{PREVIEW_HOST}{}", render_url.document_path());
         Self {
             render_url,
             pending_url,

@@ -1,4 +1,4 @@
-//! Deterministic FeatherMark build and evidence driver.
+//! Deterministic Rutile build and evidence driver.
 
 #[allow(dead_code)] // Task 1C wires the capability boundary to real application launchers.
 mod app_launch;
@@ -44,7 +44,7 @@ pub mod cli {
     #[command(
         name = "xtask",
         version,
-        about = "FeatherMark build and evidence driver"
+        about = "Rutile build and evidence driver"
     )]
     pub struct Cli {
         #[command(subcommand)]
@@ -124,9 +124,9 @@ pub mod cli {
             out: PathBuf,
         },
         ReproducibleBuild {
-            #[arg(long, default_value = "feathermark-app")]
+            #[arg(long, default_value = "rutile-app")]
             package: String,
-            #[arg(long, default_value = "feathermark")]
+            #[arg(long, default_value = "rutile")]
             bin: String,
             #[arg(long)]
             features: Option<String>,
@@ -169,7 +169,7 @@ pub mod cli {
             signed_at: String,
             #[arg(long)]
             expires_at: String,
-            #[arg(long, env = "FEATHERMARK_RELEASE_AUTHORITY_KEY")]
+            #[arg(long, env = "RUTILE_RELEASE_AUTHORITY_KEY")]
             key_path: PathBuf,
             #[arg(long)]
             out: PathBuf,

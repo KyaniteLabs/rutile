@@ -1,0 +1,11 @@
+[package]
+name = "rutile-types"
+version = "0.2.2"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+html-escape.workspace = true
+thiserror.workspace = true
+url.workspace = true

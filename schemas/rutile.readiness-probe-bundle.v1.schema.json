@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://feathermark.local/schemas/rutile.readiness-probe-bundle.v1.schema.json",
+  "$id": "https://rutile.local/schemas/rutile.readiness-probe-bundle.v1.schema.json",
   "title": "Rutile readiness probe bundle v1",
   "description": "Independent readiness probe bundle v1. Carries exactly the 14 release-readiness probes, each in the 'attested' state with a 1:1 repository-relative evidence reference and its SHA-256, bound to a source commit/tree, an authenticated runner lock, and the derived actionable blockers. This bundle is the unsigned observation set consumed by the independent trusted verifier; it is NOT a publication authorization, does not clear the release-prerequisite preflight, and does not set publication_authorized. An attested bundle permits no 'unavailable', 'failed', or 'not_required' probe states: every probe must be 'attested' with non-null evidence.",
   "type": "object",

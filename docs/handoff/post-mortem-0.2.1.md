@@ -23,7 +23,7 @@ usable preview and the #1 priority for the next agent.
   provenance generation, `publication_authorized` stays `false`.
 - **Release** (PR #37, `5acb1cf`): 0.2.1 version bump + release-authority public key
   (`release/keys/release-authority-v1.pub.hex`, `8a178c0c…`; **secret off-repo at
-  `~/.config/feathermark/release-authority-key-v1.hex`, 0600**).
+  `~/.config/rutile/release-authority-key-v1.hex`, 0600**).
 - **Adversarial triple-check** (6-dimension Workflow review): 8 defects found;
   the security-critical ones **fixed** — env-override **forged-preview-auth vector**
   → `PolicyPaths` pinned key; zip-bomb declared-size → actual-bytes + truncation
@@ -113,6 +113,6 @@ the stale autosaves to dismiss it. **Not related to the leak.**
 
 - `main` `74df96c`; `v0.2.2` and Forgejo pre-release 354 published; PR #40 was
   superseded by merged PR #41, and release PR #42 is merged.
-- Release-authority key: pubkey committed; secret at `~/.config/feathermark/...` (0600).
+- Release-authority key: pubkey committed; secret at `~/.config/rutile/...` (0600).
 - `publication_authorized` stays `false`; 14 blockers untouched.
 - Unsafe 0.2.1 instances were killed; stale autosaves were cleared.

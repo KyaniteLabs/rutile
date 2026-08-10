@@ -9,7 +9,7 @@ use macos_iced_wry_spike::{
 };
 
 #[cfg(feature = "macos-iced")]
-use feathermark_protocol::{PreviewEventV1, RenderUrl};
+use rutile_protocol::{PreviewEventV1, RenderUrl};
 
 #[derive(Clone)]
 struct DropSpy {

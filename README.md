@@ -4,7 +4,7 @@
 
 Rutile is a lightweight native Markdown editor written in Rust. It combines an incremental source editor with a live system-webview preview, without Electron, cloud services, plugins, or an IDE feature stack.
 
-> **Naming:** `Rutile` is the user-facing product name. Migration-sensitive crate names, the `feathermark` executable, Linux package names, bundle identifiers, protocol schemes, and historical paths intentionally remain `feathermark`.
+> **Naming:** `Rutile` is the user-facing product name. Migration-sensitive crate names, the `rutile` executable, Linux package names, bundle identifiers, protocol schemes, and historical paths intentionally remain `rutile`.
 
 ## Current status
 
@@ -47,15 +47,15 @@ The workspace pins Rust **1.88.0** in `rust-toolchain.toml`.
 macOS:
 
 ```sh
-cargo build --locked -p feathermark-app --no-default-features --features macos-shell
-cargo run --locked -p feathermark-app --no-default-features --features macos-shell -- path/to/note.md
+cargo build --locked -p rutile-app --no-default-features --features macos-shell
+cargo run --locked -p rutile-app --no-default-features --features macos-shell -- path/to/note.md
 ```
 
 Linux requires GTK3, GtkSourceView 4, and WebKitGTK 4.1 development/runtime packages:
 
 ```sh
-cargo build --locked -p feathermark-app --no-default-features --features linux-gtk
-cargo run --locked -p feathermark-app --no-default-features --features linux-gtk
+cargo build --locked -p rutile-app --no-default-features --features linux-gtk
+cargo run --locked -p rutile-app --no-default-features --features linux-gtk
 ```
 
 The default feature set is intentionally headless and is not a product shell. `--all-features` is not a supported product build because the native shells are target-specific.
@@ -73,7 +73,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 Linux native product/lifecycle gate:
 
 ```sh
-bash scripts/feathermark-linux-gate.sh
+bash scripts/rutile-linux-gate.sh
 ```
 
 The Linux gate needs `Xvfb`, `dbus-run-session`, GTK3, GtkSourceView 4, WebKitGTK 4.1, and packaging/build prerequisites. Release reproduction details are in [`docs/handoff/local-beta-0.2.0.md`](docs/handoff/local-beta-0.2.0.md).
@@ -82,10 +82,10 @@ The Linux gate needs `Xvfb`, `dbus-run-session`, GTK3, GtkSourceView 4, WebKitGT
 
 | Path | Responsibility |
 |---|---|
-| `crates/feathermark-types` | Shared revision, interaction, and safe-link value types |
-| `crates/feathermark-protocol` | Bounded preview IPC frames and canonical decoding |
-| `crates/feathermark-core` | Document model, rendering, files, formatting, search, export, autosave, and session contracts |
-| `crates/feathermark-app` | Shared reducer plus macOS and Linux native shells |
+| `crates/rutile-types` | Shared revision, interaction, and safe-link value types |
+| `crates/rutile-protocol` | Bounded preview IPC frames and canonical decoding |
+| `crates/rutile-core` | Document model, rendering, files, formatting, search, export, autosave, and session contracts |
+| `crates/rutile-app` | Shared reducer plus macOS and Linux native shells |
 | `xtask` | Fixtures, evidence, runner infrastructure, metrics, and deterministic local packaging |
 | `fuzz` | Protocol, renderer, source-block, and HTML-to-Markdown fuzz targets |
 | `design` / `DESIGN-SYSTEM.md` | Implemented document/export tokens and native-shell visual direction |

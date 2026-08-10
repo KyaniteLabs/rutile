@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 #
-# FeatherMark Rutile verify pipeline (Forgejo Actions / GitHub Actions compatible).
+# Rutile verify pipeline (Forgejo Actions / GitHub Actions compatible).
 #
 # Every job emits one rutile.gate-result.v1 document beneath
 #   target/evidence/<commit>/<job>/run-<ms>-<pid>-<n>/gate-result.json
@@ -78,7 +78,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: production-binary
-          path: target/prod/release/feathermark
+          path: target/prod/release/rutile
           if-no-files-found: error
           retention-days: 30
       - name: retain evidence
@@ -240,7 +240,7 @@ jobs:
             sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb dbus
           fi
       - name: build featured release candidate
-        run: cargo build --locked --release -p feathermark-app --features ${{ matrix.features }} --bin feathermark
+        run: cargo build --locked --release -p rutile-app --features ${{ matrix.features }} --bin rutile
       - name: package + inspect + smoke-row + SBOM + evidence
         # Candidate leak audit (artifact inspect --mode candidate) + one
         # `xtask package smoke-row` per produced artifact (real
@@ -249,7 +249,7 @@ jobs:
         # runs in the release pipeline via evidence-finalize.sh --provenance.
         run: |
           bash scripts/ci/package-inspect.sh \
-            --candidate target/release/feathermark \
+            --candidate target/release/rutile \
             --kind ${{ matrix.kind }} \
             --profile "$PROFILE" \
             --job package-${{ matrix.kind }}

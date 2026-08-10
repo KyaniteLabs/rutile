@@ -75,11 +75,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "feathermark-core"
+name = "rutile-core"
 version = "0.2.2"
 dependencies = [
  "blake3",
- "feathermark-types",
+ "rutile-types",
  "fs2",
  "html-escape",
  "libc",
@@ -91,28 +91,28 @@ dependencies = [
 ]
 
 [[package]]
-name = "feathermark-fuzz"
+name = "rutile-fuzz"
 version = "0.0.0"
 dependencies = [
- "feathermark-core",
- "feathermark-protocol",
- "feathermark-types",
+ "rutile-core",
+ "rutile-protocol",
+ "rutile-types",
  "html-escape",
  "libfuzzer-sys",
 ]
 
 [[package]]
-name = "feathermark-protocol"
+name = "rutile-protocol"
 version = "0.2.2"
 dependencies = [
- "feathermark-types",
+ "rutile-types",
  "serde",
  "serde_json",
  "thiserror",
 ]
 
 [[package]]
-name = "feathermark-types"
+name = "rutile-types"
 version = "0.2.2"
 dependencies = [
  "html-escape",

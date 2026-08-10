@@ -1,19 +1,19 @@
 # Rutile 0.2.0 Architecture
 
-> **Status: Current.** Verified against `main` on 2026-07-12. Product-facing naming is Rutile; technical identifiers remain FeatherMark/`feathermark` by design.
+> **Status: Current.** Verified against `main` on 2026-07-12. Product and technical naming are unified as Rutile (crates, the `rutile` binary, the `rutile://` scheme, and bundle identifiers).
 
 ## BLUF
 
-Rutile has a platform-independent Rust core, a small shared application reducer, and two native shells. The source editor is native on each platform; the preview is a system webview served only through the internal `feathermark://preview/v1/` protocol. No local HTTP server is involved.
+Rutile has a platform-independent Rust core, a small shared application reducer, and two native shells. The source editor is native on each platform; the preview is a system webview served only through the internal `rutile://preview/v1/` protocol. No local HTTP server is involved.
 
 ## Dependency direction
 
 ```text
-                    feathermark-types
+                    rutile-types
                        ↗         ↖
-    feathermark-protocol         feathermark-core
+    rutile-protocol         rutile-core
                        ↖         ↗
-                      feathermark-app
+                      rutile-app
                       ├── macOS: Iced/winit + Wry/WKWebView
                       └── Linux: GTK3/GtkSourceView + Wry/WebKitGTK
 
@@ -25,15 +25,15 @@ The production crates do not depend on `spikes/`. Spike code is retained as hist
 
 ## Crate ownership
 
-### `feathermark-types`
+### `rutile-types`
 
 Owns low-level shared values such as revisions, interaction identifiers, and canonical safe-link targets. It has no native UI responsibility.
 
-### `feathermark-protocol`
+### `rutile-protocol`
 
 Owns the bounded, revision-aware preview event protocol. Frames are decoded into typed bridge-ready, painted, scroll, and link-activation events; malformed, oversized, stale, or unsafe input is rejected.
 
-### `feathermark-core`
+### `rutile-core`
 
 Owns platform-independent behavior:
 
@@ -45,7 +45,7 @@ Owns platform-independent behavior:
 
 Key bounds are 20 MiB per document, 64 MiB retained undo data, eight autosave snapshots, and ten recent-file entries.
 
-### `feathermark-app`
+### `rutile-app`
 
 Owns the shared `AppState` reducer, render scheduler, preview host, user-facing brand contract, shared actions, and platform adapters. `AppState` coordinates path/dirty/revision/preview/conflict state; platform sessions own the live `Document`, native editor adapter, filesystem operations, dialogs, clipboard, and window lifecycle.
 
@@ -72,7 +72,7 @@ The render scheduler coalesces work and discards stale completions. Platform she
 ## Preview and security boundary
 
 1. The core renderer parses Markdown and emits allowlisted semantic nodes; raw HTML from a document is escaped rather than executed.
-2. `PreviewHost` stages a revisioned page and serves it through the private `feathermark://preview/v1/` scheme.
+2. `PreviewHost` stages a revisioned page and serves it through the private `rutile://preview/v1/` scheme.
 3. The preview page can load only its fixed internal stylesheet and bridge. Its content-security policy denies network, frames, plugins, forms, media, workers, and arbitrary navigation.
 4. Preview events return through a bounded typed protocol. Revisions and scroll/link values are validated before mutating application state.
 5. Link activation yields a canonical `SafeLinkTarget`; the host does not automatically open it.
@@ -90,8 +90,8 @@ Export is a separate self-contained template. It contains inline CSS, no JavaScr
 
 - `xtask` is the deterministic build/evidence driver. Because the package has multiple binaries, invoke it as `cargo run -p xtask --bin xtask -- ...`.
 - Local packaging binds artifacts to an input executable hash and source commit.
-- macOS packaging produces `Rutile.app`, an app ZIP, and a DMG while retaining the internal `FeatherMark` executable.
-- Linux packaging produces a Rutile tar archive plus technical-name `feathermark` DEB/RPM packages.
+- macOS packaging produces `Rutile.app`, an app ZIP, and a DMG with the internal `Rutile` executable.
+- Linux packaging produces a Rutile tar archive plus `rutile` DEB/RPM packages.
 - The optional production-runner subsystem is fail-closed when its trust and dispatch manifests are absent. It is not required for normal local builds or the 0.2.0 local-beta evidence.
 
 ## Current non-goals and debt

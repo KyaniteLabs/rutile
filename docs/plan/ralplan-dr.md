@@ -1,10 +1,10 @@
-# FeatherMark RALPLAN Decision Record
+# Rutile RALPLAN Decision Record
 
 > **Status: Historical decision-process record.** Later implementation and release work superseded its execution gate; the record is retained to explain the original planning outcome.
 
 ## BLUF
 
-RALPLAN ended at the five-iteration maximum without consensus. The best available FeatherMark plan is published at [`docs/plan/build-plan.md`](./build-plan.md), but it authorizes no implementation. Architect round 5 found the reviewed revision `SOUND`; Critic round 5 returned `ITERATE`.
+RALPLAN ended at the five-iteration maximum without consensus. The best available Rutile plan is published at [`docs/plan/build-plan.md`](./build-plan.md), but it authorizes no implementation. Architect round 5 found the reviewed revision `SOUND`; Critic round 5 returned `ITERATE`.
 
 ## Decision
 
@@ -18,11 +18,11 @@ Each round ran Architect first and Critic second against that round's planner re
 
 | Round | Architect record | Architect status | Critic record | Critic status | Recorded reviewed SHA-256 |
 |---|---|---|---|---|---|
-| 1 | `.omx/state/feathermark-architect-review-r1.md` | `CONCERNS` | `.omx/state/feathermark-critic-review-r1.md` | `ITERATE` | Not recorded in either review |
-| 2 | `.omx/state/feathermark-architect-review-r2.md` | `CONCERNS` | `.omx/state/feathermark-critic-review-r2.md` | `ITERATE` | Not recorded in either review |
-| 3 | `.omx/state/feathermark-architect-review-r3.md` | `CONCERNS` | `.omx/state/feathermark-critic-review-r3.md` | `ITERATE` | `97e327f1be45e0e12c4742bc404fdd93a05607faa90c256a2e38da93a0e73b35` |
-| 4 | `.omx/state/feathermark-architect-review-r4.md` | `CONCERNS` | `.omx/state/feathermark-critic-review-r4.md` | `ITERATE` | `6a3e336a1a71cfc400cb69ae8e4b3bd74c8cd1c7a56fe496f3fbb33e2a3cfb83` |
-| 5 | `.omx/state/feathermark-architect-review-r5.md` | `SOUND` | `.omx/state/feathermark-critic-review-r5.md` | `ITERATE` | `55e463db3ffd95a5966cc26289ff3384369b155c30794f8b0f31450e6c85d192` |
+| 1 | `.omx/state/rutile-architect-review-r1.md` | `CONCERNS` | `.omx/state/rutile-critic-review-r1.md` | `ITERATE` | Not recorded in either review |
+| 2 | `.omx/state/rutile-architect-review-r2.md` | `CONCERNS` | `.omx/state/rutile-critic-review-r2.md` | `ITERATE` | Not recorded in either review |
+| 3 | `.omx/state/rutile-architect-review-r3.md` | `CONCERNS` | `.omx/state/rutile-critic-review-r3.md` | `ITERATE` | `97e327f1be45e0e12c4742bc404fdd93a05607faa90c256a2e38da93a0e73b35` |
+| 4 | `.omx/state/rutile-architect-review-r4.md` | `CONCERNS` | `.omx/state/rutile-critic-review-r4.md` | `ITERATE` | `6a3e336a1a71cfc400cb69ae8e4b3bd74c8cd1c7a56fe496f3fbb33e2a3cfb83` |
+| 5 | `.omx/state/rutile-architect-review-r5.md` | `SOUND` | `.omx/state/rutile-critic-review-r5.md` | `ITERATE` | `55e463db3ffd95a5966cc26289ff3384369b155c30794f8b0f31450e6c85d192` |
 
 ## Terminal Mechanical Cleanup
 

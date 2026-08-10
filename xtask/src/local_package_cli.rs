@@ -170,7 +170,7 @@ fn bless_macos_artifact(
             features: vec!["macos-shell".to_string()],
             target_root: "target/prod".to_string(),
         },
-        "feathermark-app",
+        "rutile-app",
         &request.version,
     )
     .map_err(|error| LocalPackageCliError::Bless(error.to_string()))?;
@@ -197,7 +197,7 @@ fn bless_macos_artifact(
             artifact_sha256: hex::encode(sha2::Sha256::digest(&artifact_bytes)),
             provenance_sha256: provenance_sha,
             tier: crate::release_authority::PREVIEW_TIER.to_string(),
-            product: "feathermark-app".to_string(),
+            product: "rutile-app".to_string(),
             version_label: request.version.clone(),
             signed_at: signed_at.clone(),
             expires_at: expires_at.clone(),
@@ -240,7 +240,7 @@ fn run_macos(
     executor.execute(&macos_adhoc_codesign_plan(&app)?)?;
     executor.execute(&macos_codesign_verify_plan(&app)?)?;
 
-    let embedded = app.join("Contents/MacOS/FeatherMark");
+    let embedded = app.join("Contents/MacOS/Rutile");
     if !embedded.is_file() {
         return Err(LocalPackageCliError::MissingEmbeddedExecutable(embedded));
     }
@@ -329,7 +329,7 @@ fn run_linux(
     executor.execute(&debian_package_plan(&deb_receipt.output, &deb)?)?;
 
     if let Some(rpm_receipt) = rpm_receipt {
-        let spec = rpm_receipt.output.join("SPECS/feathermark.spec");
+        let spec = rpm_receipt.output.join("SPECS/rutile.spec");
         executor.execute(&rpm_package_plan(&rpm_receipt.output, &spec)?)?;
 
         // rpmbuild places built RPMs under <topdir>/RPMS/<arch>/; move the exact

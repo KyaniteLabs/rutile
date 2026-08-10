@@ -1,5 +1,5 @@
 {
-  "schema": "feathermark.fixtures.v1",
+  "schema": "rutile.fixtures.v1",
   "fixtures": [
     {
       "name": "small",

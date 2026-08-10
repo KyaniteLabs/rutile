@@ -7,10 +7,10 @@
     ]
   },
   "dataLicense": "CC0-1.0",
-  "documentNamespace": "https://spdx.org/spdxdocs/feathermark-848a0d7f-0eba-49c3-b651-8a9552e84606",
+  "documentNamespace": "https://spdx.org/spdxdocs/rutile-848a0d7f-0eba-49c3-b651-8a9552e84606",
   "files": [
     {
-      "SPDXID": "SPDXRef-File-feathermark_app",
+      "SPDXID": "SPDXRef-File-rutile_app",
       "checksums": [
         {
           "algorithm": "SHA1",
@@ -24,7 +24,7 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-File-feathermark",
+      "SPDXID": "SPDXRef-File-rutile",
       "checksums": [
         {
           "algorithm": "SHA1",
@@ -38,7 +38,7 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-File-feathermark_core",
+      "SPDXID": "SPDXRef-File-rutile_core",
       "checksums": [
         {
           "algorithm": "SHA1",
@@ -52,7 +52,7 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-File-feathermark_protocol",
+      "SPDXID": "SPDXRef-File-rutile_protocol",
       "checksums": [
         {
           "algorithm": "SHA1",
@@ -66,7 +66,7 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-File-feathermark_spike_support",
+      "SPDXID": "SPDXRef-File-rutile_spike_support",
       "checksums": [
         {
           "algorithm": "SHA1",
@@ -80,7 +80,7 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-File-feathermark_types",
+      "SPDXID": "SPDXRef-File-rutile_types",
       "checksums": [
         {
           "algorithm": "SHA1",
@@ -164,7 +164,7 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-File-feathermark-runner-launcher",
+      "SPDXID": "SPDXRef-File-rutile-runner-launcher",
       "checksums": [
         {
           "algorithm": "SHA1",
@@ -178,7 +178,7 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-File-feathermark-runner-probe",
+      "SPDXID": "SPDXRef-File-rutile-runner-probe",
       "checksums": [
         {
           "algorithm": "SHA1",
@@ -206,7 +206,7 @@
       ]
     }
   ],
-  "name": "feathermark",
+  "name": "rutile",
   "packages": [
     {
       "SPDXID": "SPDXRef-Package-idna--adapter-1.2.2",
@@ -502,11 +502,11 @@
       "versionInfo": "0.2.2"
     },
     {
-      "SPDXID": "SPDXRef-Package-feathermark-protocol-0.1.0",
+      "SPDXID": "SPDXRef-Package-rutile-protocol-0.1.0",
       "downloadLocation": "NONE",
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
-      "name": "feathermark-protocol",
+      "name": "rutile-protocol",
       "versionInfo": "0.1.0"
     },
     {
@@ -2160,11 +2160,11 @@
       "versionInfo": "0.6.4"
     },
     {
-      "SPDXID": "SPDXRef-Package-feathermark-spike-support-0.1.0",
+      "SPDXID": "SPDXRef-Package-rutile-spike-support-0.1.0",
       "downloadLocation": "NONE",
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
-      "name": "feathermark-spike-support",
+      "name": "rutile-spike-support",
       "versionInfo": "0.1.0"
     },
     {
@@ -5211,11 +5211,11 @@
       "versionInfo": "0.11.0"
     },
     {
-      "SPDXID": "SPDXRef-Package-feathermark-types-0.1.0",
+      "SPDXID": "SPDXRef-Package-rutile-types-0.1.0",
       "downloadLocation": "NONE",
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
-      "name": "feathermark-types",
+      "name": "rutile-types",
       "versionInfo": "0.1.0"
     },
     {
@@ -6512,11 +6512,11 @@
       "versionInfo": "1.0.220"
     },
     {
-      "SPDXID": "SPDXRef-Package-feathermark-app-0.1.0",
+      "SPDXID": "SPDXRef-Package-rutile-app-0.1.0",
       "downloadLocation": "NONE",
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
-      "name": "feathermark-app",
+      "name": "rutile-app",
       "versionInfo": "0.1.0"
     },
     {
@@ -6831,11 +6831,11 @@
       "versionInfo": "0.2.2"
     },
     {
-      "SPDXID": "SPDXRef-Package-feathermark-core-0.1.0",
+      "SPDXID": "SPDXRef-Package-rutile-core-0.1.0",
       "downloadLocation": "NONE",
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
-      "name": "feathermark-core",
+      "name": "rutile-core",
       "versionInfo": "0.1.0"
     },
     {
@@ -7774,7 +7774,7 @@
       "spdxElementId": "SPDXRef-Package-sourceview4-0.5.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-File-feathermark_protocol",
+      "relatedSpdxElement": "SPDXRef-File-rutile_protocol",
       "relationshipType": "DESCRIBES",
       "spdxElementId": "SPDXRef-DOCUMENT"
     },
@@ -7789,7 +7789,7 @@
       "spdxElementId": "SPDXRef-Package-harfrust-0.3.2"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-feathermark-spike-support-0.1.0",
+      "relatedSpdxElement": "SPDXRef-Package-rutile-spike-support-0.1.0",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-macos-iced-wry-spike-0.1.0"
     },
@@ -7821,7 +7821,7 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-serde--json-1.0.140",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-protocol-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-protocol-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-winapi-0.3.9",
@@ -7909,9 +7909,9 @@
       "spdxElementId": "SPDXRef-Package-android-activity-0.6.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-feathermark-protocol-0.1.0",
+      "relatedSpdxElement": "SPDXRef-Package-rutile-protocol-0.1.0",
       "relationshipType": "GENERATED_FROM",
-      "spdxElementId": "SPDXRef-File-feathermark_protocol"
+      "spdxElementId": "SPDXRef-File-rutile_protocol"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-objc2-foundation-0.2.2",
@@ -8286,7 +8286,7 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-objc2-app-kit-0.3.2",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-app-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-app-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-toml--edit-0.20.7",
@@ -8331,7 +8331,7 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-iced--renderer-0.14.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-app-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-app-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-gio-sys-0.18.1",
@@ -8459,7 +8459,7 @@
       "spdxElementId": "SPDXRef-Package-calloop-wayland-source-0.4.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-feathermark-protocol-0.1.0",
+      "relatedSpdxElement": "SPDXRef-Package-rutile-protocol-0.1.0",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-linux-gtk-wry-spike-0.1.0"
     },
@@ -8691,7 +8691,7 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-url-2.5.4",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-types-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-types-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-yazi-0.2.1",
@@ -8824,7 +8824,7 @@
       "spdxElementId": "SPDXRef-Package-cosmic-text-0.15.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-File-feathermark_core",
+      "relatedSpdxElement": "SPDXRef-File-rutile_core",
       "relationshipType": "DESCRIBES",
       "spdxElementId": "SPDXRef-DOCUMENT"
     },
@@ -9199,17 +9199,17 @@
       "spdxElementId": "SPDXRef-Package-phf--macros-0.13.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-feathermark-app-0.1.0",
+      "relatedSpdxElement": "SPDXRef-Package-rutile-app-0.1.0",
       "relationshipType": "GENERATED_FROM",
-      "spdxElementId": "SPDXRef-File-feathermark_app"
+      "spdxElementId": "SPDXRef-File-rutile_app"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-feathermark-spike-support-0.1.0",
+      "relatedSpdxElement": "SPDXRef-Package-rutile-spike-support-0.1.0",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-linux-gtk-wry-spike-0.1.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-File-feathermark_app",
+      "relatedSpdxElement": "SPDXRef-File-rutile_app",
       "relationshipType": "DESCRIBES",
       "spdxElementId": "SPDXRef-DOCUMENT"
     },
@@ -9236,7 +9236,7 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-gtk-0.18.2",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-app-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-app-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-bytemuck-1.25.0",
@@ -9324,9 +9324,9 @@
       "spdxElementId": "SPDXRef-Package-cssparser-macros-0.6.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-feathermark-protocol-0.1.0",
+      "relatedSpdxElement": "SPDXRef-Package-rutile-protocol-0.1.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-app-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-app-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-smol--str-0.2.2",
@@ -9419,7 +9419,7 @@
       "spdxElementId": "SPDXRef-Package-wry-0.55.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-feathermark-protocol-0.1.0",
+      "relatedSpdxElement": "SPDXRef-Package-rutile-protocol-0.1.0",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-macos-iced-wry-spike-0.1.0"
     },
@@ -9654,9 +9654,9 @@
       "spdxElementId": "SPDXRef-Package-winit-0.30.13"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-feathermark-core-0.1.0",
+      "relatedSpdxElement": "SPDXRef-Package-rutile-core-0.1.0",
       "relationshipType": "GENERATED_FROM",
-      "spdxElementId": "SPDXRef-File-feathermark_core"
+      "spdxElementId": "SPDXRef-File-rutile_core"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-libc-0.2.172",
@@ -9724,9 +9724,9 @@
       "spdxElementId": "SPDXRef-Package-gtk-0.18.2"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-feathermark-types-0.1.0",
+      "relatedSpdxElement": "SPDXRef-Package-rutile-types-0.1.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-app-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-app-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-sha2-0.10.9",
@@ -9929,7 +9929,7 @@
       "spdxElementId": "SPDXRef-Package-indexmap-2.14.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-File-feathermark-runner-launcher",
+      "relatedSpdxElement": "SPDXRef-File-rutile-runner-launcher",
       "relationshipType": "DESCRIBES",
       "spdxElementId": "SPDXRef-DOCUMENT"
     },
@@ -10116,7 +10116,7 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-html-escape-0.2.13",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-types-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-types-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-bitflags-2.13.0",
@@ -10266,7 +10266,7 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-blake3-1.8.2",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-core-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-core-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-cosmic-text-0.15.0",
@@ -10379,9 +10379,9 @@
       "spdxElementId": "SPDXRef-Package-windows-implement-0.60.2"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-feathermark-types-0.1.0",
+      "relatedSpdxElement": "SPDXRef-Package-rutile-types-0.1.0",
       "relationshipType": "GENERATED_FROM",
-      "spdxElementId": "SPDXRef-File-feathermark_types"
+      "spdxElementId": "SPDXRef-File-rutile_types"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-libc-0.2.172",
@@ -10416,7 +10416,7 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-iced--winit-0.14.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-app-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-app-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-tracing-0.1.44",
@@ -10569,9 +10569,9 @@
       "spdxElementId": "SPDXRef-Package-objc2-0.5.2"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-feathermark-core-0.1.0",
+      "relatedSpdxElement": "SPDXRef-Package-rutile-core-0.1.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-app-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-app-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-gtk-0.18.2",
@@ -10736,7 +10736,7 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-ropey-1.6.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-core-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-core-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde--spanned-0.6.9",
@@ -10896,7 +10896,7 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-xtask-0.1.0",
       "relationshipType": "GENERATED_FROM",
-      "spdxElementId": "SPDXRef-File-feathermark-runner-launcher"
+      "spdxElementId": "SPDXRef-File-rutile-runner-launcher"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-bitflags-2.13.0",
@@ -11009,7 +11009,7 @@
       "spdxElementId": "SPDXRef-Package-web--atoms-0.2.5"
     },
     {
-      "relatedSpdxElement": "SPDXRef-File-feathermark_types",
+      "relatedSpdxElement": "SPDXRef-File-rutile_types",
       "relationshipType": "DESCRIBES",
       "spdxElementId": "SPDXRef-DOCUMENT"
     },
@@ -11306,7 +11306,7 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-iced--widget-0.14.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-app-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-app-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-pulldown-cmark-escape-0.11.0",
@@ -11534,7 +11534,7 @@
       "spdxElementId": "SPDXRef-Package-icu--provider-2.2.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-File-feathermark",
+      "relatedSpdxElement": "SPDXRef-File-rutile",
       "relationshipType": "DESCRIBES",
       "spdxElementId": "SPDXRef-DOCUMENT"
     },
@@ -11739,7 +11739,7 @@
       "spdxElementId": "SPDXRef-Package-windows-numerics-0.2.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-feathermark-protocol-0.1.0",
+      "relatedSpdxElement": "SPDXRef-Package-rutile-protocol-0.1.0",
       "relationshipType": "DEPENDS_ON",
       "spdxElementId": "SPDXRef-Package-xtask-0.1.0"
     },
@@ -11764,9 +11764,9 @@
       "spdxElementId": "SPDXRef-Package-wayland-protocols-wlr-0.3.12"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-feathermark-app-0.1.0",
+      "relatedSpdxElement": "SPDXRef-Package-rutile-app-0.1.0",
       "relationshipType": "GENERATED_FROM",
-      "spdxElementId": "SPDXRef-File-feathermark"
+      "spdxElementId": "SPDXRef-File-rutile"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-core--maths-0.1.1",
@@ -11784,7 +11784,7 @@
       "spdxElementId": "SPDXRef-Package-anstyle-wincon-3.0.11"
     },
     {
-      "relatedSpdxElement": "SPDXRef-File-feathermark-runner-probe",
+      "relatedSpdxElement": "SPDXRef-File-rutile-runner-probe",
       "relationshipType": "DESCRIBES",
       "spdxElementId": "SPDXRef-DOCUMENT"
     },
@@ -11844,9 +11844,9 @@
       "spdxElementId": "SPDXRef-Package-markup5ever-0.38.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-feathermark-spike-support-0.1.0",
+      "relatedSpdxElement": "SPDXRef-Package-rutile-spike-support-0.1.0",
       "relationshipType": "GENERATED_FROM",
-      "spdxElementId": "SPDXRef-File-feathermark_spike_support"
+      "spdxElementId": "SPDXRef-File-rutile_spike_support"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-proc-macro2-1.0.106",
@@ -11939,9 +11939,9 @@
       "spdxElementId": "SPDXRef-Package-wry-0.55.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-feathermark-types-0.1.0",
+      "relatedSpdxElement": "SPDXRef-Package-rutile-types-0.1.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-spike-support-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-spike-support-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-wayland-sys-0.31.11",
@@ -12026,12 +12026,12 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-xtask-0.1.0",
       "relationshipType": "GENERATED_FROM",
-      "spdxElementId": "SPDXRef-File-feathermark-runner-probe"
+      "spdxElementId": "SPDXRef-File-rutile-runner-probe"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-wry-0.55.1",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-app-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-app-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-soup3-sys-0.5.0",
@@ -12231,7 +12231,7 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-thiserror-2.0.12",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-core-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-core-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-clap--builder-4.5.41",
@@ -12421,7 +12421,7 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-thiserror-2.0.12",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-protocol-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-protocol-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-once--cell-1.21.4",
@@ -12466,12 +12466,12 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-objc2-foundation-0.3.2",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-app-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-app-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-thiserror-2.0.12",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-types-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-types-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-parking--lot--core-0.9.12",
@@ -12554,9 +12554,9 @@
       "spdxElementId": "SPDXRef-Package-smithay-client-toolkit-0.20.0"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-feathermark-types-0.1.0",
+      "relatedSpdxElement": "SPDXRef-Package-rutile-types-0.1.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-protocol-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-protocol-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-serde-1.0.220",
@@ -12576,7 +12576,7 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-serde-1.0.220",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-protocol-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-protocol-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-thiserror-1.0.69",
@@ -12631,7 +12631,7 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-serde--json-1.0.140",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-app-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-app-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-futures-channel-0.3.32",
@@ -12686,7 +12686,7 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-thiserror-2.0.12",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-app-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-app-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-zerofrom-0.1.8",
@@ -12814,7 +12814,7 @@
       "spdxElementId": "SPDXRef-Package-wry-0.55.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-File-feathermark_spike_support",
+      "relatedSpdxElement": "SPDXRef-File-rutile_spike_support",
       "relationshipType": "DESCRIBES",
       "spdxElementId": "SPDXRef-DOCUMENT"
     },
@@ -12846,7 +12846,7 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-pulldown-cmark-0.13.4",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-core-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-core-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-web-time-1.1.0",
@@ -13079,9 +13079,9 @@
       "spdxElementId": "SPDXRef-Package-smithay-client-toolkit-0.19.2"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-feathermark-types-0.1.0",
+      "relatedSpdxElement": "SPDXRef-Package-rutile-types-0.1.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-core-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-core-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-futures-channel-0.3.32",
@@ -13241,7 +13241,7 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-objc2-0.6.4",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-app-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-app-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-deranged-0.5.8",
@@ -13339,9 +13339,9 @@
       "spdxElementId": "SPDXRef-Package-wry-0.55.1"
     },
     {
-      "relatedSpdxElement": "SPDXRef-Package-feathermark-protocol-0.1.0",
+      "relatedSpdxElement": "SPDXRef-Package-rutile-protocol-0.1.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-spike-support-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-spike-support-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-bitflags-2.13.0",
@@ -13461,7 +13461,7 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-sourceview4-0.5.0",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-app-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-app-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-syn-2.0.118",
@@ -13556,7 +13556,7 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-getrandom-0.3.3",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-app-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-app-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-slab-0.4.12",
@@ -13626,7 +13626,7 @@
     {
       "relatedSpdxElement": "SPDXRef-Package-url-2.5.4",
       "relationshipType": "DEPENDS_ON",
-      "spdxElementId": "SPDXRef-Package-feathermark-app-0.1.0"
+      "spdxElementId": "SPDXRef-Package-rutile-app-0.1.0"
     },
     {
       "relatedSpdxElement": "SPDXRef-Package-syn-2.0.118",
