@@ -634,6 +634,22 @@ fn source_commit_must_be_40_lowercase_hex() {
 }
 
 #[test]
+fn hash_must_be_64_lowercase_hex() {
+    let ok = "a".repeat(64);
+    assert!(xtask::local_package::validate_hash(&ok, "test").is_ok());
+    let zero = "0".repeat(64);
+    assert!(xtask::local_package::validate_hash(&zero, "test").is_ok());
+    let uppercase = "A".repeat(64);
+    assert!(xtask::local_package::validate_hash(&uppercase, "test").is_err());
+    let short = "a".repeat(63);
+    assert!(xtask::local_package::validate_hash(&short, "test").is_err());
+    let long = "a".repeat(65);
+    assert!(xtask::local_package::validate_hash(&long, "test").is_err());
+    let non_hex = "g".repeat(64);
+    assert!(xtask::local_package::validate_hash(&non_hex, "test").is_err());
+}
+
+#[test]
 fn create_output_root_rejects_existing_paths() {
     let temporary = tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();

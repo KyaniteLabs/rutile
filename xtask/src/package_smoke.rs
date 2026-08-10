@@ -1366,7 +1366,9 @@ impl SmokeExecutor for ProductionSmokeExecutor {
         cmd.stderr(Stdio::piped());
         unsafe {
             cmd.pre_exec(|| {
-                let _ = libc::setpgid(0, 0);
+                if libc::setpgid(0, 0) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
                 Ok(())
             });
         }
@@ -2307,5 +2309,78 @@ mod tests {
         let plan = StagePlan::single(cmd);
         assert_eq!(plan.commands.len(), 1);
         assert!(plan.cleanup_on_failure.is_empty());
+    }
+    /// Integration test: full Install→Open→Uninstall lifecycle through the REAL
+    /// `ProductionSmokeExecutor` against a real `hdiutil`-built DMG fixture.
+    ///
+    /// Existing unit tests stub the executor (`FnExecutor`) or exercise single
+    /// stages. This is the ONLY test that drives the real DMG tooling path
+    /// (`hdiutil attach`/`ditto`/`hdiutil detach`) and real receipt emission
+    /// end-to-end, validating L2-001 success() and L2-003 setpgid propagation
+    /// against real subprocesses.  Marked `#[ignore]` because it needs a macOS
+    /// host with `hdiutil`/`ditto`/`open` and a GUI session.
+    #[cfg(target_os = "macos")]
+    #[ignore = "requires real macOS hdiutil/ditto/open tooling and a GUI session"]
+    #[allow(clippy::disallowed_methods)] // harness builds a DMG fixture, not a production tool invocation
+    #[test]
+    fn production_executor_full_dmg_lifecycle() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::Command as ProcessCommand;
+
+        let temp = smoke_tempdir();
+        let evidence = temp.path().join("ev");
+
+        // Build a minimal Rutile.app bundle.
+        let app_src = temp.path().join("Rutile.app");
+        let contents = app_src.join("Contents");
+        let macos_dir = contents.join("MacOS");
+        fs::create_dir_all(&macos_dir).unwrap();
+        let binary_contents = b"#!/bin/sh\nexit 0\n";
+        let binary = macos_dir.join("Rutile");
+        fs::write(&binary, binary_contents).unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::write(
+            contents.join("Info.plist"),
+            b"<?xml version=\"1.0\"?>\n<plist version=\"1.0\">\n<dict>\n  <key>CFBundleExecutable</key><string>Rutile</string>\n</dict>\n</plist>\n",
+        )
+        .unwrap();
+
+        // Build a real DMG from the app bundle.
+        let dmg = temp.path().join("Rutile.dmg");
+        let status = ProcessCommand::new("hdiutil")
+            .args(["create", "-volname", "Rutile", "-srcfolder"])
+            .arg(&app_src)
+            .args(["-fs", "HFS+", "-format", "UDZO"])
+            .arg(&dmg)
+            .status()
+            .expect("hdiutil available on macOS");
+        assert!(status.success(), "hdiutil create failed");
+
+        let package_sha = sha256_hex(&fs::read(&dmg).unwrap());
+        let binary_sha = sha256_hex(binary_contents);
+        let install_target = temp.path().join("installed").join("Rutile.app");
+        let binary_path = install_target.join("Contents/MacOS/Rutile");
+
+        let request = SmokeRequest::new(
+            dmg,
+            package_sha,
+            PackageKind::MacosDmg,
+            valid_commit(),
+            install_target,
+            binary_path.clone(),
+            binary_sha,
+            evidence,
+        );
+
+        let executor = ProductionSmokeExecutor::new(binary_path);
+        let execution = run_smoke(request, &executor).expect("full lifecycle should pass");
+
+        // Real receipt emission with all three stages populated.
+        assert!(execution.receipt_path.exists());
+        assert_eq!(execution.receipt.kind, PackageKind::MacosDmg);
+        assert_eq!(execution.receipt.install.status, StageStatus::Passed);
+        assert_eq!(execution.receipt.open.status, StageStatus::Passed);
+        assert_eq!(execution.receipt.uninstall.status, StageStatus::Passed);
+        assert!(execution.receipt.passed);
     }
 }

@@ -19,7 +19,7 @@ use xtask::linux_gate::{LinuxGateRequest, run_gate as run_linux_gate};
 use xtask::local_package::{LinuxPackageRequest, MacPackageRequest};
 use xtask::local_package_cli::{LocalPackageCliRequest, ProcessCommandExecutor, run_local_package};
 use xtask::metrics::{MetricAssertion, assert_metric_record};
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 use xtask::native_smoke::{NativeSmokeGateRequest, run_gate};
 use xtask::package::assert_file;
 use xtask::package_smoke::{ProductionSmokeExecutor, SmokeRequest, run_smoke};
@@ -190,7 +190,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 return Err("release prerequisite preflight blocked".into());
             }
         }
-        #[cfg(unix)]
+        #[cfg(target_os = "macos")]
         Command::NativeSmoke {
             binary,
             profile,

@@ -962,8 +962,12 @@ fn reject_existing_symlink_components(
     Ok(())
 }
 
-fn validate_hash(hash: &str, field: &'static str) -> Result<(), LocalPackageError> {
-    if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+pub fn validate_hash(hash: &str, field: &'static str) -> Result<(), LocalPackageError> {
+    let valid = hash.len() == 64
+        && hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    if !valid {
         return Err(LocalPackageError::InvalidHash { field });
     }
     Ok(())

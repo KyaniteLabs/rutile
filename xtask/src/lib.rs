@@ -73,7 +73,7 @@ pub mod cli {
             #[command(subcommand)]
             command: MetricsCommand,
         },
-        #[cfg(unix)]
+        #[cfg(target_os = "macos")]
         NativeSmoke {
             #[arg(long)]
             binary: PathBuf,
