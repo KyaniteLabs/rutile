@@ -3361,7 +3361,9 @@ fn build_window(
                     height: height.max(0) as u32,
                 }),
             );
-            let _ = session.borrow().save_session_state(&state);
+            if let Err(error) = session.borrow().save_session_state(&state) {
+                eprintln!("rutile: session-state save failed: {error}");
+            }
 
             session.borrow_mut().close();
             native_web.borrow_mut().close();
@@ -3437,7 +3439,11 @@ fn build_window(
                     started,
                 );
                 if let Some(selection) = restore.selection {
-                    let _ = editor_adapter.borrow().set_selection(selection);
+                    if let Err(error) = editor_adapter.borrow().set_selection(selection) {
+                        eprintln!(
+                            "rutile: set_selection failed after restore; view resyncs on next render: {error}"
+                        );
+                    }
                 }
             }
         }
