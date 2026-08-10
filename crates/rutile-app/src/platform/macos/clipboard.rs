@@ -2,6 +2,34 @@ use objc2_app_kit::{NSPasteboard, NSPasteboardTypeHTML, NSPasteboardTypeString};
 use objc2_foundation::NSString;
 
 use super::MacError;
+/// Both pasteboard flavors read in a single pasteboard interaction, so smart
+/// paste can fall back to plain text when HTML is present but unconvertible
+/// (H-L4-1). `None` for a flavor means that type was not present.
+pub struct PasteFlavors {
+    pub html: Option<String>,
+    pub plain: Option<String>,
+}
+
+/// Reads BOTH `NSPasteboardTypeHTML` and `NSPasteboardTypeString` from the
+/// general pasteboard in one interaction (H-L4-1). If BOTH are `None`, returns
+/// the same empty-pasteboard error [`read_paste_text`] uses.
+pub fn read_paste_flavors() -> Result<PasteFlavors, MacError> {
+    let pasteboard = NSPasteboard::generalPasteboard();
+    let html_type = unsafe { NSPasteboardTypeHTML };
+    let string_type = unsafe { NSPasteboardTypeString };
+    let html = pasteboard
+        .stringForType(html_type)
+        .map(|value| value.to_string());
+    let plain = pasteboard
+        .stringForType(string_type)
+        .map(|value| value.to_string());
+    if html.is_none() && plain.is_none() {
+        return Err(MacError::Native(
+            "pasteboard is empty or unavailable".into(),
+        ));
+    }
+    Ok(PasteFlavors { html, plain })
+}
 
 /// Writes HTML and plain-text flavors to the general pasteboard (MAC-008).
 pub fn write_html(html: &str) -> Result<(), MacError> {
