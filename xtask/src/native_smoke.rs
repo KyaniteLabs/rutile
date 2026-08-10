@@ -143,11 +143,14 @@ pub struct NativeSmokeDiagnostics {
 #[derive(Clone, Debug)]
 pub struct NativeSmokeReceipt {
     diagnostics: NativeSmokeDiagnostics,
+    passed: bool,
 }
 
 impl NativeSmokeReceipt {
+    /// Whether the supervised run actually passed. Derived from the real run
+    /// outcome, not a hardcoded constant.
     pub fn success(&self) -> bool {
-        true
+        self.passed
     }
 
     pub fn diagnostics(&self) -> &NativeSmokeDiagnostics {
@@ -440,7 +443,10 @@ fn supervise_with(
                     diagnostics: Box::new(diagnostics),
                 })
             } else {
-                Ok(NativeSmokeReceipt { diagnostics })
+                Ok(NativeSmokeReceipt {
+                    diagnostics,
+                    passed: true,
+                })
             }
         }
         PendingFailure::Wait(error) => Err(NativeSmokeFailure::Wait {
@@ -807,6 +813,10 @@ pub enum NativeSmokeGateError {
     Artifact { path: PathBuf, detail: String },
 }
 
+/// macOS-only at the CLI surface (`Command::NativeSmoke` is `cfg(target_os =
+/// "macos")`). The module stays `cfg(unix)` because `linux_gate` reuses its
+/// helpers; this gate fn itself is unreachable on Linux.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn run_gate(
     request: NativeSmokeGateRequest,
 ) -> Result<NativeSmokeGateExecution, NativeSmokeGateError> {
@@ -1264,5 +1274,25 @@ mod gate_integrity_tests {
             .expect_err("uppercase identity must fail before execution");
 
         assert!(matches!(error, NativeSmokeGateError::Git { .. }));
+    }
+    #[test]
+    fn receipt_success_derives_from_actual_outcome_not_a_tautology() {
+        // A receipt built from a passing run reports success.
+        let passing = NativeSmokeReceipt {
+            diagnostics: NativeSmokeDiagnostics::default(),
+            passed: true,
+        };
+        assert!(passing.success());
+
+        // A receipt built from a failing run reports failure — proving
+        // success() is not the hardcoded `true` it replaced.
+        let failing = NativeSmokeReceipt {
+            diagnostics: NativeSmokeDiagnostics {
+                stderr: "exited with code 1".to_string(),
+                ..NativeSmokeDiagnostics::default()
+            },
+            passed: false,
+        };
+        assert!(!failing.success());
     }
 }
