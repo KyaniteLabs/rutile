@@ -147,8 +147,11 @@ pub struct NativeSmokeReceipt {
 }
 
 impl NativeSmokeReceipt {
-    /// Whether the supervised run actually passed. Derived from the real run
-    /// outcome, not a hardcoded constant.
+    /// Whether the supervised run actually passed. Fail-closed: this receipt is
+    /// only constructed on the success path (a failed run returns Err before
+    /// reaching construction), so `passed` is true at the production call site;
+    /// the field exists so tests can assert `success()` reflects a real outcome
+    /// rather than a hardcoded constant (L2-001).
     pub fn success(&self) -> bool {
         self.passed
     }

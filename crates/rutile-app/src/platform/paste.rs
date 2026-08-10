@@ -40,15 +40,20 @@ pub fn resolve_paste_text(
     match (html, plain) {
         (None, None) => Err("clipboard is empty"),
         (None, Some(p)) => Ok(PasteText::Plain(p.to_owned())),
-        (Some(h), _) => match convert(h) {
-            Ok(md) => Ok(PasteText::Markdown(md)),
-            Err(()) => match plain {
-                Some(p) => Ok(PasteText::Plain(p.to_owned())),
-                None => Err(
-                    "clipboard html could not be converted and no plain-text flavor is available",
-                ),
-            },
-        },
+        (Some(h), _) => {
+            // Convert HTML; an empty result is treated as a rejection so we
+            // never insert nothing when a plain-text flavor is available.
+            let markdown = convert(h).ok().filter(|md| !md.is_empty());
+            match markdown {
+                Some(md) => Ok(PasteText::Markdown(md)),
+                None => match plain {
+                    Some(p) => Ok(PasteText::Plain(p.to_owned())),
+                    None => Err(
+                        "clipboard html could not be converted and no plain-text flavor is available",
+                    ),
+                },
+            }
+        }
     }
 }
 
@@ -174,6 +179,16 @@ mod tests {
     // -----------------------------------------------------------------------
     // classify_recovery — all four tiers + the Ok(None) first-run.
     // -----------------------------------------------------------------------
+
+    #[test]
+    fn resolve_paste_plain_fallback_when_html_converts_to_empty_and_plain_available() {
+        // Boundary edge: html=Some("") converts to Ok("") -> empty markdown must
+        // NOT be inserted when a plain flavor is available; fall back to plain
+        // rather than inserting nothing.
+        let empty_ok = |_: &str| Ok::<String, ()>(String::new());
+        let result = resolve_paste_text(Some(""), Some("real plain"), empty_ok);
+        assert_eq!(result, Ok(PasteText::Plain("real plain".to_owned())));
+    }
 
     #[test]
     fn classify_recovery_data_loss_when_create_dir_fails() {
