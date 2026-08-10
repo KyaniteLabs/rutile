@@ -1080,6 +1080,20 @@ fn read_regular_nofollow(_path: &Path, _max_bytes: u64) -> Result<Vec<u8>, ReadF
 /// Resolve a repo-relative path under `root`, refusing symlinked components so
 /// no symlinked directory can redirect the read outside the evidence tree.
 /// `rel` must already pass [`is_safe_path`] (no `..`, no absolute, safe chars).
+///
+/// # TOCTOU residual (M2, documentation verdict)
+///
+/// This walk re-validates each component with `symlink_metadata` and rejects a
+/// symlinked leaf or intermediate directory, but it cannot make the final read
+/// atomic on its own — it only produces a resolved path. The actual read of the
+/// resolved path is performed by [`read_regular_nofollow`], which opens the
+/// FINAL path component with `O_NOFOLLOW` + `fstat` and rejects symlinks /
+/// non-regular files. So the final read IS O_NOFOLLOW-safe: a symlink swapped
+/// onto the leaf between this walk and the read is rejected at open time. The
+/// only residual is an ancestor-directory symlink swap between this walk's
+/// `symlink_metadata` and the `O_NOFOLLOW` open (an intermediate directory that
+/// was a real dir during the walk is replaced by a symlink before the read),
+/// which would require write access to the evidence root mid-binding.
 fn resolve_under_root(root: &Path, rel: &str) -> Result<PathBuf, EvidenceBindError> {
     let mut current = root.to_path_buf();
     for component in rel.split('/') {

@@ -882,6 +882,10 @@ fn matches_octet_range(field: &str, lo: u16, hi: u16) -> bool {
     if !is_schema_octet(field) {
         return false;
     }
+    // SAFETY (documented invariant, M5-site-3): the parse cannot fail because
+    // `field` is guarded above by `is_schema_octet`, which guarantees field is
+    // 1-3 ASCII digits — always a valid u16. Enforced at:
+    // readiness.rs `is_schema_octet` (the immediately-preceding guard).
     let value = field.parse::<u16>().expect("1-3 ASCII digits fit in u16");
     (lo..=hi).contains(&value)
 }
