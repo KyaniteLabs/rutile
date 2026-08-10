@@ -41,11 +41,7 @@ pub mod cli {
     use clap::{Parser, Subcommand, ValueEnum};
 
     #[derive(Parser)]
-    #[command(
-        name = "xtask",
-        version,
-        about = "Rutile build and evidence driver"
-    )]
+    #[command(name = "xtask", version, about = "Rutile build and evidence driver")]
     pub struct Cli {
         #[command(subcommand)]
         pub command: Command,

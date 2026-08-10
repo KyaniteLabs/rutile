@@ -7,15 +7,15 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use rutile_app::platform::macos::{
-    AppKitMainThread, MacOpenRequest, MacUserEvent, ProductSession, bind_open_proxy,
-    forward_open_urls,
-};
 use iced_winit::winit::application::ApplicationHandler;
 use iced_winit::winit::event::WindowEvent;
 use iced_winit::winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use iced_winit::winit::platform::run_on_demand::EventLoopExtRunOnDemand;
 use iced_winit::winit::window::WindowId;
+use rutile_app::platform::macos::{
+    AppKitMainThread, MacOpenRequest, MacUserEvent, ProductSession, bind_open_proxy,
+    forward_open_urls,
+};
 
 fn main() {
     if let Err(error) = run_proof() {

@@ -406,10 +406,7 @@ fn native_smoke_provenance_is_hermetic_against_inherited_git_env() {
         "#!/bin/sh\n[ -n \"$GIT_DIR\" ] && { printf 'GIT_DIR leaked: %s' \"$GIT_DIR\" >&2; exit 99; }\n[ -n \"$GIT_WORK_TREE\" ] && { printf 'GIT_WORK_TREE leaked: %s' \"$GIT_WORK_TREE\" >&2; exit 99; }\nif [ -n \"$GIT_CONFIG_GLOBAL\" ] && [ \"$GIT_CONFIG_GLOBAL\" != \"/dev/null\" ]; then printf 'GIT_CONFIG_GLOBAL leaked: %s' \"$GIT_CONFIG_GLOBAL\" >&2; exit 99; fi\ncase \"$*\" in\n  'rev-parse HEAD') printf '%s\\n' '0123456789abcdef0123456789abcdef01234567' ;;\n  'rev-parse HEAD^{tree}') printf '%s\\n' '0123456789abcdef0123456789abcdef01234567' ;;\n  'status --porcelain --untracked-files=all') printf '%s' '' ;;\n  *) exit 47 ;;\nesac\n",
     );
     let binary = root.path().join("fake-rutile");
-    write_executable(
-        &binary,
-        "#!/bin/sh\nprintf 'rutile-native-smoke-ok\\n'\n",
-    );
+    write_executable(&binary, "#!/bin/sh\nprintf 'rutile-native-smoke-ok\\n'\n");
     let evidence = root.path().join("evidence");
     let path = format!("{}:{}", tools.display(), std::env::var("PATH").unwrap());
 
@@ -636,10 +633,7 @@ fn native_smoke_reruns_create_distinct_evidence_runs_without_overwriting_failure
     let first_report_path = gate_report_paths(&evidence).pop().expect("first report");
     let first_report = fs::read(&first_report_path).unwrap();
 
-    write_executable(
-        &binary,
-        "#!/bin/sh\nprintf 'rutile-native-smoke-ok\\n'\n",
-    );
+    write_executable(&binary, "#!/bin/sh\nprintf 'rutile-native-smoke-ok\\n'\n");
     let second = ProcessCommand::new(env!("CARGO_BIN_EXE_xtask"))
         .args(["native-smoke", "--binary"])
         .arg(&binary)
@@ -771,10 +765,7 @@ fn native_smoke_wrapper_requires_profile_and_rejects_lower_overrides() {
         String::from_utf8_lossy(&valid.stderr)
     );
     let calls = fs::read_to_string(cargo_log).unwrap();
-    assert!(
-        calls
-            .contains("build --locked -p rutile-app --features macos-shell --bin rutile")
-    );
+    assert!(calls.contains("build --locked -p rutile-app --features macos-shell --bin rutile"));
     assert!(calls.contains("run --locked -p xtask --bin xtask -- native-smoke"));
     assert!(calls.contains("--profile release --repeat 50"));
 }

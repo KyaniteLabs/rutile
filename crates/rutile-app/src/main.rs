@@ -19,9 +19,8 @@ fn main() {
     }
 
     #[cfg(all(target_os = "macos", feature = "macos-shell"))]
-    let result = {
-        rutile_app::platform::macos::run_cli(path, smoke).map_err(|error| error.to_string())
-    };
+    let result =
+        { rutile_app::platform::macos::run_cli(path, smoke).map_err(|error| error.to_string()) };
 
     #[cfg(all(target_os = "linux", feature = "linux-gtk"))]
     let result = {

@@ -3,8 +3,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
-use rutile_protocol::{PreviewEventV1, RenderUrl};
 use gtk::prelude::*;
+use rutile_protocol::{PreviewEventV1, RenderUrl};
 use sourceview4::prelude::*;
 use wry::http::header::{CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE};
 use wry::http::{Response, StatusCode};

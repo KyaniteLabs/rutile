@@ -237,7 +237,10 @@ fn validate_pinned_identity(row: &DispatchRow) -> Result<(), String> {
 }
 
 fn expected_probe_path(runner_id: &str) -> Option<&'static str> {
-    if matches!(runner_id, "rutile-macos-arm64-v1" | "rutile-macos-x86_64-v1") {
+    if matches!(
+        runner_id,
+        "rutile-macos-arm64-v1" | "rutile-macos-x86_64-v1"
+    ) {
         Some("/Library/Application Support/Rutile Runner/bin/rutile-runner-probe")
     } else if matches!(
         runner_id,

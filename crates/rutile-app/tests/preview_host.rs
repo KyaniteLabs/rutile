@@ -62,9 +62,7 @@ fn fixed_assets_and_document_have_exact_security_headers() {
     let css = host.serve(&SchemeRequest::get(
         "rutile://preview/v1/assets/preview.css",
     ));
-    let js = host.serve(&SchemeRequest::get(
-        "rutile://preview/v1/assets/bridge.js",
-    ));
+    let js = host.serve(&SchemeRequest::get("rutile://preview/v1/assets/bridge.js"));
     assert_eq!(css.header("content-type"), Some("text/css"));
     assert_eq!(js.header("content-type"), Some("text/javascript"));
     assert!(

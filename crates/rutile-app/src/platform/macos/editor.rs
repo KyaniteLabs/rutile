@@ -1,13 +1,13 @@
 use std::ops::Range;
 use std::sync::Arc;
 
+use iced_widget::text_editor;
 use rutile_core::{
     AdapterCommitId, ChangeSet, CompositionCancelReason, CompositionTracker, DocumentSnapshot,
     Edit, EditTransaction, EditorAdapter, EditorCommit, EditorError, EditorEvent, EditorEventSink,
     LocalCommitRejection, Selection, StaleRevision, TransactionKind,
 };
 use rutile_types::{InteractionId, Revision};
-use iced_widget::text_editor;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct IcedAdapterStats {

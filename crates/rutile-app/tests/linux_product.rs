@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use gtk::prelude::*;
 use rutile_app::app::{AppEffect, NoticeSeverity};
 use rutile_app::app::{CloseDecision, CloseOutcome};
 use rutile_app::brand::STARTER_DOCUMENT;
@@ -17,7 +18,6 @@ use rutile_core::{
     FindDirection, FindQuery, FormatCommand, MatchMode, ScrollClock, Selection, TransactionKind,
     apply_editor_commit, html_to_markdown,
 };
-use gtk::prelude::*;
 
 #[test]
 fn format_command_bolds_the_selection_through_the_shared_engine() {
@@ -78,10 +78,8 @@ fn smart_paste_converts_clipboard_html_to_markdown_before_insert() {
 
 #[test]
 fn export_html_is_self_contained_and_scriptless() {
-    let directory = std::env::temp_dir().join(format!(
-        "rutile-linux-export-test-{}",
-        std::process::id()
-    ));
+    let directory =
+        std::env::temp_dir().join(format!("rutile-linux-export-test-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("note.html");
 
@@ -151,10 +149,8 @@ fn counts_report_words_and_characters() {
 
 #[test]
 fn autosave_then_recover_restores_the_unsaved_buffer() {
-    let directory = std::env::temp_dir().join(format!(
-        "rutile-linux-autosave-test-{}",
-        std::process::id()
-    ));
+    let directory =
+        std::env::temp_dir().join(format!("rutile-linux-autosave-test-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
 
     let mut writer = LinuxProductSession::new().unwrap();
@@ -183,10 +179,8 @@ fn autosave_then_recover_restores_the_unsaved_buffer() {
 
 #[test]
 fn session_state_round_trips_through_the_store() {
-    let directory = std::env::temp_dir().join(format!(
-        "rutile-linux-session-test-{}",
-        std::process::id()
-    ));
+    let directory =
+        std::env::temp_dir().join(format!("rutile-linux-session-test-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let file = directory.join("note.md");
 
@@ -241,10 +235,8 @@ fn product_session_edits_through_the_bounded_renderer_and_stages_preview() {
 
 #[test]
 fn product_session_can_create_save_reopen_and_close() {
-    let directory = std::env::temp_dir().join(format!(
-        "rutile-linux-product-test-{}",
-        std::process::id()
-    ));
+    let directory =
+        std::env::temp_dir().join(format!("rutile-linux-product-test-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("note.md");
 
@@ -265,10 +257,8 @@ fn product_session_can_create_save_reopen_and_close() {
 
 #[test]
 fn session_detects_and_resolves_external_file_changes_through_the_reducer() {
-    let directory = std::env::temp_dir().join(format!(
-        "rutile-linux-external-test-{}",
-        std::process::id()
-    ));
+    let directory =
+        std::env::temp_dir().join(format!("rutile-linux-external-test-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("watched.md");
     let copy = directory.join("local-copy.md");
@@ -351,17 +341,16 @@ fn scroll_sink_script_contains_only_the_typed_delivery() {
     let render = rutile_protocol::RenderUrl::new(7, [0x22; 16]);
     let url = format!("rutile://preview{}", render.document_path());
     host.stage_document(render, page).unwrap();
-    assert!(host.allow_navigation(
-        &url,
-        rutile_app::preview_host::NavigationKind::AppInitiated
-    ));
+    assert!(host.allow_navigation(&url, rutile_app::preview_host::NavigationKind::AppInitiated));
 
     let mut capture = Capture::default();
     host.deliver_scroll_to(&mut capture, 7, 12, 9).unwrap();
     let script = capture.0.unwrap();
-    assert!(script.starts_with(
-        "window.__rutileReceiveScrollTo(new TextDecoder().decode(new Uint8Array(["
-    ));
+    assert!(
+        script.starts_with(
+            "window.__rutileReceiveScrollTo(new TextDecoder().decode(new Uint8Array(["
+        )
+    );
     assert!(!script.contains("eval("));
     assert!(!script.contains("saved from GTK"));
 }
@@ -624,10 +613,8 @@ fn assert_gtk_ime_commit_and_stale_preedit() {
 
 #[test]
 fn product_session_close_decision_respects_dirty_state_and_save_path() {
-    let directory = std::env::temp_dir().join(format!(
-        "rutile-linux-close-test-{}",
-        std::process::id()
-    ));
+    let directory =
+        std::env::temp_dir().join(format!("rutile-linux-close-test-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("note.md");
     let untitled = directory.join("untitled.md");
@@ -763,10 +750,8 @@ fn save_failure_notice_survives_subsequent_poll_state() {
 
 #[test]
 fn open_via_shared_command_loads_document_and_schedules_render() {
-    let directory = std::env::temp_dir().join(format!(
-        "rutile-linux-shared-open-{}",
-        std::process::id()
-    ));
+    let directory =
+        std::env::temp_dir().join(format!("rutile-linux-shared-open-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("shared-open.md");
     std::fs::write(&path, "shared open bytes").unwrap();

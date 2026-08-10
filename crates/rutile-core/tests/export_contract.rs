@@ -305,10 +305,7 @@ fn render_export_page_produces_a_self_contained_themed_document() {
 #[test]
 fn render_export_page_uses_a_default_title_when_absent() {
     let page = export("plain body", None);
-    assert!(
-        page.as_html()
-            .contains("<title>Rutile document</title>")
-    );
+    assert!(page.as_html().contains("<title>Rutile document</title>"));
 }
 
 #[test]

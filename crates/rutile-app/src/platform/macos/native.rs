@@ -7,12 +7,6 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use rutile_core::{
-    ChangeSet, CompositionCancelReason, Counts, EditorAdapter, EditorEvent, FindDirection,
-    FindQuery, FormatCommand, MatchMode, RecoveredDocument, ScrollClock, Selection,
-    SessionWindowV1, html_to_markdown,
-};
-use rutile_protocol::{PreviewEventV1, ProtocolError};
 use iced_widget::text_editor;
 use iced_winit::Clipboard;
 use iced_winit::conversion;
@@ -29,6 +23,12 @@ use objc2_app_kit::{
     NSModalResponseOK, NSOpenPanel, NSSavePanel,
 };
 use objc2_foundation::NSString;
+use rutile_core::{
+    ChangeSet, CompositionCancelReason, Counts, EditorAdapter, EditorEvent, FindDirection,
+    FindQuery, FormatCommand, MatchMode, RecoveredDocument, ScrollClock, Selection,
+    SessionWindowV1, html_to_markdown,
+};
+use rutile_protocol::{PreviewEventV1, ProtocolError};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, OwnedDisplayHandle};
@@ -206,10 +206,7 @@ impl ProductRunner {
             smoke,
             smoke_stage: 0,
             smoke_path: smoke.then(|| {
-                std::env::temp_dir().join(format!(
-                    "rutile-native-smoke-{}.md",
-                    std::process::id()
-                ))
+                std::env::temp_dir().join(format!("rutile-native-smoke-{}.md", std::process::id()))
             }),
             deadline: Instant::now() + SMOKE_TIMEOUT,
             failure: None,

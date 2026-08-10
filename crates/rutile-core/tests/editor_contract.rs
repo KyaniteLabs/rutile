@@ -287,11 +287,7 @@ fn rejected_local_ime_restores_authoritative_snapshot_and_never_paints() {
     let (sink, _events) = capture_sink();
     adapter.set_event_sink(sink);
     adapter.composition_started(3, 0..4);
-    assert!(adapter.native_ime_commit(
-        3,
-        21,
-        &"x".repeat(rutile_core::MAX_DOCUMENT_BYTES + 1)
-    ));
+    assert!(adapter.native_ime_commit(3, 21, &"x".repeat(rutile_core::MAX_DOCUMENT_BYTES + 1)));
     let commit = EditorCommit::Ime(ImeCommit {
         composition_id: 3,
         base_revision: 0,

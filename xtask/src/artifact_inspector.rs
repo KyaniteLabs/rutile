@@ -586,9 +586,7 @@ impl ArtifactInspector {
                     .get("rpm_runtime_verified")
                     .and_then(|value| value.as_bool())
                     == Some(true)
-                && root
-                    .join("share/applications/rutile.desktop")
-                    .is_file()
+                && root.join("share/applications/rutile.desktop").is_file()
                 && root
                     .join("share/mime/packages/rutile-markdown.xml")
                     .is_file()

@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 use std::ops::Range;
 
-use rutile_types::{Revision, SafeLinkTarget};
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag};
+use rutile_types::{Revision, SafeLinkTarget};
 use thiserror::Error;
 
 use crate::security::{Attribute, Class, SafeNode, SourceAttributes, Tag as SafeTag};

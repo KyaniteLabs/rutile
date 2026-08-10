@@ -473,11 +473,8 @@ fn prepares_rpm_staging_with_locked_requirements() {
         bytes
     );
 
-    let plan = rpm_package_plan(
-        &receipt.output,
-        &receipt.output.join("SPECS/rutile.spec"),
-    )
-    .unwrap();
+    let plan =
+        rpm_package_plan(&receipt.output, &receipt.output.join("SPECS/rutile.spec")).unwrap();
     assert_eq!(plan.program, "rpmbuild");
     assert!(
         plan.args
@@ -1302,12 +1299,8 @@ fn rls005_deb_staging_has_no_builder_paths() {
     assert_no_builder_paths("deb manifest", &manifest);
     assert!(manifest.contains("\"license\": \"MIT\""));
 
-    let sbom = fs::read_to_string(
-        receipt
-            .output
-            .join("usr/share/doc/rutile/sbom.spdx.json"),
-    )
-    .unwrap();
+    let sbom =
+        fs::read_to_string(receipt.output.join("usr/share/doc/rutile/sbom.spdx.json")).unwrap();
     assert_no_builder_paths("deb sbom", &sbom);
 
     // Platform assets must be installed to their freedesktop locations.
@@ -1489,12 +1482,7 @@ fn sbom_includes_license_and_dependency_inventory() {
     .unwrap();
 
     let sbom: serde_json::Value = serde_json::from_slice(
-        &fs::read(
-            receipt
-                .output
-                .join("usr/share/doc/rutile/sbom.spdx.json"),
-        )
-        .unwrap(),
+        &fs::read(receipt.output.join("usr/share/doc/rutile/sbom.spdx.json")).unwrap(),
     )
     .unwrap();
     assert_eq!(sbom["spdx_version"], "SPDX-2.3");

@@ -2,6 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use iced_widget::text_editor;
 use rutile_app::actions::SessionRestore;
 use rutile_app::app::{CloseDecision, CloseOutcome};
 use rutile_app::platform::macos::{
@@ -14,7 +15,6 @@ use rutile_core::{
     FindQuery, FormatCommand, MatchMode, ScrollClock, Selection, SessionWindowV1, SmartEnterAction,
     TransactionKind, apply_editor_commit,
 };
-use iced_widget::text_editor;
 
 #[derive(Clone)]
 struct DropSpy {
@@ -113,10 +113,8 @@ fn shell_drops_wkwebview_then_web_context_then_native_window() {
 
 #[test]
 fn product_session_edits_renders_saves_and_reopens_exact_utf8() {
-    let directory = std::env::temp_dir().join(format!(
-        "rutile-macos-product-test-{}",
-        std::process::id()
-    ));
+    let directory =
+        std::env::temp_dir().join(format!("rutile-macos-product-test-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("note.md");
 
@@ -329,8 +327,7 @@ fn dirty_untitled_close_never_discards_without_an_explicit_decision() {
 
 #[test]
 fn dirty_untitled_close_saves_exact_utf8_before_closing() {
-    let directory =
-        std::env::temp_dir().join(format!("rutile-close-test-{}", std::process::id()));
+    let directory = std::env::temp_dir().join(format!("rutile-close-test-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("saved.md");
     let mut session = ProductSession::new_in_memory("draft").unwrap();
