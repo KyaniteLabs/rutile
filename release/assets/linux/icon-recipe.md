@@ -1,7 +1,7 @@
 # Linux icon + desktop-integration recipe
 
 This directory holds the source Linux desktop-integration assets for
-Rutile / Rutile 0.2.0. It is consumed by Wave 3 packaging hardening
+Rutile 0.2.0. It is consumed by Wave 3 packaging hardening
 (W3-C) when the deb / rpm staging layouts are taught to install desktop,
 metainfo, MIME, and icon files.
 

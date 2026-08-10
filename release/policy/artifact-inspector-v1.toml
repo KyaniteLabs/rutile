@@ -13,8 +13,6 @@ test_control_environment = [
   "RUTILE_SMOKE_AUTOCLOSE_MS",
   "RUTILE_STARTUP_TRACE",
   "RUTILE_TEST_CONTROL",
-  "RUTILE_AUTOMATED_TEST",
-  "RUTILE_TEST_CONTROL",
 ]
 
 forbidden_patterns = [
@@ -24,8 +22,6 @@ forbidden_patterns = [
   "RUTILE_PRODUCT_FUNCTIONAL_PATH",
   "RUTILE_SMOKE_AUTOCLOSE_MS",
   "RUTILE_STARTUP_TRACE",
-  "RUTILE_TEST_CONTROL",
-  "RUTILE_AUTOMATED_TEST",
   "RUTILE_TEST_CONTROL",
   "/Users/",
   "/home/",

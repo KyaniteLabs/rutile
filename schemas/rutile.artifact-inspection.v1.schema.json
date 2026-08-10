@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.kyanitelabs.example/rutile.artifact-inspection.v1.schema.json",
+  "$id": "https://rutile.local/schemas/rutile.artifact-inspection.v1.schema.json",
   "title": "Rutile artifact inspection result v1",
   "type": "object",
   "additionalProperties": false,

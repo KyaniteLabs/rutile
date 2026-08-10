@@ -4,7 +4,7 @@
 
 Rutile is a lightweight native Markdown editor written in Rust. It combines an incremental source editor with a live system-webview preview, without Electron, cloud services, plugins, or an IDE feature stack.
 
-> **Naming:** `Rutile` is the user-facing product name. Migration-sensitive crate names, the `rutile` executable, Linux package names, bundle identifiers, protocol schemes, and historical paths intentionally remain `rutile`.
+> **Naming:** Product and technical naming are unified as **Rutile** — crates, the `rutile` binary, the `rutile://` preview scheme, bundle identifier `com.kyanitelabs.rutile`, and Linux package names all use Rutile (unified in PR #57 from the earlier `feathermark` technical identifiers; no shipped installs predate the rename).
 
 ## Current status
 
