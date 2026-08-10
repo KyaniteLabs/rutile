@@ -1,10 +1,10 @@
 # Rutile Working Brand Implementation Plan
 
-> **Status: Completed historical plan.** The user-facing brand contract and packaging display names are implemented in 0.2.0; technical identifiers remain unchanged by design.
+> **Status: Superseded historical plan.** The user-facing brand contract and packaging display names shipped in 0.2.0. PR #57 later unified product and technical naming to Rutile (crates, binary, `rutile://` scheme, bundle/package IDs), so the "preserve technical identifiers" constraints below are historical, not current.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Rebrand the completed native beta’s current user-facing surfaces from Rutile to Rutile while preserving migration-sensitive technical identifiers.
+**Goal:** Rebrand the completed native beta's user-facing surfaces to Rutile (display names only; technical identifiers were preserved at the time and later unified in PR #57).
 
 **Architecture:** Centralize application-facing copy in `crates/rutile-app/src/brand.rs`, consume it from both platform shells, and update only display metadata in the packaging layer. Keep crate, binary, protocol, schema, app ID, package ID, runner, path, and historical evidence names unchanged.
 

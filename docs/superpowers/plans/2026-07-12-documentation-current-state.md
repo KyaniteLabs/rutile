@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Product-facing name is `Rutile`; migration-sensitive crate, binary, package, protocol, and path identifiers remain `rutile`.
+- Product-facing name is `Rutile`. (Historical constraint: at the time of this 0.2.0 documentation pass, migration-sensitive crate, binary, package, protocol, and path identifiers were held at `rutile`; PR #57 later unified them to Rutile.)
 - Current release is `0.2.0` at tag `v0.2.0`; historical release evidence remains unchanged.
 - No product-code behavior changes are authorized by this documentation pass.
 - Existing untracked `.omx/` state must remain untouched.

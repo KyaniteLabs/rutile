@@ -1,6 +1,6 @@
 # Rutile Working Brand Design
 
-> **Status: Implemented historical design decision.** Rutile remains the user-facing name in 0.2.0 while technical `rutile` identifiers remain intentionally stable.
+> **Status: Superseded historical design decision.** Rutile was the user-facing name in 0.2.0 while technical identifiers were held stable; PR #57 later unified product and technical naming to Rutile, so the "remain `rutile`" stability boundary below is historical, not current.
 
 **Status:** Approved by the user on 2026-07-10 with “just do rutile for now” and “go.”
 
