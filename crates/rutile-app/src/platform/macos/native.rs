@@ -144,6 +144,13 @@ struct ProductRunner {
     last_autosave: Instant,
     pending_recovery: Option<RecoveredDocument>,
     pending_restore: Option<SessionRestore>,
+    /// Deferred crash-recovery notice captured in the constructor (before the
+    /// event loop / window exist), drained into the durable notice reducer once
+    /// the window is live (H-L4-2).
+    pending_recovery_notice: Option<String>,
+    /// Once-per-session guard so transient autosave/recovery errors don't spam
+    /// the durable notice channel (H-L4-2).
+    autosave_notice_shown: bool,
     last_disk_poll: Instant,
     menu_installed: bool,
 }
@@ -170,23 +177,69 @@ impl ProductRunner {
 
         // Crash-recovery + session-restore setup (never in smoke, which owns a
         // deterministic proof flow and must not be perturbed by prior journals).
+        // H-L4-2: each step's error feeds `classify_recovery`; a DataLoss or
+        // Recoverable notice is deferred into `pending_recovery_notice` and
+        // flushed once the event loop / window are live (the constructor runs
+        // before the window exists, so `surface_error` cannot fire here).
+        // CosmeticLog (session-state load failure) is logged but not surfaced.
+        // The happy path — recover() Ok(None) first-run — stays silent.
         let mut pending_recovery = None;
         let mut pending_restore = None;
-        if !smoke
-            && let Some(dir) = autosave_dir()
-            && std::fs::create_dir_all(&dir).is_ok()
-            && session.bind_autosave(dir).is_ok()
-        {
-            // Offer recovery only when the journal holds content that differs
-            // from what actually loaded (otherwise every clean restart would
-            // prompt). Journal rotation on clean exit is a Wave 3 refinement.
-            pending_recovery =
-                session.recover().ok().flatten().filter(|recovered| {
-                    recovered.document.snapshot().to_string() != session.source()
-                });
-            if let Ok(Some(state)) = session.load_session_state() {
-                pending_restore = Some(session.restore_session(&state));
+        let mut pending_recovery_notice = None;
+        if !smoke {
+            let mut create_dir_or_bind_err: Option<String> = None;
+            let mut recover_err: Option<String> = None;
+            let mut recover_found = false;
+            let mut load_session_err: Option<String> = None;
+            if let Some(dir) = autosave_dir() {
+                if let Err(error) = std::fs::create_dir_all(&dir) {
+                    create_dir_or_bind_err =
+                        Some(format!("could not create autosave dir: {error}"));
+                } else if let Err(error) = session.bind_autosave(dir) {
+                    create_dir_or_bind_err = Some(format!("autosave bind failed: {error}"));
+                } else {
+                    // Offer recovery only when the journal holds content that
+                    // differs from what actually loaded (otherwise every clean
+                    // restart would prompt).
+                    match session.recover() {
+                        Ok(Some(recovered))
+                            if recovered.document.snapshot().to_string() != session.source() =>
+                        {
+                            pending_recovery = Some(recovered);
+                            recover_found = true;
+                        }
+                        Ok(_) => {}
+                        Err(error) => recover_err = Some(error.to_string()),
+                    }
+                    // Session restore runs independently of recovery outcome.
+                    match session.load_session_state() {
+                        Ok(Some(state)) => {
+                            pending_restore = Some(session.restore_session(&state));
+                        }
+                        Ok(None) => {}
+                        Err(error) => load_session_err = Some(error.to_string()),
+                    }
+                }
             }
+            let recover_result = match (recover_found, recover_err.as_deref()) {
+                (_, Some(e)) => Err(e),
+                (true, None) => Ok(Some("recovered")),
+                (false, None) => Ok(None),
+            };
+            let notice = crate::platform::paste::classify_recovery(
+                create_dir_or_bind_err.as_deref(),
+                recover_result,
+                load_session_err.as_deref(),
+            );
+            pending_recovery_notice = match notice {
+                Some(crate::platform::paste::RecoveryNotice::DataLoss(m))
+                | Some(crate::platform::paste::RecoveryNotice::Recoverable(m)) => Some(m),
+                Some(crate::platform::paste::RecoveryNotice::CosmeticLog(m)) => {
+                    eprintln!("rutile: session-state cosmetic warning: {m}");
+                    None
+                }
+                None => None,
+            };
         }
 
         Ok(Self {
@@ -226,6 +279,8 @@ impl ProductRunner {
             last_autosave: Instant::now(),
             pending_recovery,
             pending_restore,
+            pending_recovery_notice,
+            autosave_notice_shown: false,
             last_disk_poll: Instant::now(),
             menu_installed: false,
         })
@@ -787,22 +842,27 @@ impl ProductRunner {
         }
     }
 
-    /// Smart paste: convert clipboard HTML (`public.html`) via the core
-    /// `html_to_markdown` before insert, falling back to plain text when there
-    /// is no HTML flavor or the conversion is rejected.
+    /// Smart paste: read BOTH clipboard flavors (HTML + plain) in one
+    /// pasteboard interaction, convert HTML to Markdown, and fall back to the
+    /// plain-text flavor when HTML is absent or the conversion is rejected
+    /// (H-L4-1). Never inserts raw HTML markup.
     fn run_smart_paste(&mut self, event_loop: &ActiveEventLoop) {
-        let text = ProductSession::read_clipboard_paste_text()
-            .ok()
-            .and_then(|raw| {
-                if raw.trim_start().starts_with('<') {
-                    html_to_markdown(&raw).ok().or(Some(raw))
-                } else {
-                    Some(raw)
-                }
-            });
-        let Some(text) = text else {
-            self.surface_error("Paste failed: clipboard is empty or unavailable");
-            return;
+        let flavors = ProductSession::read_clipboard_paste_flavors();
+        let resolved = match flavors {
+            Ok(flavors) => crate::platform::paste::resolve_paste_text(
+                flavors.html.as_deref(),
+                flavors.plain.as_deref(),
+                |html| html_to_markdown(html).map_err(|_| ()),
+            ),
+            Err(_) => Err("Paste failed: clipboard is empty or unavailable"),
+        };
+        let text = match resolved {
+            Ok(crate::platform::paste::PasteText::Markdown(md)) => md,
+            Ok(crate::platform::paste::PasteText::Plain(plain)) => plain,
+            Err(message) => {
+                self.surface_error(message);
+                return;
+            }
         };
         // Route the paste through the shared AppState insert primitive and follow
         // it incrementally (same path as format/replace), unifying the reducer
@@ -1695,6 +1755,16 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
                 self.window = Some(window);
                 self.install_file_menu();
                 self.apply_restore(event_loop);
+                // H-L4-2: drain the deferred crash-recovery notice (captured in
+                // the constructor before the window existed) into the durable
+                // notice reducer now that the event loop is live. Once-per-
+                // session guard prevents transient errors from spamming.
+                if !self.autosave_notice_shown
+                    && let Some(message) = self.pending_recovery_notice.take()
+                {
+                    self.session.report_recovery_failure(message);
+                    self.autosave_notice_shown = true;
+                }
                 let has_recovery = self.pending_recovery.is_some();
                 if has_recovery && let Some(window) = &self.window {
                     // Always publish the pending-recovery status so the

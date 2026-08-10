@@ -1391,6 +1391,20 @@ impl ProductSession {
         })
     }
 
+    /// Reports a crash-recovery / autosave startup failure as a durable,
+    /// non-fatal notice (H-L4-2): the user learns recovery was disabled rather
+    /// than discovering it silently after a crash. Mirrors the Linux shell's
+    /// `report_restore_failure` via `SurfaceNotice` (not `MirrorFailed`, which
+    /// would trigger a spurious preview resync).
+    pub fn report_recovery_failure(&mut self, error: impl Into<String>) -> Vec<AppEffect> {
+        let error = error.into();
+        self.core.reduce(AppMessage::SurfaceNotice {
+            severity: NoticeSeverity::Warning,
+            message: format!("crash recovery degraded: {error}"),
+            source_error: error,
+        })
+    }
+
     pub fn complete_mirror_resync(&mut self, result: Result<(), String>) -> Vec<AppEffect> {
         self.core
             .app_mut()
@@ -1473,6 +1487,12 @@ impl ProductSession {
     /// Real pasteboard read for smart paste; fails when unavailable (MAC-008).
     pub fn read_clipboard_paste_text() -> Result<String, MacError> {
         clipboard::read_paste_text()
+    }
+
+    /// Real pasteboard read for smart paste returning BOTH flavors so the
+    /// pure resolver can pick plain text when HTML is unconvertible (H-L4-1).
+    pub fn read_clipboard_paste_flavors() -> Result<clipboard::PasteFlavors, MacError> {
+        clipboard::read_paste_flavors()
     }
 
     /// Dismiss a notice by id through the shared reducer.

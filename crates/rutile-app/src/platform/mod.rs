@@ -10,3 +10,4 @@ pub mod linux_gtk;
 
 #[cfg(feature = "macos-shell")]
 pub mod macos;
+pub mod paste;
