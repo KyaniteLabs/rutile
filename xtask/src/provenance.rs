@@ -274,8 +274,12 @@ fn measure_git_state(repo: &Path) -> Result<(String, bool), ProvenanceError> {
         )));
     }
 
-    let status = tool_process::git_isolated(repo, &["--no-replace-objects", "status", "--porcelain"], &[])
-        .map_err(|e| ProvenanceError::GitMeasurement(e.to_string()))?;
+    let status = tool_process::git_isolated(
+        repo,
+        &["--no-replace-objects", "status", "--porcelain"],
+        &[],
+    )
+    .map_err(|e| ProvenanceError::GitMeasurement(e.to_string()))?;
     if !status.status.success() {
         return Err(ProvenanceError::GitMeasurement(format!(
             "git status --porcelain exited {}",
@@ -343,13 +347,9 @@ fn canonicalize_features(raw: &[String]) -> Result<Vec<String>, ProvenanceError>
 }
 
 fn hash_candidate(path: &Path) -> Result<String, ProvenanceError> {
-    use std::fs::File;
     use std::io::Read;
 
-    let mut file = File::open(path).map_err(|e| ProvenanceError::CandidateHash {
-        path: path.to_owned(),
-        error: e.to_string(),
-    })?;
+    let mut file = open_candidate_nofollow(path)?;
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
     loop {
@@ -365,6 +365,62 @@ fn hash_candidate(path: &Path) -> Result<String, ProvenanceError> {
         hasher.update(&buffer[..read]);
     }
     Ok(hex::encode(hasher.finalize()))
+}
+
+/// Open the candidate artifact refusing symlinks and non-regular files
+/// (O_NOFOLLOW + fstat) so a symlinked candidate path cannot hash the wrong
+/// file. The candidate is a build artifact of unbounded size, so only the
+/// regular-file/symlink contract is enforced. Mirrors
+/// readiness_keystone::read_regular_file.
+#[cfg(unix)]
+fn open_candidate_nofollow(path: &Path) -> Result<std::fs::File, ProvenanceError> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    let c_path =
+        CString::new(path.as_os_str().as_bytes()).map_err(|_| ProvenanceError::CandidateHash {
+            path: path.to_owned(),
+            error: "input path is not valid".into(),
+        })?;
+    let fd = unsafe {
+        libc::open(
+            c_path.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0,
+        )
+    };
+    if fd < 0 {
+        return Err(ProvenanceError::CandidateHash {
+            path: path.to_owned(),
+            error: std::io::Error::last_os_error().to_string(),
+        });
+    }
+    let file = unsafe { std::fs::File::from_raw_fd(fd) };
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(file.as_raw_fd(), &mut stat) } < 0 {
+        return Err(ProvenanceError::CandidateHash {
+            path: path.to_owned(),
+            error: std::io::Error::last_os_error().to_string(),
+        });
+    }
+    if (stat.st_mode & libc::S_IFMT) != libc::S_IFREG {
+        return Err(ProvenanceError::CandidateHash {
+            path: path.to_owned(),
+            error: "candidate is not a regular file".into(),
+        });
+    }
+    Ok(file)
+}
+
+#[cfg(not(unix))]
+fn open_candidate_nofollow(path: &Path) -> Result<std::fs::File, ProvenanceError> {
+    // Fail closed: a non-Unix open cannot meet the O_NOFOLLOW + fstat
+    // symlink-rejection guarantee, so refuse rather than hash via a weaker path.
+    Err(ProvenanceError::CandidateHash {
+        path: path.to_owned(),
+        error: "candidate safe open is unix-only (O_NOFOLLOW + fstat)".into(),
+    })
 }
 
 fn measure_source_date_epoch() -> Result<u64, ProvenanceError> {
@@ -415,9 +471,18 @@ fn validate_target_root(target_root: &str) -> Result<(), ProvenanceError> {
 }
 
 fn measure_source_tag(repo: &Path) -> Option<String> {
-    let output =
-        tool_process::git_isolated(repo, &["--no-replace-objects", "describe", "--tags", "--exact-match", "HEAD"], &[])
-            .ok()?;
+    let output = tool_process::git_isolated(
+        repo,
+        &[
+            "--no-replace-objects",
+            "describe",
+            "--tags",
+            "--exact-match",
+            "HEAD",
+        ],
+        &[],
+    )
+    .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -493,12 +558,8 @@ mod tests {
             .unwrap()
             .status
             .success();
-        tool_process::git_isolated(
-            dir,
-            &["config", "user.email", "test@rutile.local"],
-            &[],
-        )
-        .unwrap();
+        tool_process::git_isolated(dir, &["config", "user.email", "test@rutile.local"], &[])
+            .unwrap();
         tool_process::git_isolated(dir, &["config", "user.name", "Test"], &[]).unwrap();
         fs::write(dir.join("README"), b"test").unwrap();
         tool_process::git_isolated(dir, &["add", "."], &[]).unwrap();

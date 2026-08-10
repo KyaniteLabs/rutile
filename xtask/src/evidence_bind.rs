@@ -1015,21 +1015,66 @@ impl std::fmt::Display for ReadFileError {
 }
 
 /// Read a file refusing symlinks, non-regular files, and oversize inputs.
+#[cfg(unix)]
 fn read_regular_nofollow(path: &Path, max_bytes: u64) -> Result<Vec<u8>, ReadFileError> {
-    let meta = std::fs::symlink_metadata(path).map_err(ReadFileError::Io)?;
-    if meta.is_symlink() {
-        return Err(ReadFileError::Symlink);
+    use std::ffi::CString;
+    use std::io::Read;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    // Open with O_NOFOLLOW + fstat so a symlink swapped in between a metadata
+    // check and the read (TOCTOU) cannot redirect the read. Mirrors
+    // readiness_keystone::read_regular_file.
+    let c_path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| ReadFileError::Io(std::io::Error::other("input path is not valid")))?;
+    let fd = unsafe {
+        libc::open(
+            c_path.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0,
+        )
+    };
+    if fd < 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(match err.raw_os_error() {
+            Some(libc::ELOOP) => ReadFileError::Symlink,
+            _ => ReadFileError::Io(err),
+        });
     }
-    if !meta.is_file() {
+    let file = unsafe { std::fs::File::from_raw_fd(fd) };
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(file.as_raw_fd(), &mut stat) } < 0 {
+        return Err(ReadFileError::Io(std::io::Error::last_os_error()));
+    }
+    if (stat.st_mode & libc::S_IFMT) != libc::S_IFREG {
         return Err(ReadFileError::NotRegular);
     }
-    if meta.len() > max_bytes {
+    if stat.st_size as u64 > max_bytes {
         return Err(ReadFileError::Oversize {
-            size: meta.len(),
+            size: stat.st_size as u64,
             max: max_bytes,
         });
     }
-    std::fs::read(path).map_err(ReadFileError::Io)
+    let mut bytes = Vec::new();
+    file.take(max_bytes + 1)
+        .read_to_end(&mut bytes)
+        .map_err(ReadFileError::Io)?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(ReadFileError::Oversize {
+            size: bytes.len() as u64,
+            max: max_bytes,
+        });
+    }
+    Ok(bytes)
+}
+
+#[cfg(not(unix))]
+fn read_regular_nofollow(_path: &Path, _max_bytes: u64) -> Result<Vec<u8>, ReadFileError> {
+    // Fail closed: the non-Unix metadata+open sequence cannot meet the same
+    // symlink-rejection guarantee as O_NOFOLLOW + fstat.
+    Err(ReadFileError::Io(std::io::Error::other(
+        "evidence safe file read is unix-only (O_NOFOLLOW + fstat)",
+    )))
 }
 
 /// Resolve a repo-relative path under `root`, refusing symlinked components so
