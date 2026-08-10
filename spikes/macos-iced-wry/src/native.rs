@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use rutile_protocol::{PreviewEventV1, RenderUrl};
 use iced_winit::winit;
+use rutile_protocol::{PreviewEventV1, RenderUrl};
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};

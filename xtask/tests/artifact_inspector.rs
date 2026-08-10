@@ -277,11 +277,7 @@ fn dmg_reader_inspects_a_real_hdiutil_dmg() {
     let contents = app.join("Contents");
     fs::create_dir_all(contents.join("MacOS")).unwrap();
     fs::create_dir_all(contents.join("Resources")).unwrap();
-    fs::write(
-        contents.join("MacOS/Rutile"),
-        b"#!/bin/sh\necho Rutile",
-    )
-    .unwrap();
+    fs::write(contents.join("MacOS/Rutile"), b"#!/bin/sh\necho Rutile").unwrap();
     fs::write(
         contents.join("Info.plist"),
         b"<?xml version=\"1.0\"?><plist version=\"1.0\"><dict>

@@ -3,8 +3,8 @@ use std::fmt;
 use std::io::{self, Write};
 use std::ops::Range;
 
-use rutile_types::Revision;
 use ropey::Rope;
+use rutile_types::Revision;
 use thiserror::Error;
 
 pub const MAX_DOCUMENT_BYTES: usize = 20 * 1024 * 1024;

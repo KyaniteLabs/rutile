@@ -57,10 +57,8 @@ const MACOS_DOCUMENT_TYPES_PLIST: &str = include_str!(concat!(
 ));
 const MACOS_APP_ICON: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/release-assets/AppIcon.icns"));
-const LINUX_DESKTOP_ENTRY: &str = include_str!(concat!(
-    env!("OUT_DIR"),
-    "/release-assets/rutile.desktop"
-));
+const LINUX_DESKTOP_ENTRY: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/release-assets/rutile.desktop"));
 const LINUX_APPDATA: &str = include_str!(concat!(
     env!("OUT_DIR"),
     "/release-assets/rutile.appdata.xml"
@@ -496,10 +494,7 @@ pub fn prepare_rpm_staging(
         &sources.join("rutile.appdata.xml"),
         LINUX_APPDATA.as_bytes(),
     )?;
-    write_new_file(
-        &sources.join("rutile-markdown.xml"),
-        LINUX_MIME.as_bytes(),
-    )?;
+    write_new_file(&sources.join("rutile-markdown.xml"), LINUX_MIME.as_bytes())?;
     let runtime_sonames: Vec<&str> = LINUX_RUNTIME_DEPENDENCIES
         .iter()
         .map(|dep| dep.soname)

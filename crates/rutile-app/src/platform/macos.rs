@@ -350,12 +350,7 @@ impl MacScrollController {
                 .map_err(|error| error.to_string())?
         } else {
             self.synchronizer
-                .handle_programmatic(
-                    revision,
-                    rutile_core::Pane::Preview,
-                    interaction_id,
-                    clock,
-                )
+                .handle_programmatic(revision, rutile_core::Pane::Preview, interaction_id, clock)
                 .map_err(|error| error.to_string())?
         };
         Ok(match outcome {
@@ -1291,12 +1286,12 @@ impl ProductSession {
                     .last_file
                     .as_ref()
                     .map(|p| p.to_string_lossy().into_owned()),
-                selection: restore.selection.map(|selection| {
-                    rutile_core::SessionSelectionV1 {
+                selection: restore
+                    .selection
+                    .map(|selection| rutile_core::SessionSelectionV1 {
                         anchor: selection.anchor as u64,
                         head: selection.head as u64,
-                    }
-                }),
+                    }),
                 top_visible_byte: restore.top_visible_byte.map(|b| b as u64),
                 window: restore.window,
                 recent_files: restore

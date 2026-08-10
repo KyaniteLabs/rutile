@@ -127,10 +127,7 @@ fn stale_editor_acknowledgement_cannot_roll_back_the_revision() {
 }
 
 fn disk_version(name: &str, source: &str) -> (std::path::PathBuf, rutile_core::DiskVersion) {
-    let path = std::env::temp_dir().join(format!(
-        "rutile-app-state-{name}-{}",
-        std::process::id()
-    ));
+    let path = std::env::temp_dir().join(format!("rutile-app-state-{name}-{}", std::process::id()));
     let document = Document::new(source).unwrap();
     let outcome = LocalFileService::new().save_atomic(&path, &document.snapshot());
     let disk = match outcome {

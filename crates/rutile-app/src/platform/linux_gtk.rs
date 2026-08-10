@@ -11,6 +11,9 @@ use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, sync_channel};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use gtk::gdk::keys::constants as keys;
+use gtk::gio::prelude::ApplicationExtManual;
+use gtk::prelude::*;
 use rutile_core::{
     AdapterCommitId, ChangeSet, CompositionCancelReason, CompositionTracker, Document, Edit,
     EditTransaction, EditorAdapter, EditorCommit, EditorError, EditorEvent, EditorEventSink,
@@ -26,9 +29,6 @@ use rutile_core::{
 };
 use rutile_protocol::RenderUrl;
 use rutile_types::{InteractionId, Revision};
-use gtk::gdk::keys::constants as keys;
-use gtk::gio::prelude::ApplicationExtManual;
-use gtk::prelude::*;
 use sourceview4::prelude::*;
 use wry::http::{Response, StatusCode};
 use wry::{NewWindowResponse, Rect, WebContext, WebView, WebViewBuilder, WebViewBuilderExtUnix};
@@ -831,12 +831,7 @@ impl LinuxScrollController {
                 .map_err(|error| error.to_string())?
         } else {
             self.synchronizer
-                .handle_programmatic(
-                    revision,
-                    rutile_core::Pane::Preview,
-                    interaction_id,
-                    clock,
-                )
+                .handle_programmatic(revision, rutile_core::Pane::Preview, interaction_id, clock)
                 .map_err(|error| error.to_string())?
         };
         Ok(match outcome {
@@ -860,12 +855,7 @@ impl LinuxScrollController {
     ) -> Result<LinuxScrollDispatch, String> {
         let outcome = self
             .synchronizer
-            .handle_programmatic(
-                revision,
-                rutile_core::Pane::Source,
-                interaction_id,
-                clock,
-            )
+            .handle_programmatic(revision, rutile_core::Pane::Source, interaction_id, clock)
             .map_err(|error| error.to_string())?;
         Ok(match outcome {
             ScrollOutcome::Suppressed(_) => LinuxScrollDispatch::Suppressed,
@@ -2726,9 +2716,7 @@ fn build_window(
     status_bar.set_margin_end(8);
     status_bar.set_margin_top(2);
     status_bar.set_margin_bottom(2);
-    status_bar
-        .style_context()
-        .add_class("rutile-statusbar");
+    status_bar.style_context().add_class("rutile-statusbar");
     // Dedicated status announcement region (G006 gap 4): a Notification-role
     // live region for AppEffect::PresentNotice messages, separate from the
     // word-count status_bar so AT-SPI/Orca announces notices without speaking

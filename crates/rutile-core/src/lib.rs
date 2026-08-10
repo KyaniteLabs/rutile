@@ -39,7 +39,6 @@ pub use export_contract::{
     EXPORT_CSP, ExportError, ExportPage, ExportRequest, ExportViolation, MAX_EXPORT_PAGE_BYTES,
     MAX_EXPORT_TITLE_BYTES,
 };
-pub use rutile_types::{InteractionId, Revision};
 pub use files::{
     DiskVersion, DurabilityError, ExternalChange, ExternalChangeDebouncer, ExternalResolution,
     FileError, FileService, LoadedDocument, LocalFileService, SaveError, SaveFault, SaveOutcome,
@@ -66,6 +65,7 @@ pub use render::{
     MAX_SOURCE_BLOCK_BYTES, RenderError, RenderLimits, RenderedPage, SourceBlock, SourceBlockKind,
     build_source_blocks, render_markdown, render_markdown_with_limits, validate_source_blocks,
 };
+pub use rutile_types::{InteractionId, Revision};
 pub use scroll::{
     InteractionLease, Pane, ScrollAnchorView, ScrollClock, ScrollCommand, ScrollError,
     ScrollGeometry, ScrollMap, ScrollOutcome, ScrollPosition, ScrollSynchronizer, ScrollTarget,
