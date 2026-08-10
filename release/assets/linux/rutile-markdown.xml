@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Rutile / Rutile — freedesktop shared-mime-info package.
+  Rutile — freedesktop shared-mime-info package.
 
   Registers the text/markdown MIME type for the .md and .markdown extensions so
   that, once update-mime-database runs in the package postinst, file managers

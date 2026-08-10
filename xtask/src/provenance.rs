@@ -258,7 +258,7 @@ impl ProductionProvenance {
 // ---------------------------------------------------------------------------
 
 fn measure_git_state(repo: &Path) -> Result<(String, bool), ProvenanceError> {
-    let rev = tool_process::git_isolated(repo, &["rev-parse", "HEAD"], &[])
+    let rev = tool_process::git_isolated(repo, &["--no-replace-objects", "rev-parse", "HEAD"], &[])
         .map_err(|e| ProvenanceError::GitMeasurement(e.to_string()))?;
     if !rev.status.success() {
         return Err(ProvenanceError::GitMeasurement(format!(
@@ -274,7 +274,7 @@ fn measure_git_state(repo: &Path) -> Result<(String, bool), ProvenanceError> {
         )));
     }
 
-    let status = tool_process::git_isolated(repo, &["status", "--porcelain"], &[])
+    let status = tool_process::git_isolated(repo, &["--no-replace-objects", "status", "--porcelain"], &[])
         .map_err(|e| ProvenanceError::GitMeasurement(e.to_string()))?;
     if !status.status.success() {
         return Err(ProvenanceError::GitMeasurement(format!(
@@ -416,7 +416,7 @@ fn validate_target_root(target_root: &str) -> Result<(), ProvenanceError> {
 
 fn measure_source_tag(repo: &Path) -> Option<String> {
     let output =
-        tool_process::git_isolated(repo, &["describe", "--tags", "--exact-match", "HEAD"], &[])
+        tool_process::git_isolated(repo, &["--no-replace-objects", "describe", "--tags", "--exact-match", "HEAD"], &[])
             .ok()?;
     if !output.status.success() {
         return None;

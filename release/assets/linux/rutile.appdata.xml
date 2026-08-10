@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Rutile / Rutile — AppStream metainfo (component type desktop-application).
+  Rutile — AppStream metainfo (component type desktop-application).
 
   Identity mirrors the macOS bundle identifier com.kyanitelabs.rutile
   (xtask/src/local_package.rs). The launchable ties this component to the
