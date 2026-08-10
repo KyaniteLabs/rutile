@@ -178,24 +178,91 @@ pub fn verify(
     Ok(())
 }
 
-/// Load the release-authority signing key from an operator-owned 0600 hex file.
-pub fn read_signing_key(path: &Path) -> Result<SigningKey, ReleaseAuthorityError> {
-    let metadata = std::fs::metadata(path)?;
-    if !metadata.is_file() {
+/// Open a release-authority key file refusing symlinks and non-regular files
+/// via a single `O_NOFOLLOW` + `fstat` open, then read it as UTF-8 text. This
+/// closes the TOCTOU window the prior `std::fs::metadata` + `read_to_string`
+/// pair left open: a symlink swapped between the metadata check and the read
+/// could substitute key material. The single opened fd is re-stat'd, so the
+/// regular-file and mode checks are bound to exactly the inode that is read.
+/// Mirrors `readiness_keystone::read_regular_file` and
+/// `provenance::open_candidate_nofollow`.
+///
+/// When `require_private` is set (the SECRET signing key), the fd's mode must
+/// have no group/other access bits (`mode & 0o077 == 0`), preserving the
+/// prior 0600 hygiene check on the now-race-free inode.
+///
+/// On non-Unix targets the function fails closed: the TOCTOU-vulnerable
+/// metadata + open sequence cannot meet the same symlink-rejection guarantee,
+/// so release-authority key material is refused rather than read through a
+/// weaker path.
+#[cfg(unix)]
+fn read_key_text_nofollow(
+    path: &Path,
+    require_private: bool,
+) -> Result<String, ReleaseAuthorityError> {
+    use std::ffi::CString;
+    use std::io::Read;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    let c_path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| ReleaseAuthorityError::UnsafeKeyFile(path.display().to_string()))?;
+    let fd = unsafe {
+        libc::open(
+            c_path.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0,
+        )
+    };
+    if fd < 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(match err.raw_os_error() {
+            // O_NOFOLLOW hit a symlink → ELOOP. Treat as an unsafe key file so
+            // a symlink cannot substitute key material between checks.
+            Some(libc::ELOOP) => ReleaseAuthorityError::UnsafeKeyFile(path.display().to_string()),
+            _ => ReleaseAuthorityError::Io(err),
+        });
+    }
+    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(file.as_raw_fd(), &mut stat) } < 0 {
+        return Err(ReleaseAuthorityError::Io(std::io::Error::last_os_error()));
+    }
+    if (stat.st_mode & libc::S_IFMT) != libc::S_IFREG {
         return Err(ReleaseAuthorityError::UnsafeKeyFile(
             path.display().to_string(),
         ));
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if (metadata.permissions().mode() & 0o077) != 0 {
-            return Err(ReleaseAuthorityError::UnsafeKeyFile(
-                path.display().to_string(),
-            ));
-        }
+    if require_private && (stat.st_mode as u32 & 0o077) != 0 {
+        return Err(ReleaseAuthorityError::UnsafeKeyFile(
+            path.display().to_string(),
+        ));
     }
-    let hex_text = std::fs::read_to_string(path)?;
+    let mut text = String::new();
+    file.read_to_string(&mut text)?;
+    Ok(text)
+}
+
+#[cfg(not(unix))]
+fn read_key_text_nofollow(
+    _path: &Path,
+    _require_private: bool,
+) -> Result<String, ReleaseAuthorityError> {
+    // Fail closed: a non-Unix metadata+open sequence cannot meet the same
+    // O_NOFOLLOW + fstat symlink-rejection guarantee, so release-authority key
+    // material is refused rather than read through a weaker path.
+    Err(ReleaseAuthorityError::Io(std::io::Error::other(
+        "release-authority key file safe read is unix-only (O_NOFOLLOW + fstat)",
+    )))
+}
+
+/// Load the release-authority signing key from an operator-owned 0600 hex file.
+///
+/// Reads through a single O_NOFOLLOW + fstat open so a symlink swapped on the
+/// path cannot substitute the secret (TOCTOU); the regular-file and 0600 mode
+/// checks are bound to the exact inode that is read.
+pub fn read_signing_key(path: &Path) -> Result<SigningKey, ReleaseAuthorityError> {
+    let hex_text = read_key_text_nofollow(path, true)?;
     let trimmed = hex_text.trim();
     if trimmed.len() != 64
         || !trimmed
@@ -218,8 +285,13 @@ pub fn read_signing_key(path: &Path) -> Result<SigningKey, ReleaseAuthorityError
 }
 
 /// Load the pinned release-authority public key from a committed 64-hex file.
+///
+/// Same O_NOFOLLOW + fstat hardening as [`read_signing_key`] for
+/// defense-in-depth consistency, even though the pinned public key is
+/// fingerprint-mitigated (the consumer verifies the 32-byte key against a
+/// committed fingerprint).
 pub fn read_pinned_public_key(path: &Path) -> Result<[u8; 32], ReleaseAuthorityError> {
-    let hex_text = std::fs::read_to_string(path)?;
+    let hex_text = read_key_text_nofollow(path, false)?;
     let trimmed = hex_text.trim();
     decode_fixed::<32>(trimmed, "pinned public key").map_err(ReleaseAuthorityError::Crypto)
 }
@@ -358,5 +430,77 @@ mod tests {
         assert!(iso8601_to_unix("2026-07-15T00:00:00Z").unwrap() > 1_700_000_000);
         assert!(iso8601_to_unix("not-a-date").is_none());
         assert!(iso8601_to_unix("2026-13-40T00:00:00Z").is_none());
+    }
+
+    // -- L1 MED M1a/M1b: O_NOFOLLOW+fstat symlink rejection (trust hardening) --
+    //
+    // The pre-fix read_signing_key/read_pinned_public_key used
+    // `std::fs::metadata`/`read_to_string` by pathname, so a symlink swapped
+    // onto the path could substitute key material (TOCTOU). These tests would
+    // FAIL before the fix (the symlink is followed and the target read with no
+    // rejection) and PASS after (O_NOFOLLOW → ELOOP → UnsafeKeyFile).
+
+    fn write_secret_hex(dir: &std::path::Path) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("secret.hex");
+        std::fs::write(&path, hex::encode([3u8; 32])).unwrap();
+        // 0600: the signing-key hygiene check rejects group/other access bits.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        path
+    }
+
+    #[test]
+    fn read_signing_key_round_trips_a_regular_0600_hex_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_secret_hex(dir.path());
+        let signing = read_signing_key(&path).expect("regular 0600 hex file must load");
+        // Same key the fixture wrote.
+        assert_eq!(signing.to_bytes(), [3u8; 32]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_signing_key_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = write_secret_hex(dir.path());
+        let symlink = dir.path().join("secret-link.hex");
+        std::os::unix::fs::symlink(&real, &symlink).unwrap();
+        let err = read_signing_key(&symlink).unwrap_err();
+        assert!(
+            matches!(err, ReleaseAuthorityError::UnsafeKeyFile(_)),
+            "symlinked signing key must be rejected: {err:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_pinned_public_key_is_rejected() {
+        let signing = SigningKey::from_bytes(&[0x09; 32]);
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("pinned.pub.hex");
+        std::fs::write(&real, hex::encode(signing.verifying_key().to_bytes())).unwrap();
+        let symlink = dir.path().join("pinned-link.pub.hex");
+        std::os::unix::fs::symlink(&real, &symlink).unwrap();
+        let err = read_pinned_public_key(&symlink).unwrap_err();
+        assert!(
+            matches!(err, ReleaseAuthorityError::UnsafeKeyFile(_)),
+            "symlinked pinned public key must be rejected (defense-in-depth): {err:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_signing_key_rejects_non_0600_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("group-readable.hex");
+        std::fs::write(&path, hex::encode([3u8; 32])).unwrap();
+        // group-read bit set → must be rejected by the mode hygiene check.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let err = read_signing_key(&path).unwrap_err();
+        assert!(
+            matches!(err, ReleaseAuthorityError::UnsafeKeyFile(_)),
+            "non-0600 signing key must be rejected: {err:?}"
+        );
     }
 }
