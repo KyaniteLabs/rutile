@@ -1,27 +1,27 @@
-# FeatherMark Continuation Runbook
+# Rutile Continuation Runbook
 
 > **Status: Superseded historical runbook.** The paused 0.1.0 wave completed and 0.2.0 is now on `main`. Preserve this for provenance; use `docs/handoff/current-state.md` for current work.
 
 ## BLUF
 
-FeatherMark is paused on `feat/feathermark-build` with a valuable uncommitted native-shell and packaging wave. Preserve it.
+Rutile is paused on `feat/rutile-build` with a valuable uncommitted native-shell and packaging wave. Preserve it.
 
 The fully decided execution authority is:
 
-`docs/superpowers/plans/2026-07-10-feathermark-end-to-end-completion.md`
+`docs/superpowers/plans/2026-07-10-rutile-end-to-end-completion.md`
 
 That plan locks the architecture, product behavior, file ownership, parallel waves, package formats, validation gates, review protocol, and five-commit sequence. It supersedes remaining comparator choices and discretionary implementation language in `docs/plan/build-plan.md`.
 
 ## Source of truth order
 
-1. `docs/superpowers/plans/2026-07-10-feathermark-end-to-end-completion.md` — remaining execution decisions
+1. `docs/superpowers/plans/2026-07-10-rutile-end-to-end-completion.md` — remaining execution decisions
 2. `docs/handoff/current-state.md` — exact paused-state facts
 3. `.omx/ultragoal/goals.json` and `.omx/ultragoal/ledger.jsonl` — durable historical ledger
 4. `docs/plan/build-plan.md` — original requirements and evidence history where it does not conflict with the completion plan
 
 Branch and baseline:
 
-- branch: `feat/feathermark-build`
+- branch: `feat/rutile-build`
 - reviewed/pushed baseline: `1728480889cc519161272b14ca9b3fac92c3924f`
 - previous reviewed implementation: `5270736efaa41cf8f10a80f59878ec13cbd881f1`
 
@@ -58,19 +58,19 @@ One writer owns all currently shared dirty paths:
 ```text
 Cargo.toml
 Cargo.lock
-crates/feathermark-app/Cargo.toml
-crates/feathermark-app/src/app.rs
-crates/feathermark-app/src/main.rs
-crates/feathermark-app/src/preview_host.rs
-crates/feathermark-app/src/render_scheduler.rs
-crates/feathermark-app/tests/app_reducer.rs
-crates/feathermark-app/tests/preview_host.rs
+crates/rutile-app/Cargo.toml
+crates/rutile-app/src/app.rs
+crates/rutile-app/src/main.rs
+crates/rutile-app/src/preview_host.rs
+crates/rutile-app/src/render_scheduler.rs
+crates/rutile-app/tests/app_reducer.rs
+crates/rutile-app/tests/preview_host.rs
 ```
 
 After independent approval, the orchestrator creates:
 
 ```text
-refactor: freeze FeatherMark shared product contracts
+refactor: freeze Rutile shared product contracts
 ```
 
 C1 also records the canonical completion plan and the three handoff documents. Workers do not edit those documents; the orchestrator stages them.
@@ -82,18 +82,18 @@ This short sequential freeze removes shared-file contention from every later imp
 macOS lane:
 
 ```text
-crates/feathermark-app/src/platform/macos.rs
-crates/feathermark-app/src/platform/macos/editor.rs
-crates/feathermark-app/src/platform/macos/native.rs
-crates/feathermark-app/tests/macos_product.rs
+crates/rutile-app/src/platform/macos.rs
+crates/rutile-app/src/platform/macos/editor.rs
+crates/rutile-app/src/platform/macos/native.rs
+crates/rutile-app/tests/macos_product.rs
 ```
 
 Linux lane:
 
 ```text
-crates/feathermark-app/src/platform/linux_gtk.rs
-crates/feathermark-app/tests/linux_product.rs
-scripts/feathermark-linux-lifecycle.sh
+crates/rutile-app/src/platform/linux_gtk.rs
+crates/rutile-app/tests/linux_product.rs
+scripts/rutile-linux-lifecycle.sh
 ```
 
 Packaging lane:
@@ -119,9 +119,9 @@ Reviewers are read-only and did not implement the reviewed lane. Blocker and Hig
 The orchestrator then stages and commits in this fixed order:
 
 ```text
-feat: complete FeatherMark macOS product shell
-feat: complete FeatherMark Linux product shell
-feat: add deterministic local FeatherMark packaging
+feat: complete Rutile macOS product shell
+feat: complete Rutile Linux product shell
+feat: add deterministic local Rutile packaging
 ```
 
 ### Wave 4 — three simultaneous release lanes
@@ -137,7 +137,7 @@ The platform builders work only from clean reviewed C4 and never edit source.
 The orchestrator verifies artifact/executable hash binding. A final independent reviewer approves the integrated code and receipts. The orchestrator creates:
 
 ```text
-release: package FeatherMark local beta artifacts
+release: package Rutile local beta artifacts
 ```
 
 No push or public release is implied.
@@ -150,17 +150,17 @@ git rev-parse HEAD
 git status --short
 git diff --stat
 git diff --check
-cargo check --locked -p feathermark-app
+cargo check --locked -p rutile-app
 cargo test --locked -p xtask --test local_package --no-run
 ```
 
 Before dispatching each worker, route the matching lane through Pushing Dispatch as required by repository instructions:
 
 ```bash
-pushing-dispatch route --mode task --task "FeatherMark shared-contract-freeze: edit only the Wave 1 files and pass the shared gate"
-pushing-dispatch route --mode task --task "FeatherMark macOS-product: edit only the Wave 2M files and pass the macOS native gate"
-pushing-dispatch route --mode task --task "FeatherMark Linux-product: edit only the Wave 2L files and pass the Linux X11 plus 50-cycle gate"
-pushing-dispatch route --mode task --task "FeatherMark local-packaging: edit only the Wave 2P files and pass the xtask package gate"
+pushing-dispatch route --mode task --task "Rutile shared-contract-freeze: edit only the Wave 1 files and pass the shared gate"
+pushing-dispatch route --mode task --task "Rutile macOS-product: edit only the Wave 2M files and pass the macOS native gate"
+pushing-dispatch route --mode task --task "Rutile Linux-product: edit only the Wave 2L files and pass the Linux X11 plus 50-cycle gate"
+pushing-dispatch route --mode task --task "Rutile local-packaging: edit only the Wave 2P files and pass the xtask package gate"
 ```
 
 ## Native acceptance commands
@@ -168,20 +168,20 @@ pushing-dispatch route --mode task --task "FeatherMark local-packaging: edit onl
 macOS:
 
 ```bash
-cargo test --locked -p feathermark-app --no-default-features --features macos-shell,test-control
-cargo clippy --locked -p feathermark-app --all-targets --no-default-features --features macos-shell,test-control -- -D warnings
-cargo build --release --locked -p feathermark-app --bin feathermark --no-default-features --features macos-shell
-target/release/feathermark --native-smoke
+cargo test --locked -p rutile-app --no-default-features --features macos-shell,test-control
+cargo clippy --locked -p rutile-app --all-targets --no-default-features --features macos-shell,test-control -- -D warnings
+cargo build --release --locked -p rutile-app --bin rutile --no-default-features --features macos-shell
+target/release/rutile --native-smoke
 ```
 
 Linux:
 
 ```bash
-cargo test --locked -p feathermark-app --no-default-features --features linux-gtk,test-control
-cargo clippy --locked -p feathermark-app --all-targets --no-default-features --features linux-gtk,test-control -- -D warnings
-cargo build --release --locked -p feathermark-app --bin feathermark --no-default-features --features linux-gtk
-target/release/feathermark --native-smoke
-bash scripts/feathermark-linux-lifecycle.sh --cycles 50
+cargo test --locked -p rutile-app --no-default-features --features linux-gtk,test-control
+cargo clippy --locked -p rutile-app --all-targets --no-default-features --features linux-gtk,test-control -- -D warnings
+cargo build --release --locked -p rutile-app --bin rutile --no-default-features --features linux-gtk
+target/release/rutile --native-smoke
+bash scripts/rutile-linux-lifecycle.sh --cycles 50
 ```
 
 Packaging:

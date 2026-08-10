@@ -33,7 +33,7 @@ pub(super) fn parse_snapshot_attestation(bytes: &[u8]) -> Result<SnapshotAttesta
     }
     let wire: SnapshotAttestationWireV1 =
         serde_json::from_slice(bytes).map_err(|error| format!("snapshot JSON: {error}"))?;
-    if wire.schema != "feathermark.runner-snapshot-attestation.v1"
+    if wire.schema != "rutile.runner-snapshot-attestation.v1"
         || wire.runner_id.trim().is_empty()
         || wire.snapshot_id.trim().is_empty()
         || wire.snapshot_provider.trim().is_empty()

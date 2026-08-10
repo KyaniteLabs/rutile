@@ -7,17 +7,17 @@ license.workspace = true
 publish = false
 
 [[bin]]
-name = "feathermark-runner-launcher"
-path = "src/bin/feathermark-runner-launcher.rs"
+name = "rutile-runner-launcher"
+path = "src/bin/rutile-runner-launcher.rs"
 
 [[bin]]
-name = "feathermark-runner-probe"
-path = "src/bin/feathermark-runner-probe.rs"
+name = "rutile-runner-probe"
+path = "src/bin/rutile-runner-probe.rs"
 
 [dependencies]
 clap.workspace = true
 ed25519-dalek.workspace = true
-feathermark-protocol.workspace = true
+rutile-protocol.workspace = true
 getrandom.workspace = true
 hex.workspace = true
 jsonschema = "0.29"

@@ -11,7 +11,7 @@ Produce a fresh, distributable macOS arm64 preview from `main` `59a0c29`, and
 prove it is path-clean + feature-clean (the two flags the 2026-07-12 audit raised
 against the stale 0.2.0 artifacts). Steps (precedent: `docs/handoff/local-beta-0.2.0.md` §4):
 
-1. `cargo build --release -p feathermark-app --no-default-features --features macos-shell --locked`
+1. `cargo build --release -p rutile-app --no-default-features --features macos-shell --locked`
    → record the build-input binary SHA-256.
 2. `cargo run --bin xtask -- package local macos --candidate <abs release bin> --build-input-sha256 <H> --source-commit 59a0c29 --output-root <abs target/...> --version <VER>`
    → emits `Rutile-<VER>-macos-arm64.app.zip` + `.dmg` + manifests (ad-hoc signed).

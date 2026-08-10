@@ -1,5 +1,5 @@
 {
-  "schema": "feathermark-local-beta-evidence-v1",
+  "schema": "rutile-local-beta-evidence-v1",
   "version": "0.1.1",
   "source_commit": "8b0aae6ff3c2566d975f20f926a9480bcdbc15d4",
   "created_at": "2026-07-11T03:14:38Z",
@@ -68,20 +68,20 @@
     {
       "target": "linux-x86_64",
       "label": "linux-x86_64-unverified-wayland",
-      "artifact": "feathermark_0.1.1_amd64.deb",
+      "artifact": "rutile_0.1.1_amd64.deb",
       "bytes": 662690,
       "artifact_sha256": "9428df50b9e5aee62001ebbc7c842197668fb75ffd08c409d7e2b842751e9529",
       "manifest_sha256": "7f73254d49f7e3177390237fc45668e42dd277c5d164bf9700645ca3a71ed60f",
       "build_input_sha256": "a0b4a97da272a12ada7644abeab65ce5490f093494fdf2e95e693cb324a3b68e",
       "packaged_executable_sha256": "a0b4a97da272a12ada7644abeab65ce5490f093494fdf2e95e693cb324a3b68e",
-      "package_smoke": "verified: dpkg -i succeeded on Niko; installed /usr/bin/feathermark SHA-256 matches manifest; dpkg reports Version 0.1.1, install ok installed",
+      "package_smoke": "verified: dpkg -i succeeded on Niko; installed /usr/bin/rutile SHA-256 matches manifest; dpkg reports Version 0.1.1, install ok installed",
       "signed": false,
       "notarized": false
     },
     {
       "target": "linux-x86_64",
       "label": "linux-x86_64-unverified-wayland",
-      "artifact": "feathermark-0.1.1-1.x86_64.rpm",
+      "artifact": "rutile-0.1.1-1.x86_64.rpm",
       "bytes": 791150,
       "artifact_sha256": "f060885814fe83c9419cabd7a2e1c166f148d106ec0b0dca792475cf42df5f3a",
       "manifest_sha256": "79c6e1c6941cf8974663a7c7dd7185e18699076c48244b125d8efb2a75b31aef",

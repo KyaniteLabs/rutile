@@ -28,7 +28,7 @@ pub(super) fn parse_launcher_config(bytes: &[u8]) -> Result<LauncherConfigV1, St
     }
     let wire: LauncherConfigWireV1 =
         serde_json::from_slice(bytes).map_err(|error| format!("launcher config JSON: {error}"))?;
-    if wire.schema != "feathermark.runner-launcher-config.v1"
+    if wire.schema != "rutile.runner-launcher-config.v1"
         || !EXPECTED_RUNNERS.contains(&wire.runner_id.as_str())
         || wire.key_id.trim().is_empty()
     {

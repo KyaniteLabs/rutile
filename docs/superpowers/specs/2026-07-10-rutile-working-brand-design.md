@@ -1,12 +1,12 @@
 # Rutile Working Brand Design
 
-> **Status: Implemented historical design decision.** Rutile remains the user-facing name in 0.2.0 while technical `feathermark` identifiers remain intentionally stable.
+> **Status: Implemented historical design decision.** Rutile remains the user-facing name in 0.2.0 while technical `rutile` identifiers remain intentionally stable.
 
 **Status:** Approved by the user on 2026-07-10 with “just do rutile for now” and “go.”
 
 ## Goal
 
-Present the completed local-first Markdown writing studio to users as **Rutile**, endorsed as **by Kyanite**, without destabilizing the verified FeatherMark 0.1.0 implementation.
+Present the completed local-first Markdown writing studio to users as **Rutile**, endorsed as **by Kyanite**, without destabilizing the verified Rutile 0.1.0 implementation.
 
 ## Scope
 
@@ -22,7 +22,7 @@ The canonical endorsement line is **“A local-first writing studio by Kyanite.�
 
 ## Stability Boundary
 
-The following remain `feathermark` in this pass:
+The following remain `rutile` in this pass:
 
 - Rust workspace, crate, module, and binary identifiers;
 - custom URL schemes, JavaScript bridge names, schemas, environment variables, and test-control protocols;
@@ -42,6 +42,6 @@ No icon, color-system, URL, or legal/trademark change is included because Rutile
 
 - Brand contract unit tests assert exact approved copy and title formatting.
 - macOS and Linux product tests continue to pass.
-- Packaging tests assert Rutile display names while asserting that technical `feathermark` identifiers remain unchanged.
-- A final reference audit distinguishes permitted internal/historical `FeatherMark` references from unintended product-facing references.
+- Packaging tests assert Rutile display names while asserting that technical `rutile` identifiers remain unchanged.
+- A final reference audit distinguishes permitted internal/historical `Rutile` references from unintended product-facing references.
 - `cargo test --workspace --all-targets --locked` and platform-appropriate build checks must pass before completion is claimed.

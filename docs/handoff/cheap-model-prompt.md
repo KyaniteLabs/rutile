@@ -2,16 +2,16 @@
 
 > **Status: Superseded historical prompt.** The described 0.1.0 paused wave completed and 0.2.0 is now on `main`. Do not execute this prompt; use `docs/handoff/current-state.md`.
 
-Copy the text below as-is into a new agent working from the FeatherMark build worktree.
+Copy the text below as-is into a new agent working from the Rutile build worktree.
 
 ---
 
-You are the continuation orchestrator for FeatherMark, a Rust-native Markdown editor. Execute the existing fully decided plan. Do not redesign the product.
+You are the continuation orchestrator for Rutile, a Rust-native Markdown editor. Execute the existing fully decided plan. Do not redesign the product.
 
 Read these files completely before acting:
 
 1. `AGENTS.md` and any nearer repository instructions
-2. `docs/superpowers/plans/2026-07-10-feathermark-end-to-end-completion.md`
+2. `docs/superpowers/plans/2026-07-10-rutile-end-to-end-completion.md`
 3. `docs/handoff/current-state.md`
 4. `docs/handoff/continuation-plan.md`
 
@@ -24,7 +24,7 @@ Authority:
 
 Preserve current state:
 
-- branch: `feat/feathermark-build`
+- branch: `feat/rutile-build`
 - reviewed baseline: `1728480889cc519161272b14ca9b3fac92c3924f`
 - the worktree is intentionally dirty with interrupted native-shell and packaging work
 - never reset, clean, checkout, stash, discard, or overwrite unrelated changes
@@ -64,7 +64,7 @@ git rev-parse HEAD
 git status --short
 git diff --stat
 git diff --check
-cargo check --locked -p feathermark-app
+cargo check --locked -p rutile-app
 cargo test --locked -p xtask --test local_package --no-run
 rustc +1.88.0 -Vv
 cargo deny --version
@@ -81,7 +81,7 @@ WAVE 1 — one shared-contract writer
 Route:
 
 ```bash
-pushing-dispatch route --mode task --task "FeatherMark shared-contract-freeze: edit only the Wave 1 files and pass the shared gate"
+pushing-dispatch route --mode task --task "Rutile shared-contract-freeze: edit only the Wave 1 files and pass the shared gate"
 ```
 
 Exclusive writable files:
@@ -89,19 +89,19 @@ Exclusive writable files:
 ```text
 Cargo.toml
 Cargo.lock
-crates/feathermark-app/Cargo.toml
-crates/feathermark-app/src/app.rs
-crates/feathermark-app/src/main.rs
-crates/feathermark-app/src/preview_host.rs
-crates/feathermark-app/src/render_scheduler.rs
-crates/feathermark-app/tests/app_reducer.rs
-crates/feathermark-app/tests/preview_host.rs
+crates/rutile-app/Cargo.toml
+crates/rutile-app/src/app.rs
+crates/rutile-app/src/main.rs
+crates/rutile-app/src/preview_host.rs
+crates/rutile-app/src/render_scheduler.rs
+crates/rutile-app/tests/app_reducer.rs
+crates/rutile-app/tests/preview_host.rs
 ```
 
 The worker follows Wave 1 in the canonical plan, uses red-green-refactor, does not edit other files, and does not commit. Obtain a separate read-only review. Fix Blocker and High findings with the same writer, then obtain rereview. When approved and green, you alone stage the Wave 1 files plus the four canonical planning/handoff documents named in Task 1.6 and create:
 
 ```text
-refactor: freeze FeatherMark shared product contracts
+refactor: freeze Rutile shared product contracts
 ```
 
 WAVE 2 — start three workers simultaneously after C1
@@ -109,36 +109,36 @@ WAVE 2 — start three workers simultaneously after C1
 Worker M route:
 
 ```bash
-pushing-dispatch route --mode task --task "FeatherMark macOS-product: edit only the Wave 2M files and pass the macOS native gate"
+pushing-dispatch route --mode task --task "Rutile macOS-product: edit only the Wave 2M files and pass the macOS native gate"
 ```
 
 Worker M exclusive files:
 
 ```text
-crates/feathermark-app/src/platform/macos.rs
-crates/feathermark-app/src/platform/macos/editor.rs
-crates/feathermark-app/src/platform/macos/native.rs
-crates/feathermark-app/tests/macos_product.rs
+crates/rutile-app/src/platform/macos.rs
+crates/rutile-app/src/platform/macos/editor.rs
+crates/rutile-app/src/platform/macos/native.rs
+crates/rutile-app/tests/macos_product.rs
 ```
 
 Worker L route:
 
 ```bash
-pushing-dispatch route --mode task --task "FeatherMark Linux-product: edit only the Wave 2L files and pass the Linux X11 plus 50-cycle gate"
+pushing-dispatch route --mode task --task "Rutile Linux-product: edit only the Wave 2L files and pass the Linux X11 plus 50-cycle gate"
 ```
 
 Worker L exclusive files:
 
 ```text
-crates/feathermark-app/src/platform/linux_gtk.rs
-crates/feathermark-app/tests/linux_product.rs
-scripts/feathermark-linux-lifecycle.sh
+crates/rutile-app/src/platform/linux_gtk.rs
+crates/rutile-app/tests/linux_product.rs
+scripts/rutile-linux-lifecycle.sh
 ```
 
 Worker P route:
 
 ```bash
-pushing-dispatch route --mode task --task "FeatherMark local-packaging: edit only the Wave 2P files and pass the xtask package gate"
+pushing-dispatch route --mode task --task "Rutile local-packaging: edit only the Wave 2P files and pass the xtask package gate"
 ```
 
 Worker P exclusive files:
@@ -185,9 +185,9 @@ Fix every Blocker and High finding with the original owner. The same reviewer re
 After all three approvals, you alone stage and create these commits in order, even if workers completed in a different order:
 
 ```text
-feat: complete FeatherMark macOS product shell
-feat: complete FeatherMark Linux product shell
-feat: add deterministic local FeatherMark packaging
+feat: complete Rutile macOS product shell
+feat: complete Rutile Linux product shell
+feat: add deterministic local Rutile packaging
 ```
 
 Run the C4 integration gate from the canonical plan.
@@ -205,7 +205,7 @@ WAVE 5 — final integration
 Verify every artifact and embedded executable hash from bytes. Obtain a final independent integrated review. Fix every Blocker and High finding, rerun affected gates, and obtain approval. Create and stage only the four exact public-safe evidence files named in Task 5.3 of the canonical plan; never stage binary artifacts under `target/local-release`. You alone create:
 
 ```text
-release: package FeatherMark local beta artifacts
+release: package Rutile local beta artifacts
 ```
 
 Do not push or issue a public release.

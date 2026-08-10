@@ -1,5 +1,5 @@
 {
-  "schema": "feathermark-local-beta-evidence-v1",
+  "schema": "rutile-local-beta-evidence-v1",
   "version": "0.1.0",
   "source_commit": "1fd504996666d1d95cbc520e084c9e15f1ccc763",
   "created_at": "2026-07-10T19:43:11Z",
@@ -7,20 +7,20 @@
     {
       "target": "macos-arm64",
       "label": "local-unnotarized-macos-arm64",
-      "artifact": "FeatherMark-0.1.0-macos-arm64.app.zip",
+      "artifact": "Rutile-0.1.0-macos-arm64.app.zip",
       "bytes": 1835805,
       "artifact_sha256": "2531e793a2a4f037dd4aee89a5bf1ec8efc7135b1510eb09df6f8810958d9e47",
       "manifest_sha256": "641271e81fdb102c3c9718e892afd5047a97fde1cbfe7de4a259c7133700f527",
       "build_input_sha256": "151a8d9832d73175cff2d6e2a4bdfe95534d79c7dabffcb14643f6c214ab5695",
       "packaged_executable_sha256": "18efc0b3b50857f5e00790452e9733cf16af802744e54ce0fa25f08a100df401",
-      "package_smoke": "verified: embedded executable SHA-256 matches manifest; native smoke passed on equivalent build-input binary (target/release/feathermark)",
+      "package_smoke": "verified: embedded executable SHA-256 matches manifest; native smoke passed on equivalent build-input binary (target/release/rutile)",
       "signed": false,
       "notarized": false
     },
     {
       "target": "macos-arm64",
       "label": "local-unnotarized-macos-arm64",
-      "artifact": "FeatherMark-0.1.0-macos-arm64.dmg",
+      "artifact": "Rutile-0.1.0-macos-arm64.dmg",
       "bytes": 2314976,
       "artifact_sha256": "708dbbf6d324bf6d6af5f6b291e873c1744765fa560618bfe9f1502cf03e5c2d",
       "manifest_sha256": "3e44bd863e919bc815ac18e879f069e8b1146cb54e40b70093d3f532c427809f",
@@ -33,7 +33,7 @@
     {
       "target": "linux-x86_64",
       "label": "local-unsigned-linux-x86_64",
-      "artifact": "FeatherMark-0.1.0-linux-x86_64.tar.zst",
+      "artifact": "Rutile-0.1.0-linux-x86_64.tar.zst",
       "bytes": 659903,
       "artifact_sha256": "732199c93d54ad3ee4aa1a3dd89bb12e948c7fd366a3a7dae57f95b902264e27",
       "manifest_sha256": "c6d4f543a9e9d0f9d0cd39b156b557ee17a775f50ebf89180786c719611afd61",
@@ -46,20 +46,20 @@
     {
       "target": "linux-x86_64",
       "label": "local-unsigned-linux-x86_64",
-      "artifact": "feathermark_0.1.0_amd64.deb",
+      "artifact": "rutile_0.1.0_amd64.deb",
       "bytes": 660308,
       "artifact_sha256": "6d9322584fbf875990a0f9ef813df6820cb1bd00606de8734f76ed974389b95f",
       "manifest_sha256": "95e8775bb753828c9a5d354fcdd5274602052fc97f4fd682e45b2b08481141c3",
       "build_input_sha256": "d3f9106118d6bbe042b97810ad5f14757a72cbfc3e79bf9bdc073601c4346b0e",
       "packaged_executable_sha256": "d3f9106118d6bbe042b97810ad5f14757a72cbfc3e79bf9bdc073601c4346b0e",
-      "package_smoke": "verified: dpkg -i succeeded; installed /usr/bin/feathermark SHA-256 matches manifest",
+      "package_smoke": "verified: dpkg -i succeeded; installed /usr/bin/rutile SHA-256 matches manifest",
       "signed": false,
       "notarized": false
     },
     {
       "target": "linux-x86_64",
       "label": "local-unsigned-linux-x86_64",
-      "artifact": "feathermark-0.1.0-1.x86_64.rpm",
+      "artifact": "rutile-0.1.0-1.x86_64.rpm",
       "bytes": 789248,
       "artifact_sha256": "3369d028b9ff9ff07e32c585c337eea200526a9a53b37e518fc83b27cda276f9",
       "manifest_sha256": "46111c3e2e31265d984868bbc09bd739277e9d134f2bafdf1c366b51f06ffb83",

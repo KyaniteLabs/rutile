@@ -88,8 +88,8 @@ impl LauncherTransport for ProductionLauncherTransport {
                 "-oServerAliveCountMax=6",
                 "-p",
                 port,
-                &format!("feathermark-runner@{host}"),
-                "feathermark-runner-launcher",
+                &format!("rutile-runner@{host}"),
+                "rutile-runner-launcher",
             ])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

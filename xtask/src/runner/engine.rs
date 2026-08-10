@@ -45,7 +45,7 @@ pub(crate) fn capture_with<T: LauncherTransport>(
         enrollment_exchanges.push(exchange);
     }
     let mut lock = RunnerLockV1 {
-        schema: "feathermark.runner-lock.v1".into(),
+        schema: "rutile.runner-lock.v1".into(),
         runner_ids: RUNNERS.iter().map(|value| (*value).into()).collect(),
         trust_manifest_sha256: config.trust_manifest_sha256,
         dispatch_manifest_sha256: config.dispatch_manifest_sha256,

@@ -1,0 +1,21 @@
+[Unit]
+Description=Rutile measured runner launcher request
+Requires=rutile-runner-launcher.socket
+After=rutile-runner-launcher.socket graphical.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/libexec/rutile-runner-launcher
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+RuntimeDirectory=rutile-runner
+RuntimeDirectoryMode=0700
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/usr/libexec/rutile-runner-probe
+ReadWritePaths=/var/lib/rutile-runner /run/rutile-runner

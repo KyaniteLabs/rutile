@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use feathermark_app::platform::macos::{
+use rutile_app::platform::macos::{
     AppKitMainThread, MacOpenRequest, MacUserEvent, ProductSession, bind_open_proxy,
     forward_open_urls,
 };
@@ -93,7 +93,7 @@ fn run_proof() -> Result<(), String> {
         return Err("user_event handler never received OpenUrls".into());
     }
 
-    let path = PathBuf::from("/tmp/feathermark-open-events-proof.md");
+    let path = PathBuf::from("/tmp/rutile-open-events-proof.md");
     let _ = std::fs::write(&path, "# proof\n");
     let session = ProductSession::open(&path).map_err(|error| error.to_string())?;
     assert_eq!(session.source(), "# proof\n");

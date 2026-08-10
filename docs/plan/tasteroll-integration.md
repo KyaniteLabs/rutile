@@ -16,7 +16,7 @@ plans how Rutile's C8 feature back-ports that architecture into the native edito
 
 | Tasteroll phase | Rutile C8 implementation |
 |-----------------|-------------------------|
-| **Audit** | Scan the note's rendered HTML for craft failures (contrast, spacing consistency, missing states, slop tells, a11y). In Rutile, the note IS the rendered preview — the audit runs against the feathermark:// preview output before applying chance styling. |
+| **Audit** | Scan the note's rendered HTML for craft failures (contrast, spacing consistency, missing states, slop tells, a11y). In Rutile, the note IS the rendered preview — the audit runs against the rutile:// preview output before applying chance styling. |
 | **Intake** | Infer from note content (Is this a journal entry? A spec? A letter? A recipe?) + any document metadata. For notes, the 3-question mini-interview is usually skipped — the content IS the context. |
 | **Fix** | Resolve audit findings in the note's CSS template before rolling. These are deterministic: same note → same fixes, regardless of seed. |
 | **Generate** | AI (C7 runtime tier) generates 2–5 candidate design directions from the note's content type + the Rutile design rails. Candidates are fresh per note, not from a static list. |

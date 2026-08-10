@@ -1,6 +1,6 @@
 use std::fs;
 
-use feathermark_protocol::{PreviewEventV1, decode_preview_event};
+use rutile_protocol::{PreviewEventV1, decode_preview_event};
 
 #[test]
 fn committed_preview_seed_set_reaches_all_four_success_variants() {

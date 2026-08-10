@@ -59,7 +59,7 @@ fn package_driver_hashes_the_exact_file_and_applies_a_byte_cap() {
 
 fn metric_record(samples: &[u64]) -> Vec<u8> {
     let mut record = serde_json::to_vec(&serde_json::json!({
-        "schema": "feathermark.metric.v1",
+        "schema": "rutile.metric.v1",
         "v": 1,
         "scenario": "paced-latency",
         "git_commit": "0123456789012345678901234567890123456789",

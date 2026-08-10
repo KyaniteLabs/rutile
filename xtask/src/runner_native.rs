@@ -30,31 +30,31 @@ const MAX_NATIVE_CHILD_STDERR_BYTES: usize = 8 * 1024;
 
 #[cfg(target_os = "macos")]
 const CONFIG_PATH: &str =
-    "/Library/Application Support/FeatherMark Runner/private/launcher-config-v1.json";
+    "/Library/Application Support/Rutile Runner/private/launcher-config-v1.json";
 #[cfg(target_os = "macos")]
-const KEY_PATH: &str = "/Library/Application Support/FeatherMark Runner/private/runner-key-v1";
+const KEY_PATH: &str = "/Library/Application Support/Rutile Runner/private/runner-key-v1";
 #[cfg(target_os = "macos")]
 const SNAPSHOT_PATH: &str =
-    "/Library/Application Support/FeatherMark Runner/private/snapshot-attestation-v1.json";
+    "/Library/Application Support/Rutile Runner/private/snapshot-attestation-v1.json";
 #[cfg(target_os = "macos")]
-const REPLAY_PATH: &str = "/Library/Application Support/FeatherMark Runner/private/replay-cache-v1";
+const REPLAY_PATH: &str = "/Library/Application Support/Rutile Runner/private/replay-cache-v1";
 #[cfg(target_os = "macos")]
-const PROBE_ROOT: &str = "/Library/Application Support/FeatherMark Runner/bin";
+const PROBE_ROOT: &str = "/Library/Application Support/Rutile Runner/bin";
 #[cfg(target_os = "macos")]
-const EXECUTION_ROOT: &str = "/private/var/run/feathermark-runner";
+const EXECUTION_ROOT: &str = "/private/var/run/rutile-runner";
 
 #[cfg(target_os = "linux")]
-const CONFIG_PATH: &str = "/var/lib/feathermark-runner/launcher-config-v1.json";
+const CONFIG_PATH: &str = "/var/lib/rutile-runner/launcher-config-v1.json";
 #[cfg(target_os = "linux")]
-const KEY_PATH: &str = "/var/lib/feathermark-runner/runner-key-v1";
+const KEY_PATH: &str = "/var/lib/rutile-runner/runner-key-v1";
 #[cfg(target_os = "linux")]
-const SNAPSHOT_PATH: &str = "/var/lib/feathermark-runner/snapshot-attestation-v1.json";
+const SNAPSHOT_PATH: &str = "/var/lib/rutile-runner/snapshot-attestation-v1.json";
 #[cfg(target_os = "linux")]
-const REPLAY_PATH: &str = "/var/lib/feathermark-runner/replay-cache-v1";
+const REPLAY_PATH: &str = "/var/lib/rutile-runner/replay-cache-v1";
 #[cfg(target_os = "linux")]
 const PROBE_ROOT: &str = "/usr/libexec";
 
-const PROBE_NAME: &str = "feathermark-runner-probe";
+const PROBE_NAME: &str = "rutile-runner-probe";
 
 #[derive(Debug, Error)]
 #[doc(hidden)]
@@ -541,7 +541,7 @@ mod tests {
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     const NATIVE_PROBE_HELPER_ARGS: &[&str] = &[
-        "feathermark-native-probe-test-child",
+        "rutile-native-probe-test-child",
         "--ignored",
         "--exact",
         "runner_native::tests::native_probe_test_child",
@@ -665,7 +665,7 @@ mod tests {
     #[test]
     fn snapshot_attestation_is_closed_and_requires_nonzero_image_commitment() {
         let json = br#"{
-          "schema":"feathermark.runner-snapshot-attestation.v1",
+          "schema":"rutile.runner-snapshot-attestation.v1",
           "runner_id":"fm-macos-arm64-v1",
           "snapshot_id":"fm-macos-arm64-v1-pristine",
           "snapshot_provider":"apfs",
@@ -774,11 +774,11 @@ mod tests {
     #[test]
     fn launcher_service_config_is_closed_and_pins_key_transport_and_probe() {
         let json = br#"{
-          "schema":"feathermark.runner-launcher-config.v1",
+          "schema":"rutile.runner-launcher-config.v1",
           "runner_id":"fm-macos-arm64-v1",
           "key_id":"runner-key-1",
           "probe_sha256":"0202020202020202020202020202020202020202020202020202020202020202",
-          "macos_designated_requirement":"identifier \"com.feathermark.runner-probe\"",
+          "macos_designated_requirement":"identifier \"com.rutile.runner-probe\"",
           "macos_cdhash":"0303030303030303030303030303030303030303"
         }"#;
         let config = service_config::parse_launcher_config(json).unwrap();
@@ -791,7 +791,7 @@ mod tests {
         assert!(service_config::parse_launcher_config(unknown.as_bytes()).is_err());
 
         let linux = br#"{
-          "schema":"feathermark.runner-launcher-config.v1",
+          "schema":"rutile.runner-launcher-config.v1",
           "runner_id":"fm-ubuntu-wayland-v1",
           "key_id":"runner-key-2",
           "probe_sha256":"0202020202020202020202020202020202020202020202020202020202020202",
@@ -813,7 +813,7 @@ mod tests {
         assert!(!collector.contains("gtk+-3.0\", \"gtk4"));
         assert!(!collector.contains("webkit2gtk-4.0"));
         assert!(!collector.contains("webkitgtk-6.0"));
-        assert!(!launcher.contains("FEATHERMARK_MONITOR_"));
+        assert!(!launcher.contains("RUTILE_MONITOR_"));
         assert!(!launcher.contains("XDG_SESSION_TYPE="));
     }
 

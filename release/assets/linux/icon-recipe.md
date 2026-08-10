@@ -1,16 +1,16 @@
 # Linux icon + desktop-integration recipe
 
 This directory holds the source Linux desktop-integration assets for
-FeatherMark / Rutile 0.2.0. It is consumed by Wave 3 packaging hardening
+Rutile / Rutile 0.2.0. It is consumed by Wave 3 packaging hardening
 (W3-C) when the deb / rpm staging layouts are taught to install desktop,
 metainfo, MIME, and icon files.
 
 Identity anchors (do not change without updating the matching sources):
 
-- Executable installed by `xtask/src/local_package.rs` at `/usr/bin/feathermark`.
+- Executable installed by `xtask/src/local_package.rs` at `/usr/bin/rutile`.
 - Product name `Rutile`, endorsement "A local-first writing studio by Kyanite."
-  (`crates/feathermark-app/src/brand.rs`).
-- Bundle identifier `com.kyanitelabs.feathermark`
+  (`crates/rutile-app/src/brand.rs`).
+- Bundle identifier `com.kyanitelabs.rutile`
   (`xtask/src/local_package.rs`, macOS `Info.plist`).
 - Workspace license MIT (`Cargo.toml` `[workspace.package]`, README).
 
@@ -18,14 +18,14 @@ Identity anchors (do not change without updating the matching sources):
 
 | File | Purpose | Installed path |
 |---|---|---|
-| `feathermark.desktop` | Application launcher entry, declares `text/markdown` MIME handling. | `/usr/share/applications/feathermark.desktop` |
-| `feathermark.appdata.xml` | AppStream metainfo for software centers. | `/usr/share/metainfo/feathermark.appdata.xml` |
-| `feathermark-markdown.xml` | shared-mime-info package binding `.md` / `.markdown` to `text/markdown`. | `/usr/share/mime/packages/feathermark.xml` |
-| (icons) | hicolor theme PNGs + scalable SVG. | `/usr/share/icons/hicolor/{sizes}/apps/feathermark.*` |
+| `rutile.desktop` | Application launcher entry, declares `text/markdown` MIME handling. | `/usr/share/applications/rutile.desktop` |
+| `rutile.appdata.xml` | AppStream metainfo for software centers. | `/usr/share/metainfo/rutile.appdata.xml` |
+| `rutile-markdown.xml` | shared-mime-info package binding `.md` / `.markdown` to `text/markdown`. | `/usr/share/mime/packages/rutile.xml` |
+| (icons) | hicolor theme PNGs + scalable SVG. | `/usr/share/icons/hicolor/{sizes}/apps/rutile.*` |
 
 ## Icon theme requirement (OUTSTANDING — binary assets, not fabricated)
 
-The desktop entry references `Icon=feathermark`, i.e. an icon named `feathermark`
+The desktop entry references `Icon=rutile`, i.e. an icon named `rutile`
 in the installed hicolor icon theme. Real raster/scalable icon bytes are binary
 artifacts and are intentionally **not** generated or committed from this text-only
 phase. They must be produced by design (following `DESIGN-SYSTEM.md`) and shipped
@@ -34,16 +34,16 @@ as part of packaging.
 Required hicolor sizes (PNG, one per size, plus a scalable SVG):
 
 ```
-/usr/share/icons/hicolor/16x16/apps/feathermark.png
-/usr/share/icons/hicolor/22x22/apps/feathermark.png
-/usr/share/icons/hicolor/24x24/apps/feathermark.png
-/usr/share/icons/hicolor/32x32/apps/feathermark.png
-/usr/share/icons/hicolor/48x48/apps/feathermark.png
-/usr/share/icons/hicolor/64x64/apps/feathermark.png
-/usr/share/icons/hicolor/128x128/apps/feathermark.png
-/usr/share/icons/hicolor/256x256/apps/feathermark.png
-/usr/share/icons/hicolor/512x512/apps/feathermark.png
-/usr/share/icons/hicolor/scalable/apps/feathermark.svg
+/usr/share/icons/hicolor/16x16/apps/rutile.png
+/usr/share/icons/hicolor/22x22/apps/rutile.png
+/usr/share/icons/hicolor/24x24/apps/rutile.png
+/usr/share/icons/hicolor/32x32/apps/rutile.png
+/usr/share/icons/hicolor/48x48/apps/rutile.png
+/usr/share/icons/hicolor/64x64/apps/rutile.png
+/usr/share/icons/hicolor/128x128/apps/rutile.png
+/usr/share/icons/hicolor/256x256/apps/rutile.png
+/usr/share/icons/hicolor/512x512/apps/rutile.png
+/usr/share/icons/hicolor/scalable/apps/rutile.svg
 ```
 
 Design direction (from `DESIGN-SYSTEM.md`, the "mineral editorial" system — do
@@ -69,9 +69,9 @@ unless a size fails legibility at 16px.
 ## Validation (before install)
 
 ```sh
-desktop-file-validate feathermark.desktop
-xmllint --noout feathermark.appdata.xml        # or: appstreamcli validate feathermark.appdata.xml
-xmllint --noout feathermark-markdown.xml
+desktop-file-validate rutile.desktop
+xmllint --noout rutile.appdata.xml        # or: appstreamcli validate rutile.appdata.xml
+xmllint --noout rutile-markdown.xml
 ```
 
 `desktop-file-validate` and `xmllint`/`appstreamcli` are build-host tools, not
@@ -106,9 +106,9 @@ tools. Phase C must:
 ## Known runtime gap (track, do not block the asset)
 
 The Linux GTK entry point currently discards positional CLI arguments
-(`crates/feathermark-app/src/main.rs` does `let _ = path;` on the linux-gtk
+(`crates/rutile-app/src/main.rs` does `let _ = path;` on the linux-gtk
 branch; README "Important product limits" documents this). As a result
-`feathermark.desktop`'s `Exec=feathermark %f` correctly declares the "open
+`rutile.desktop`'s `Exec=rutile %f` correctly declares the "open
 document" contract, but opening a `.md` file from a file manager will launch the
 editor without loading that document until the Linux adapter is wired to consume
 `argv[1]`. That wiring is a product change in W3-C/native, not a defect in these

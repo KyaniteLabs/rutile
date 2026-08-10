@@ -8,8 +8,8 @@ use xtask::comparator::{ScaffoldCreate, create_scaffold, verify_scaffold};
 fn init_inputs(root: &std::path::Path) {
     for path in [
         "tests/fixtures/small.md",
-        "crates/feathermark-types/src/lib.rs",
-        "crates/feathermark-protocol/src/lib.rs",
+        "crates/rutile-types/src/lib.rs",
+        "crates/rutile-protocol/src/lib.rs",
         "xtask/src/main.rs",
     ] {
         let full = root.join(path);
@@ -17,13 +17,13 @@ fn init_inputs(root: &std::path::Path) {
         fs::write(full, format!("fixture:{path}\n")).unwrap();
     }
     fs::write(
-        root.join("crates/feathermark-types/Cargo.toml"),
-        "[package]\nname = \"feathermark-types\"\nversion = \"0.1.0\"\nedition.workspace = true\nrust-version.workspace = true\nlicense.workspace = true\n\n[dependencies]\nhtml-escape.workspace = true\nthiserror.workspace = true\nurl.workspace = true\n",
+        root.join("crates/rutile-types/Cargo.toml"),
+        "[package]\nname = \"rutile-types\"\nversion = \"0.1.0\"\nedition.workspace = true\nrust-version.workspace = true\nlicense.workspace = true\n\n[dependencies]\nhtml-escape.workspace = true\nthiserror.workspace = true\nurl.workspace = true\n",
     )
     .unwrap();
     fs::write(
-        root.join("crates/feathermark-protocol/Cargo.toml"),
-        "[package]\nname = \"feathermark-protocol\"\nversion = \"0.1.0\"\nedition.workspace = true\nrust-version.workspace = true\nlicense.workspace = true\n\n[dependencies]\nfeathermark-types = { path = \"../feathermark-types\" }\nserde.workspace = true\nserde_json.workspace = true\nthiserror.workspace = true\n",
+        root.join("crates/rutile-protocol/Cargo.toml"),
+        "[package]\nname = \"rutile-protocol\"\nversion = \"0.1.0\"\nedition.workspace = true\nrust-version.workspace = true\nlicense.workspace = true\n\n[dependencies]\nrutile-types = { path = \"../rutile-types\" }\nserde.workspace = true\nserde_json.workspace = true\nthiserror.workspace = true\n",
     )
     .unwrap();
 }
@@ -37,8 +37,8 @@ fn scaffold_is_a_deterministic_clean_three_path_repository() {
     let created = create_scaffold(&ScaffoldCreate {
         fixtures: root.path().join("tests/fixtures"),
         contracts: vec![
-            root.path().join("crates/feathermark-types"),
-            root.path().join("crates/feathermark-protocol"),
+            root.path().join("crates/rutile-types"),
+            root.path().join("crates/rutile-protocol"),
         ],
         xtask: root.path().join("xtask"),
         out: out.clone(),
@@ -74,8 +74,8 @@ fn scaffold_rejects_symlinks_and_nonempty_output() {
     let request = ScaffoldCreate {
         fixtures: root.path().join("tests/fixtures"),
         contracts: vec![
-            root.path().join("crates/feathermark-types"),
-            root.path().join("crates/feathermark-protocol"),
+            root.path().join("crates/rutile-types"),
+            root.path().join("crates/rutile-protocol"),
         ],
         xtask: root.path().join("xtask"),
         out,
@@ -95,8 +95,8 @@ fn scaffold_rejects_symlinks_and_nonempty_output() {
     let symlink_request = ScaffoldCreate {
         fixtures: symlink_root.path().join("tests/fixtures"),
         contracts: vec![
-            symlink_root.path().join("crates/feathermark-types"),
-            symlink_root.path().join("crates/feathermark-protocol"),
+            symlink_root.path().join("crates/rutile-types"),
+            symlink_root.path().join("crates/rutile-protocol"),
         ],
         xtask: symlink_root.path().join("xtask"),
         out: symlink_root.path().join("out"),
@@ -113,8 +113,8 @@ fn scaffold_cargo_manifests_are_self_contained() {
     create_scaffold(&ScaffoldCreate {
         fixtures: root.path().join("tests/fixtures"),
         contracts: vec![
-            root.path().join("crates/feathermark-types"),
-            root.path().join("crates/feathermark-protocol"),
+            root.path().join("crates/rutile-types"),
+            root.path().join("crates/rutile-protocol"),
         ],
         xtask: root.path().join("xtask"),
         out: out.clone(),
@@ -125,7 +125,7 @@ fn scaffold_cargo_manifests_are_self_contained() {
     for (manifest, expected_packages) in [
         (
             out.join("contracts/Cargo.toml"),
-            ["feathermark-protocol", "feathermark-types"].as_slice(),
+            ["rutile-protocol", "rutile-types"].as_slice(),
         ),
         (out.join("xtask/Cargo.toml"), ["xtask"].as_slice()),
     ] {
@@ -165,8 +165,8 @@ fn generated_xtask_compiles_in_isolation() {
     create_scaffold(&ScaffoldCreate {
         fixtures: source_root.join("tests/fixtures"),
         contracts: vec![
-            source_root.join("crates/feathermark-types"),
-            source_root.join("crates/feathermark-protocol"),
+            source_root.join("crates/rutile-types"),
+            source_root.join("crates/rutile-protocol"),
         ],
         xtask: source_root.join("xtask"),
         out: out.clone(),

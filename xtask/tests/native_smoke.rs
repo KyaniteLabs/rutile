@@ -44,12 +44,12 @@ fn short_with_faults(
 #[test]
 fn supervised_smoke_parses_stage_and_resize_traces_from_stderr() {
     let receipt = short(shell(
-        "printf 'SMOKE_TRACE stage=0 event=resumed\\n' >&2; printf 'SMOKE_TRACE stage=1 event=resize 1200x760\\n' >&2; printf 'feathermark-native-smoke-ok\\n'",
+        "printf 'SMOKE_TRACE stage=0 event=resumed\\n' >&2; printf 'SMOKE_TRACE stage=1 event=resize 1200x760\\n' >&2; printf 'rutile-native-smoke-ok\\n'",
     ))
     .unwrap();
 
     assert!(receipt.success());
-    assert!(receipt.stdout().contains("feathermark-native-smoke-ok"));
+    assert!(receipt.stdout().contains("rutile-native-smoke-ok"));
     assert_eq!(receipt.stage_trace().len(), 2);
     assert_eq!(receipt.resize_trace().len(), 1);
 }
@@ -196,7 +196,7 @@ fn native_smoke_cli_requires_an_explicit_profile_and_evidence_directory() {
         "xtask",
         "native-smoke",
         "--binary",
-        "/tmp/feathermark",
+        "/tmp/rutile",
         "--profile",
         "release",
         "--repeat",
@@ -213,7 +213,7 @@ fn native_smoke_cli_requires_an_explicit_profile_and_evidence_directory() {
             repeat,
             evidence_dir,
         } => {
-            assert_eq!(binary.to_string_lossy(), "/tmp/feathermark");
+            assert_eq!(binary.to_string_lossy(), "/tmp/rutile");
             assert_eq!(profile, NativeSmokeProfile::Release);
             assert_eq!(repeat.unwrap().get(), 50);
             assert_eq!(evidence_dir.to_string_lossy(), "/tmp/native-smoke-evidence");
@@ -240,10 +240,10 @@ fn native_smoke_profiles_enforce_minimum_repeats() {
 #[test]
 fn native_smoke_cli_emits_gate_json_and_retains_bounded_run_logs() {
     let root = tempfile::tempdir().unwrap();
-    let binary = root.path().join("fake-feathermark");
+    let binary = root.path().join("fake-rutile");
     fs::write(
         &binary,
-        "#!/bin/sh\nprintf 'SMOKE_TRACE stage=0 event=launch\\n' >&2\nprintf 'feathermark-native-smoke-ok\\n'\n",
+        "#!/bin/sh\nprintf 'SMOKE_TRACE stage=0 event=launch\\n' >&2\nprintf 'rutile-native-smoke-ok\\n'\n",
     )
     .unwrap();
     fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
@@ -298,7 +298,7 @@ fn native_smoke_cli_emits_gate_json_and_retains_bounded_run_logs() {
 #[test]
 fn native_smoke_cli_records_the_real_failure_in_gate_json() {
     let root = tempfile::tempdir().unwrap();
-    let binary = root.path().join("failing-feathermark");
+    let binary = root.path().join("failing-rutile");
     fs::write(
         &binary,
         "#!/bin/sh\nprintf 'SMOKE_TRACE stage=0 event=launch\\n' >&2\nprintf 'wrapper-failure\\n' >&2\nexit 23\n",
@@ -335,7 +335,7 @@ fn native_smoke_cli_records_the_real_failure_in_gate_json() {
 #[test]
 fn native_smoke_rejects_a_missing_binary_before_creating_evidence() {
     let root = tempfile::tempdir().unwrap();
-    let missing_binary = root.path().join("missing-feathermark");
+    let missing_binary = root.path().join("missing-rutile");
     let evidence = root.path().join("evidence");
 
     let output = ProcessCommand::new(env!("CARGO_BIN_EXE_xtask"))
@@ -351,16 +351,16 @@ fn native_smoke_rejects_a_missing_binary_before_creating_evidence() {
         !evidence.exists(),
         "a rejected binary must not leave an evidence directory behind"
     );
-    assert!(String::from_utf8_lossy(&output.stderr).contains("missing-feathermark"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("missing-rutile"));
 }
 
 #[test]
 fn native_smoke_receipt_keeps_the_prelaunch_hash_when_binary_changes() {
     let root = tempfile::tempdir().unwrap();
-    let binary = root.path().join("mutating-feathermark");
-    let changed_contents = "#!/bin/sh\nprintf 'feathermark-native-smoke-ok\\n'\n";
+    let binary = root.path().join("mutating-rutile");
+    let changed_contents = "#!/bin/sh\nprintf 'rutile-native-smoke-ok\\n'\n";
     let initial_contents = format!(
-        "#!/bin/sh\nprintf 'feathermark-native-smoke-ok\\n'\nprintf '%s' '{}' > '{}'\nchmod 755 '{}'\n",
+        "#!/bin/sh\nprintf 'rutile-native-smoke-ok\\n'\nprintf '%s' '{}' > '{}'\nchmod 755 '{}'\n",
         changed_contents.replace('\'', "'\\''"),
         binary.display(),
         binary.display(),
@@ -405,10 +405,10 @@ fn native_smoke_provenance_is_hermetic_against_inherited_git_env() {
         &tools.join("git"),
         "#!/bin/sh\n[ -n \"$GIT_DIR\" ] && { printf 'GIT_DIR leaked: %s' \"$GIT_DIR\" >&2; exit 99; }\n[ -n \"$GIT_WORK_TREE\" ] && { printf 'GIT_WORK_TREE leaked: %s' \"$GIT_WORK_TREE\" >&2; exit 99; }\nif [ -n \"$GIT_CONFIG_GLOBAL\" ] && [ \"$GIT_CONFIG_GLOBAL\" != \"/dev/null\" ]; then printf 'GIT_CONFIG_GLOBAL leaked: %s' \"$GIT_CONFIG_GLOBAL\" >&2; exit 99; fi\ncase \"$*\" in\n  'rev-parse HEAD') printf '%s\\n' '0123456789abcdef0123456789abcdef01234567' ;;\n  'rev-parse HEAD^{tree}') printf '%s\\n' '0123456789abcdef0123456789abcdef01234567' ;;\n  'status --porcelain --untracked-files=all') printf '%s' '' ;;\n  *) exit 47 ;;\nesac\n",
     );
-    let binary = root.path().join("fake-feathermark");
+    let binary = root.path().join("fake-rutile");
     write_executable(
         &binary,
-        "#!/bin/sh\nprintf 'feathermark-native-smoke-ok\\n'\n",
+        "#!/bin/sh\nprintf 'rutile-native-smoke-ok\\n'\n",
     );
     let evidence = root.path().join("evidence");
     let path = format!("{}:{}", tools.display(), std::env::var("PATH").unwrap());
@@ -447,10 +447,10 @@ fn native_smoke_captures_complete_git_provenance_before_the_first_child_launch()
         &tools.join("git"),
         "#!/bin/sh\nprintf provenance >\"$PROVENANCE_CAPTURE\"\ncase \"$*\" in\n  'rev-parse HEAD') printf '%s\\n' '0123456789abcdef0123456789abcdef01234567' ;;\n  'rev-parse HEAD^{tree}') printf '%s\\n' '0123456789abcdef0123456789abcdef01234567' ;;\n  'status --porcelain --untracked-files=all') printf '%s' '?? untracked-input\\n' ;;\n  *) exit 47 ;;\nesac\n",
     );
-    let binary = root.path().join("fake-feathermark");
+    let binary = root.path().join("fake-rutile");
     write_executable(
         &binary,
-        "#!/bin/sh\n[ -f \"$PROVENANCE_CAPTURE\" ] || { echo missing-provenance >&2; exit 29; }\nprintf 'feathermark-native-smoke-ok\\n'\n",
+        "#!/bin/sh\n[ -f \"$PROVENANCE_CAPTURE\" ] || { echo missing-provenance >&2; exit 29; }\nprintf 'rutile-native-smoke-ok\\n'\n",
     );
     let evidence = root.path().join("evidence");
     let capture = root.path().join("provenance-captured");
@@ -489,11 +489,11 @@ fn native_smoke_fails_closed_when_git_provenance_command_fails() {
     let tools = root.path().join("bin");
     fs::create_dir(&tools).unwrap();
     write_executable(&tools.join("git"), "#!/bin/sh\nexit 47\n");
-    let binary = root.path().join("fake-feathermark");
+    let binary = root.path().join("fake-rutile");
     let launched = root.path().join("child-launched");
     write_executable(
         &binary,
-        "#!/bin/sh\nprintf launched >\"$CHILD_LAUNCHED\"\nprintf 'feathermark-native-smoke-ok\\n'\n",
+        "#!/bin/sh\nprintf launched >\"$CHILD_LAUNCHED\"\nprintf 'rutile-native-smoke-ok\\n'\n",
     );
     let evidence = root.path().join("evidence");
     let path = format!("{}:{}", tools.display(), std::env::var("PATH").unwrap());
@@ -522,11 +522,11 @@ fn native_smoke_fails_closed_when_git_provenance_identity_is_empty() {
         &tools.join("git"),
         "#!/bin/sh\ncase \"$*\" in\n  'rev-parse HEAD') exit 0 ;;\n  *) printf '%s\\n' identity ;;\nesac\n",
     );
-    let binary = root.path().join("fake-feathermark");
+    let binary = root.path().join("fake-rutile");
     let launched = root.path().join("child-launched");
     write_executable(
         &binary,
-        "#!/bin/sh\nprintf launched >\"$CHILD_LAUNCHED\"\nprintf 'feathermark-native-smoke-ok\\n'\n",
+        "#!/bin/sh\nprintf launched >\"$CHILD_LAUNCHED\"\nprintf 'rutile-native-smoke-ok\\n'\n",
     );
     let evidence = root.path().join("evidence");
     let path = format!("{}:{}", tools.display(), std::env::var("PATH").unwrap());
@@ -558,11 +558,11 @@ fn native_smoke_rejects_uppercase_git_identity_before_child_launch() {
         &tools.join("git"),
         "#!/bin/sh\ncase \"$*\" in\n  'status --porcelain --untracked-files=all') exit 0 ;;\n  *) printf '%s\\n' 'ABCDEF0123456789ABCDEF0123456789ABCDEF01' ;;\nesac\n",
     );
-    let binary = root.path().join("fake-feathermark");
+    let binary = root.path().join("fake-rutile");
     let launched = root.path().join("child-launched");
     write_executable(
         &binary,
-        "#!/bin/sh\nprintf launched >\"$CHILD_LAUNCHED\"\nprintf 'feathermark-native-smoke-ok\\n'\n",
+        "#!/bin/sh\nprintf launched >\"$CHILD_LAUNCHED\"\nprintf 'rutile-native-smoke-ok\\n'\n",
     );
     let evidence = root.path().join("evidence");
     let path = format!("{}:{}", tools.display(), std::env::var("PATH").unwrap());
@@ -594,11 +594,11 @@ fn native_smoke_bounds_git_provenance_output_before_child_launch() {
         &tools.join("git"),
         "#!/bin/sh\ni=0\nwhile [ \"$i\" -lt 20000 ]; do printf a; i=$((i + 1)); done\n",
     );
-    let binary = root.path().join("fake-feathermark");
+    let binary = root.path().join("fake-rutile");
     let launched = root.path().join("child-launched");
     write_executable(
         &binary,
-        "#!/bin/sh\nprintf launched >\"$CHILD_LAUNCHED\"\nprintf 'feathermark-native-smoke-ok\\n'\n",
+        "#!/bin/sh\nprintf launched >\"$CHILD_LAUNCHED\"\nprintf 'rutile-native-smoke-ok\\n'\n",
     );
     let evidence = root.path().join("evidence");
     let path = format!("{}:{}", tools.display(), std::env::var("PATH").unwrap());
@@ -621,7 +621,7 @@ fn native_smoke_bounds_git_provenance_output_before_child_launch() {
 #[test]
 fn native_smoke_reruns_create_distinct_evidence_runs_without_overwriting_failure() {
     let root = tempfile::tempdir().unwrap();
-    let binary = root.path().join("fake-feathermark");
+    let binary = root.path().join("fake-rutile");
     write_executable(&binary, "#!/bin/sh\nprintf first-failure >&2\nexit 23\n");
     let evidence = root.path().join("evidence");
 
@@ -638,7 +638,7 @@ fn native_smoke_reruns_create_distinct_evidence_runs_without_overwriting_failure
 
     write_executable(
         &binary,
-        "#!/bin/sh\nprintf 'feathermark-native-smoke-ok\\n'\n",
+        "#!/bin/sh\nprintf 'rutile-native-smoke-ok\\n'\n",
     );
     let second = ProcessCommand::new(env!("CARGO_BIN_EXE_xtask"))
         .args(["native-smoke", "--binary"])
@@ -728,7 +728,7 @@ fn native_smoke_wrapper_requires_profile_and_rejects_lower_overrides() {
         fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
     }
     let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../scripts/feathermark-macos-native-smoke.sh");
+        .join("../scripts/rutile-macos-native-smoke.sh");
     let cargo_log = root.path().join("cargo.log");
     let path = format!("{}:{}", tools.display(), std::env::var("PATH").unwrap());
 
@@ -773,7 +773,7 @@ fn native_smoke_wrapper_requires_profile_and_rejects_lower_overrides() {
     let calls = fs::read_to_string(cargo_log).unwrap();
     assert!(
         calls
-            .contains("build --locked -p feathermark-app --features macos-shell --bin feathermark")
+            .contains("build --locked -p rutile-app --features macos-shell --bin rutile")
     );
     assert!(calls.contains("run --locked -p xtask --bin xtask -- native-smoke"));
     assert!(calls.contains("--profile release --repeat 50"));
@@ -783,7 +783,7 @@ fn native_smoke_wrapper_requires_profile_and_rejects_lower_overrides() {
 fn native_smoke_source_traces_launch_before_resume_and_resize_request_before_outcome() {
     let source = fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../crates/feathermark-app/src/platform/macos/native.rs"),
+            .join("../crates/rutile-app/src/platform/macos/native.rs"),
     )
     .unwrap();
     let launch = source

@@ -2,14 +2,14 @@
 
 use std::collections::HashSet;
 
-use feathermark_core::{
+use rutile_core::{
     MAX_GENERATED_BODY_BYTES, MAX_RENDERED_PAGE_BYTES, render_markdown, validate_source_blocks,
 };
-use feathermark_types::SafeLinkTarget;
+use rutile_types::SafeLinkTarget;
 use libfuzzer_sys::fuzz_target;
 
-const CSS: &str = "feathermark://preview/v1/assets/preview.css";
-const BRIDGE: &str = "feathermark://preview/v1/assets/bridge.js";
+const CSS: &str = "rutile://preview/v1/assets/preview.css";
+const BRIDGE: &str = "rutile://preview/v1/assets/bridge.js";
 const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'none'; font-src 'none'; connect-src 'none'; media-src 'none'; frame-src 'none'; child-src 'none'; object-src 'none'; worker-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; navigate-to 'none'";
 
 fuzz_target!(|input: &[u8]| {
@@ -129,7 +129,7 @@ fn validate_attributes(
 ) {
     for (name, value) in attributes {
         match (tag, *name, *value) {
-            ("html", "data-feathermark-revision", Some("17")) if complete_page => {}
+            ("html", "data-rutile-revision", Some("17")) if complete_page => {}
             ("meta", "charset", Some("utf-8")) if complete_page => {}
             ("meta", "http-equiv", Some("Content-Security-Policy")) if complete_page => {}
             ("meta", "content", Some(value)) if complete_page && value == CSP => *csp += 1,
@@ -165,7 +165,7 @@ fn validate_attributes(
             ("span", "aria-checked", Some("true" | "false")) => {}
             ("a", "role", Some("link")) => {}
             ("a", "tabindex", Some("0")) => {}
-            ("a", "data-feathermark-url", Some(value)) => {
+            ("a", "data-rutile-url", Some(value)) => {
                 let decoded = html_escape::decode_html_entities(value);
                 SafeLinkTarget::parse_wire(decoded.as_ref()).unwrap();
             }
@@ -174,14 +174,14 @@ fn validate_attributes(
     }
 
     match tag {
-        "html" => require_exact_names(attributes, &["data-feathermark-revision"]),
+        "html" => require_exact_names(attributes, &["data-rutile-revision"]),
         "meta" if attributes.iter().any(|(name, _)| *name == "charset") => {
             require_exact_names(attributes, &["charset"])
         }
         "meta" => require_exact_names(attributes, &["content", "http-equiv"]),
         "link" => require_exact_names(attributes, &["href", "rel"]),
         "script" => require_exact_names(attributes, &["defer", "src"]),
-        "a" => require_exact_names(attributes, &["data-feathermark-url", "role", "tabindex"]),
+        "a" => require_exact_names(attributes, &["data-rutile-url", "role", "tabindex"]),
         _ => {}
     }
 }

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://feathermark.local/schemas/rutile.readiness-attestation.v1.schema.json",
+  "$id": "https://rutile.local/schemas/rutile.readiness-attestation.v1.schema.json",
   "title": "Rutile readiness attestation v1",
   "description": "Independent readiness attestation v1. An ed25519 attestation, signed by an independent trusted verifier over the readiness domain, covering the full probe bundle (source commit/tree, runner lock ref and hash, all 14 attested probes with evidence refs/hashes and observation timestamps, actionable blockers) plus issued/expiry timestamps and verifier identity/fingerprint/independence evidence. The verifier key, operator, and provisioning host must be distinct from the release authority; the release-authority key/fingerprint is rejected as a readiness verifier under any domain. readiness != publication: this attestation asserts release-readiness only and does NOT authorize publication, tagging, release, or public distribution, and does not set or imply publication_authorized (which remains structurally false in artifact-inspection v1).",
   "type": "object",
@@ -194,7 +194,7 @@
       "properties": {
         "domain": {
           "description": "Exact domain-separation tag prefixed to the canonical message before signing. NUL bytes (\u0000) are part of the tag. Distinct from the preview-publication-authorization domain; a readiness attestation signed under any other domain is invalid.",
-          "const": "FeatherMark Independent Readiness Attestation\u0000v1\u0000"
+          "const": "Rutile Independent Readiness Attestation\u0000v1\u0000"
         },
         "canonical_message_sha256": {
           "description": "SHA-256 of the domain-separated canonical message that was signed, so a reviewer can confirm the exact bytes covered by signature_hex.",

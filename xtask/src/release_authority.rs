@@ -19,7 +19,7 @@ pub const SCHEMA: &str = "rutile.preview-publication-authorization.v1";
 pub const PREVIEW_TIER: &str = "preview";
 pub const DEFAULT_PINNED_PUBLIC_KEY: &str = "release/keys/release-authority-v1.pub.hex";
 
-const PREVIEW_AUTH_DOMAIN: &[u8] = b"FeatherMark Preview Publication Authorization\0v1\0";
+const PREVIEW_AUTH_DOMAIN: &[u8] = b"Rutile Preview Publication Authorization\0v1\0";
 
 /// The canonical binding statement. Serialized to canonical (sorted-key) JSON,
 /// then wrapped as `DOMAIN || len(u32 BE) || json` and signed.
@@ -313,7 +313,7 @@ mod tests {
             artifact_sha256: "a".repeat(64),
             provenance_sha256: "b".repeat(64),
             tier: PREVIEW_TIER.into(),
-            product: "feathermark".into(),
+            product: "rutile".into(),
             version_label: "0.2.2".into(),
             signed_at: "2026-07-15T00:00:00Z".into(),
             expires_at: "2027-07-15T00:00:00Z".into(),

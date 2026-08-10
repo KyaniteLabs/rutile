@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 #
-# FeatherMark Rutile release pipeline (Forgejo Actions / GitHub Actions compatible).
+# Rutile release pipeline (Forgejo Actions / GitHub Actions compatible).
 #
 # Triggers ONLY from a protected clean v* tag. It re-runs the entire verify
 # pipeline at release profile on the exact tagged commit (so shipped artifacts
@@ -114,11 +114,11 @@ jobs:
       - name: bootstrap toolchain
         run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
       - name: build featured release candidate from clean tree
-        run: cargo build --locked --release -p feathermark-app --features ${{ matrix.features }} --bin feathermark
+        run: cargo build --locked --release -p rutile-app --features ${{ matrix.features }} --bin rutile
       - name: package + inspect (release)
         run: |
           bash scripts/ci/package-inspect.sh \
-            --candidate target/release/feathermark \
+            --candidate target/release/rutile \
             --kind ${{ matrix.kind }} \
             --profile release \
             --job release-package-${{ matrix.kind }}

@@ -1,4 +1,4 @@
-# Rutile / FeatherMark 0.2.0 — Release Handoff
+# Rutile / Rutile 0.2.0 — Release Handoff
 
 > **Status: Current release receipt.** This is an immutable release snapshot; live repository state is summarized in `docs/handoff/current-state.md`.
 
@@ -36,15 +36,15 @@ Full receipts: `docs/evidence/local-beta-0.2.0/verification-summary.md` + `manif
 | `Rutile-0.2.0-macos-arm64.app.zip` | 1,945,283 | `952124f6ae6948727f06f92e2fbfd8e4d495d01987fd1bcf7c371eb4fb7b666f` |
 | `Rutile-0.2.0-macos-arm64.dmg` | 2,425,213 | `2d7b34b074852d744e833dcddddd8ac3f37644a77ff1f80979555a5ce876e18a` |
 | `Rutile-0.2.0-linux-x86_64.tar.zst` | 766,158 | `8e50e66c69fb0a3edcf99843b9d6d45953e1480f273d59294e0bff7136a9941d` |
-| `feathermark_0.2.0_amd64.deb` | 767,172 | `6f42d2bc68ffa31f86779a93c7f38af288a77779b652dbe98963348e8ced887a` |
-| `feathermark-0.2.0-1.x86_64.rpm` | 922,783 | `2b8fbf0405e8e87abb323d9be7ee47aaee12dc2ceaf7aa403e89d3901c8eca11` |
+| `rutile_0.2.0_amd64.deb` | 767,172 | `6f42d2bc68ffa31f86779a93c7f38af288a77779b652dbe98963348e8ced887a` |
+| `rutile-0.2.0-1.x86_64.rpm` | 922,783 | `2b8fbf0405e8e87abb323d9be7ee47aaee12dc2ceaf7aa403e89d3901c8eca11` |
 
 macOS build-input `948befb4…`; Linux build-input `ed9e387f…`. Artifacts live at `target/package-final-0.2.0/` (gitignored, local).
 
 ## 4. Reproduce
 
-- macOS: `bash` gate = fmt / `cargo test --workspace --all-targets --locked` / clippy `-D warnings` / `cargo deny check` / `cargo build --release -p feathermark-app --no-default-features --features macos-shell --locked`. Package: `cargo run --bin xtask -- package local macos --candidate <abs bin> --build-input-sha256 <H> --source-commit 119c02c… --output-root <abs> --version 0.2.0`.
-- Linux (Niko): rsync tree, `RUSTUP_TOOLCHAIN=1.88.0`, **prime the crates.io `pulldown-cmark 0.13.4` tarball into the registry cache first** (see §5), then `bash scripts/feathermark-linux-gate.sh`. Package with `... package local linux ...`.
+- macOS: `bash` gate = fmt / `cargo test --workspace --all-targets --locked` / clippy `-D warnings` / `cargo deny check` / `cargo build --release -p rutile-app --no-default-features --features macos-shell --locked`. Package: `cargo run --bin xtask -- package local macos --candidate <abs bin> --build-input-sha256 <H> --source-commit 119c02c… --output-root <abs> --version 0.2.0`.
+- Linux (Niko): rsync tree, `RUSTUP_TOOLCHAIN=1.88.0`, **prime the crates.io `pulldown-cmark 0.13.4` tarball into the registry cache first** (see §5), then `bash scripts/rutile-linux-gate.sh`. Package with `... package local linux ...`.
 
 ## 5. Known Gotchas (unchanged, environment-only)
 

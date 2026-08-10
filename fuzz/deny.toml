@@ -1,4 +1,4 @@
-# fuzz/deny.toml — cargo-deny policy scoped to the `feathermark-fuzz` workspace.
+# fuzz/deny.toml — cargo-deny policy scoped to the `rutile-fuzz` workspace.
 #
 # The fuzz workspace (fuzz/Cargo.toml) is a deliberately narrow, 69-package graph
 # that exercises only the protocol / core / types surfaces via libfuzzer-sys. It

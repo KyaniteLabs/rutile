@@ -1,12 +1,12 @@
 [workspace]
 resolver = "2"
 members = [
-  "crates/feathermark-types",
-  "crates/feathermark-core",
-  "crates/feathermark-protocol",
-  "crates/feathermark-app",
+  "crates/rutile-types",
+  "crates/rutile-core",
+  "crates/rutile-protocol",
+  "crates/rutile-app",
   "xtask",
-  "spikes/feathermark-spike-support",
+  "spikes/rutile-spike-support",
   "spikes/linux-gtk-wry",
   "spikes/macos-iced-wry",
   "spikes/macos-open-events",
@@ -27,7 +27,7 @@ license = "MIT"
 blake3 = "=1.8.2"
 clap = { version = "=4.5.41", features = ["derive", "env"] }
 ed25519-dalek = "=2.1.1"
-feathermark-protocol = { path = "crates/feathermark-protocol", version = "=0.2.2" }
+rutile-protocol = { path = "crates/rutile-protocol", version = "=0.2.2" }
 hex = "=0.4.3"
 getrandom = "=0.3.3"
 html-escape = "=0.2.13"

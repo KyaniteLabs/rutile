@@ -423,7 +423,7 @@ fn verify_pair(
         .len()
         .try_into()
         .map_err(|_| publication("lock is too large"))?;
-    if record.schema != "feathermark.runner-lock-commit.v1"
+    if record.schema != "rutile.runner-lock-commit.v1"
         || record.state != RecordState::Committed
         || record.output_basename != basename
         || record.matrix_run_id != verified.matrix_run_id
@@ -442,7 +442,7 @@ fn record(
     state: RecordState,
 ) -> TransactionRecordV1 {
     TransactionRecordV1 {
-        schema: "feathermark.runner-lock-commit.v1".into(),
+        schema: "rutile.runner-lock-commit.v1".into(),
         output_basename: basename.into(),
         matrix_run_id: verified.matrix_run_id,
         lock_length: bytes.len() as u64,

@@ -1,4 +1,4 @@
-# Rutile / FeatherMark 0.2.0 — Verification Summary
+# Rutile / Rutile 0.2.0 — Verification Summary
 
 > **Post-release audit annotation — 2026-07-12:** This receipt accurately records the commands and hashes used for 0.2.0, but its release-readiness conclusion is superseded. The Linux packages were built with `test-control`, and both platform binaries embed absolute builder paths. Do not redistribute these artifacts. Rebuild from a feature-clean target with path remapping and artifact leak checks. See `docs/handoff/current-state.md` and the 2026-07-12 UltraQA remediation plan.
 
@@ -39,23 +39,23 @@ The workspace `Cargo.lock` resolves `pulldown-cmark 0.13.4` with no `source` fie
 | Formatting | `cargo fmt --check` | Passed |
 | Lints | `cargo clippy --workspace --all-targets --locked -- -D warnings` | Passed, zero warnings |
 | Dependency/policy audit | `cargo deny check` (cargo-deny 0.20.2) | advisories ok, bans ok, licenses ok, sources ok |
-| Compile (release, product features) | `cargo build --release -p feathermark-app --no-default-features --features macos-shell --locked` | Passed |
-| Build-input hash | `shasum -a 256 target/release/feathermark` | `948befb4217a31ce6f94642008dc1236fa6f1890a1a58ff5bc284d7566df6539` |
+| Compile (release, product features) | `cargo build --release -p rutile-app --no-default-features --features macos-shell --locked` | Passed |
+| Build-input hash | `shasum -a 256 target/release/rutile` | `948befb4217a31ce6f94642008dc1236fa6f1890a1a58ff5bc284d7566df6539` |
 
 > The `warning: Patch pulldown-cmark v0.13.4 ... was not used in the crate graph` line appears while compiling test targets that do not depend on the render pipeline (e.g. `runner_api`); it is not emitted for the crates that ship. `Cargo.lock` confirms the vendored patched copy is what the shipping crates resolve to.
 
 ### Linux (Niko — NUCBox, Ubuntu x86_64, rustc 1.88.0 pinned via `RUSTUP_TOOLCHAIN`)
 
-Tree rsynced to `~/feathermark-0.2.0` (content identical to commit `119c02c`). Full product gate run via `scripts/feathermark-linux-gate.sh`:
+Tree rsynced to `~/rutile-0.2.0` (content identical to commit `119c02c`). Full product gate run via `scripts/rutile-linux-gate.sh`:
 
 | Gate | Command | Result |
 |------|---------|--------|
 | Formatting | `cargo fmt --check` | Passed |
-| Lints | `cargo clippy --locked -p feathermark-app --no-default-features --features linux-gtk,test-control --lib --tests -- -D warnings` | Passed |
-| Product tests | `cargo test --locked -p feathermark-app --no-default-features --features linux-gtk,test-control` (under Xvfb `:99`) | Passed |
+| Lints | `cargo clippy --locked -p rutile-app --no-default-features --features linux-gtk,test-control --lib --tests -- -D warnings` | Passed |
+| Product tests | `cargo test --locked -p rutile-app --no-default-features --features linux-gtk,test-control` (under Xvfb `:99`) | Passed |
 | Lifecycle gate | 50-cycle WebKitGTK create/navigate/destroy under Xvfb + isolated D-Bus | `ready=50 closed=50 failures=0`; `=== Linux gate passed ===` |
-| Compile (release, product features) | `cargo build --release -p feathermark-app --no-default-features --features linux-gtk,test-control --locked` | Passed |
-| Build-input hash | `sha256sum target/release/feathermark` | `ed9e387f1cc2b41095058e278d95874d9520a7244dc76e2bdbcdd58b3e7ed734` |
+| Compile (release, product features) | `cargo build --release -p rutile-app --no-default-features --features linux-gtk,test-control --locked` | Passed |
+| Build-input hash | `sha256sum target/release/rutile` | `ed9e387f1cc2b41095058e278d95874d9520a7244dc76e2bdbcdd58b3e7ed734` |
 
 > Environment note (identical to the 0.1.1 gate): the first Linux run failed a single test, `compile_contracts::render_execution_permit_is_not_cloneable`. Root cause is unchanged — that fixture compiles a temp crate *outside* the workspace, so it cannot see the workspace `[patch.crates-io]` and needs the crates.io `pulldown-cmark 0.13.4` tarball in the local cargo registry cache, absent on the fresh Niko tree. Fixed by a one-time prime of that tarball into the registry cache (environment only; no repo change). The re-run gate passed in full, including the previously-failing fixture. Standing follow-up recommendation (unchanged): inject the `[patch.crates-io]` stanza into the fixture manifest so the test is hermetic.
 
@@ -79,10 +79,10 @@ Ad-hoc codesigned; packaged executable SHA-256 `a2d1740b368e75b4eb11361575814edf
 | Artifact | Size (bytes) | SHA-256 |
 |----------|--------------|---------|
 | `Rutile-0.2.0-linux-x86_64.tar.zst` | 766,158 | `8e50e66c69fb0a3edcf99843b9d6d45953e1480f273d59294e0bff7136a9941d` |
-| `feathermark_0.2.0_amd64.deb` | 767,172 | `6f42d2bc68ffa31f86779a93c7f38af288a77779b652dbe98963348e8ced887a` |
-| `feathermark-0.2.0-1.x86_64.rpm` | 922,783 | `2b8fbf0405e8e87abb323d9be7ee47aaee12dc2ceaf7aa403e89d3901c8eca11` |
+| `rutile_0.2.0_amd64.deb` | 767,172 | `6f42d2bc68ffa31f86779a93c7f38af288a77779b652dbe98963348e8ced887a` |
+| `rutile-0.2.0-1.x86_64.rpm` | 922,783 | `2b8fbf0405e8e87abb323d9be7ee47aaee12dc2ceaf7aa403e89d3901c8eca11` |
 
-Packaged executable identical to the build input (`ed9e387f…`) for all three. Deb smoke: `dpkg -i` succeeded on Niko; installed `/usr/bin/feathermark` hash matches; `dpkg -s` reports Version 0.2.0; a rootless `dpkg-deb -x` extract corroborated the same binary hash. All three artifacts and their manifests copied back to the macOS host (`target/package-final-0.2.0/linux/`) with SHA-256 re-verified identical across the wire. RPM built via `rpmbuild` on Niko (Ubuntu) with a matching manifest hash but not install-verified (no RPM-based host).
+Packaged executable identical to the build input (`ed9e387f…`) for all three. Deb smoke: `dpkg -i` succeeded on Niko; installed `/usr/bin/rutile` hash matches; `dpkg -s` reports Version 0.2.0; a rootless `dpkg-deb -x` extract corroborated the same binary hash. All three artifacts and their manifests copied back to the macOS host (`target/package-final-0.2.0/linux/`) with SHA-256 re-verified identical across the wire. RPM built via `rpmbuild` on Niko (Ubuntu) with a matching manifest hash but not install-verified (no RPM-based host).
 
 ## Security / QA Carried Forward
 

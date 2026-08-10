@@ -32,7 +32,7 @@ The trusted verifier **must** be distinct from the release authority on every ax
 | Operator | release-authority operator | **different** operator |
 | Provisioning host | release-authority host | **different** host |
 | Key | `release/keys/release-authority-v1.pub.hex`: raw 32-byte public key `8a178c0c24bd62afcaa2e8fac589ce2d8a44e232365fadd9abeb85126e16f8aa`; **derived** SHA-256 fingerprint `eede9791be8bbaf6541472d55610c467a732a8851c4d535445b9af61e57acf95` | **distinct** ed25519 keypair |
-| Domain | `FeatherMark Preview Publication Authorization\0v1\0` | `FeatherMark Independent Readiness Attestation\0v1\0` |
+| Domain | `Rutile Preview Publication Authorization\0v1\0` | `Rutile Independent Readiness Attestation\0v1\0` |
 | Signs | preview-publication authorization only | readiness attestation only |
 
 The generator that consumes a readiness attestation has **no signing key of its
@@ -86,7 +86,7 @@ any domain — is accepted as a readiness verifier.
 
 ## 4. Domain separation and signature contract
 
-- **Readiness domain tag:** `FeatherMark Independent Readiness Attestation\0v1\0`
+- **Readiness domain tag:** `Rutile Independent Readiness Attestation\0v1\0`
   (NUL bytes are part of the tag). This is distinct from the preview-publication
   domain and from every runner-probe domain.
 - The verifier signs a **domain-separated canonical message** binding the full

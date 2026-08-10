@@ -119,8 +119,8 @@ pub(crate) fn parse_manifest_state(
 }
 
 fn validate(trust: &TrustManifest, dispatch: &DispatchManifest) -> Result<(), String> {
-    if trust.schema != "feathermark.runner-trust-roots.v1"
-        || dispatch.schema != "feathermark.runner-dispatch.v1"
+    if trust.schema != "rutile.runner-trust-roots.v1"
+        || dispatch.schema != "rutile.runner-dispatch.v1"
         || trust.roots.len() != RUNNERS.len()
         || dispatch.runners.len() != RUNNERS.len()
     {
@@ -238,12 +238,12 @@ fn validate_pinned_identity(row: &DispatchRow) -> Result<(), String> {
 
 fn expected_probe_path(runner_id: &str) -> Option<&'static str> {
     if matches!(runner_id, "fm-macos-arm64-v1" | "fm-macos-x86_64-v1") {
-        Some("/Library/Application Support/FeatherMark Runner/bin/feathermark-runner-probe")
+        Some("/Library/Application Support/Rutile Runner/bin/rutile-runner-probe")
     } else if matches!(
         runner_id,
         "fm-ubuntu-x11-v1" | "fm-ubuntu-wayland-v1" | "fm-fedora-wayland-v1"
     ) {
-        Some("/usr/libexec/feathermark-runner-probe")
+        Some("/usr/libexec/rutile-runner-probe")
     } else {
         None
     }
@@ -361,10 +361,10 @@ mod tests {
             if runner.starts_with("fm-macos-") {
                 assert_eq!(
                     path,
-                    "/Library/Application Support/FeatherMark Runner/bin/feathermark-runner-probe"
+                    "/Library/Application Support/Rutile Runner/bin/rutile-runner-probe"
                 );
             } else {
-                assert_eq!(path, "/usr/libexec/feathermark-runner-probe");
+                assert_eq!(path, "/usr/libexec/rutile-runner-probe");
             }
         }
         assert!(expected_probe_path("unknown-runner").is_none());

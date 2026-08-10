@@ -80,11 +80,11 @@ expected_version = "0.2.0"
 expected_source_commit = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 forbidden_patterns = [
   "RUTILE_TEST_CONTROL",
-  "FEATHERMARK_TEST_CONTROL",
+  "RUTILE_TEST_CONTROL",
   "/home/build-user/",
   "token=synthetic-secret"
 ]
-test_control_environment = ["RUTILE_TEST_CONTROL", "FEATHERMARK_TEST_CONTROL"]
+test_control_environment = ["RUTILE_TEST_CONTROL", "RUTILE_TEST_CONTROL"]
 "#,
     )
     .unwrap();
@@ -129,7 +129,7 @@ fn clean_app_zip_entries() -> Vec<(&'static str, Vec<u8>)> {
 </dict></plist>"
         .to_vec();
     vec![
-        ("Rutile.app/Contents/MacOS/FeatherMark", b"Mach-O".to_vec()),
+        ("Rutile.app/Contents/MacOS/Rutile", b"Mach-O".to_vec()),
         ("Rutile.app/Contents/Info.plist", info_plist),
         (
             "Rutile.app/Contents/Resources/package-manifest-v1.json",
@@ -168,7 +168,7 @@ fn write_artifact_manifest_sibling(
     manifest_name.push(".manifest-v1.json");
     let manifest_path = artifact_path.with_file_name(manifest_name);
     let manifest = serde_json::json!({
-        "schema": "feathermark-local-artifact-v1",
+        "schema": "rutile-local-artifact-v1",
         "label": "macos-zip",
         "artifact": artifact_name,
         "artifact_sha256": artifact_sha,
@@ -278,7 +278,7 @@ fn dmg_reader_inspects_a_real_hdiutil_dmg() {
     fs::create_dir_all(contents.join("MacOS")).unwrap();
     fs::create_dir_all(contents.join("Resources")).unwrap();
     fs::write(
-        contents.join("MacOS/FeatherMark"),
+        contents.join("MacOS/Rutile"),
         b"#!/bin/sh\necho Rutile",
     )
     .unwrap();
@@ -370,7 +370,7 @@ fn preview_authorized_succeeds_with_signed_sibling_and_pinned_key() {
         artifact_sha256: artifact_sha,
         provenance_sha256: provenance_sha,
         tier: xtask::release_authority::PREVIEW_TIER.into(),
-        product: "feathermark".into(),
+        product: "rutile".into(),
         version_label: "0.2.0".into(),
         signed_at: "2026-01-01T00:00:00Z".into(),
         expires_at: "2099-01-01T00:00:00Z".into(),
@@ -489,12 +489,12 @@ fn package_directory_requires_one_expected_executable_and_matching_metadata() {
     let root = tempdir().unwrap();
     let package = root.path().join("Rutile-linux-x86_64");
     fs::create_dir_all(package.join("bin")).unwrap();
-    fs::write(package.join("bin/feathermark"), b"\x7fELF clean production").unwrap();
+    fs::write(package.join("bin/rutile"), b"\x7fELF clean production").unwrap();
     let exec_hash = sha256(b"\x7fELF clean production");
     fs::write(
         package.join("package-manifest-v1.json"),
         serde_json::to_vec(&serde_json::json!({
-            "schema": "feathermark-local-package-v1",
+            "schema": "rutile-local-package-v1",
             "architecture": "x86_64-unknown-linux-gnu",
             "source_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "version": "9.9.9",
@@ -529,22 +529,22 @@ fn packaging_boundary_rejects_clean_scan_without_publication_authorization() {
     for directory in ["bin", "share/applications", "share/mime/packages"] {
         fs::create_dir_all(package.join(directory)).unwrap();
     }
-    fs::write(package.join("bin/feathermark"), b"\x7fELF production").unwrap();
+    fs::write(package.join("bin/rutile"), b"\x7fELF production").unwrap();
     let elf_hash = sha256(b"\x7fELF production");
     fs::write(
-        package.join("share/applications/feathermark.desktop"),
+        package.join("share/applications/rutile.desktop"),
         b"desktop",
     )
     .unwrap();
     fs::write(
-        package.join("share/mime/packages/feathermark-markdown.xml"),
+        package.join("share/mime/packages/rutile-markdown.xml"),
         b"mime",
     )
     .unwrap();
     fs::write(
         package.join("package-manifest-v1.json"),
         serde_json::to_vec(&serde_json::json!({
-            "schema": "feathermark-local-package-v1",
+            "schema": "rutile-local-package-v1",
             "architecture": "x86_64-unknown-linux-gnu",
             "source_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             "version": "0.2.0",
@@ -565,7 +565,7 @@ fn packaging_boundary_rejects_clean_scan_without_publication_authorization() {
         serde_json::to_vec(&serde_json::json!({
             "schema": "rutile.production-provenance.v1",
             "version": 1,
-            "product": "feathermark",
+            "product": "rutile",
             "product_version": "0.2.0",
             "source_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             "source_tree_clean": true,
@@ -690,10 +690,10 @@ fn repository_quarantine_exactly_tracks_the_five_0_2_0_artifacts() {
         .collect();
     for required in [
         "--native-smoke",
-        "FEATHERMARK_LIFECYCLE_CYCLE",
-        "FEATHERMARK_PRODUCT_FUNCTIONAL_PATH",
-        "FEATHERMARK_SMOKE_AUTOCLOSE_MS",
-        "FEATHERMARK_STARTUP_TRACE",
+        "RUTILE_LIFECYCLE_CYCLE",
+        "RUTILE_PRODUCT_FUNCTIONAL_PATH",
+        "RUTILE_SMOKE_AUTOCLOSE_MS",
+        "RUTILE_STARTUP_TRACE",
     ] {
         assert!(
             patterns.contains(required),
@@ -771,7 +771,7 @@ fn provenance_binds_when_valid_file_provided() {
     let provenance_json = serde_json::json!({
         "schema": "rutile.production-provenance.v1",
         "version": 1,
-        "product": "feathermark",
+        "product": "rutile",
         "product_version": "0.2.0",
         "source_commit": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
         "source_tree_clean": true,
@@ -886,7 +886,7 @@ fn provenance_sibling_file_is_discovered_when_not_explicitly_provided() {
         serde_json::to_vec(&serde_json::json!({
             "schema": "rutile.production-provenance.v1",
             "version": 1,
-            "product": "feathermark",
+            "product": "rutile",
             "product_version": "0.2.0",
             "source_commit": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
             "source_tree_clean": true,
@@ -1060,7 +1060,7 @@ fn sibling_manifest_artifact_hash_mismatch_fails_closed() {
         .path()
         .join("Rutile-0.2.0-macos-arm64.app.zip.manifest-v1.json");
     let manifest = serde_json::json!({
-        "schema": "feathermark-local-artifact-v1",
+        "schema": "rutile-local-artifact-v1",
         "label": "macos-zip",
         "artifact": "Rutile-0.2.0-macos-arm64.app.zip",
         "artifact_sha256": wrong_artifact_sha,

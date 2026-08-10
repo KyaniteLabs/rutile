@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://feathermark.local/schemas/rutile.preview-publication-authorization.v1.schema.json",
+  "$id": "https://rutile.local/schemas/rutile.preview-publication-authorization.v1.schema.json",
   "title": "Rutile preview publication authorization v1",
   "description": "Release-authority ed25519 authorization binding a preview-tier artifact to its production provenance. This authorizes PREVIEW publication only: it is NOT a trusted-verifier attestation, does NOT clear the release-prerequisite preflight's 14 blockers, and does NOT authorize full public publication (which requires Apple notarization, clean-install attestation, and a trusted external verifier).",
   "type": "object",

@@ -19,11 +19,11 @@ Phase C) is responsible for splicing them into the bundle.
 It is not a standalone `Info.plist`. The root `<dict>` carries only:
 
 - `CFBundleDocumentTypes` — two entries:
-  - `net.feathermark.markdown` (owned; `LSHandlerRank = Owner`), and
+  - `net.rutile.markdown` (owned; `LSHandlerRank = Owner`), and
   - system/legacy `public.markdown-text` + `net.daringfireball.markdown`
     (`LSHandlerRank = Alternate`).
   - Both use `CFBundleTypeRole = Editor`, the macOS superset of Viewer.
-- `UTExportedTypeDeclarations` — declares `net.feathermark.markdown`,
+- `UTExportedTypeDeclarations` — declares `net.rutile.markdown`,
   conforming to `public.plain-text` and `public.markdown-text`, with the
   `md` / `markdown` / `mdown` / `mkd` extensions and `text/markdown` MIME.
 

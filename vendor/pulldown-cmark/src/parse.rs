@@ -2196,7 +2196,7 @@ impl<'a, F: BrokenLinkCallback<'a>> Iterator for OffsetIter<'a, F> {
                     if matches!(self.inner.tree[cur_ix].item.body, ItemBody::TightParagraph) {
                         // tight paragraphs emit nothing
                         self.inner.tree.push();
-                        // FEATHERMARK PATCH (fm1): an empty tight paragraph
+                        // RUTILE PATCH (fm1): an empty tight paragraph
                         // (e.g. a list item whose paragraph is only a link
                         // reference definition) has no children; upstream
                         // unwraps None here and panics. Skip past it instead,

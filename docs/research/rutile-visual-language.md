@@ -1,9 +1,9 @@
-# Rutile Visual Language — Research for the FeatherMark Design System
+# Rutile Visual Language — Research for the Rutile Design System
 
 > **Status: Historical design-research snapshot (2026-07-10).** Source availability and external references were not refreshed; `DESIGN-SYSTEM.md` records the implemented direction.
 
 Research seed for the "Rutile" design-language interview. Rutile is the working brand for the
-FeatherMark markdown editor; KyaniteLabs is the umbrella studio. Three lanes: the mineral, the
+Rutile markdown editor; KyaniteLabs is the umbrella studio. Three lanes: the mineral, the
 ceramic glaze, and kyanite as the studio-level counterpart.
 
 **Sourcing notes.** mindat.org's mineral pages sit behind bot protection and could not be fetched

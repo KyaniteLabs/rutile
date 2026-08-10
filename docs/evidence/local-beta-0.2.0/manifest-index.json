@@ -1,5 +1,5 @@
 {
-  "schema": "feathermark-local-beta-evidence-v1",
+  "schema": "rutile-local-beta-evidence-v1",
   "version": "0.2.0",
   "source_commit": "119c02cdb27db01f328224143a8ed7c917a41815",
   "created_at": "2026-07-11T18:41:46Z",
@@ -66,20 +66,20 @@
     {
       "target": "linux-x86_64",
       "label": "linux-x86_64-unverified-wayland",
-      "artifact": "feathermark_0.2.0_amd64.deb",
+      "artifact": "rutile_0.2.0_amd64.deb",
       "bytes": 767172,
       "artifact_sha256": "6f42d2bc68ffa31f86779a93c7f38af288a77779b652dbe98963348e8ced887a",
       "manifest_sha256": "a2b63fbd6b46121573dbdd6dee3048289205c973f696f2b83b6bddbaf9b00b53",
       "build_input_sha256": "ed9e387f1cc2b41095058e278d95874d9520a7244dc76e2bdbcdd58b3e7ed734",
       "packaged_executable_sha256": "ed9e387f1cc2b41095058e278d95874d9520a7244dc76e2bdbcdd58b3e7ed734",
-      "package_smoke": "verified: dpkg -i succeeded on Niko; installed /usr/bin/feathermark SHA-256 matches the packaged executable; dpkg reports Version 0.2.0; rootless dpkg-deb -x extract corroborated the same binary hash",
+      "package_smoke": "verified: dpkg -i succeeded on Niko; installed /usr/bin/rutile SHA-256 matches the packaged executable; dpkg reports Version 0.2.0; rootless dpkg-deb -x extract corroborated the same binary hash",
       "signed": false,
       "notarized": false
     },
     {
       "target": "linux-x86_64",
       "label": "linux-x86_64-unverified-wayland",
-      "artifact": "feathermark-0.2.0-1.x86_64.rpm",
+      "artifact": "rutile-0.2.0-1.x86_64.rpm",
       "bytes": 922783,
       "artifact_sha256": "2b8fbf0405e8e87abb323d9be7ee47aaee12dc2ceaf7aa403e89d3901c8eca11",
       "manifest_sha256": "ba9eaac2a194f46d348869e424602404243cc057eff03d6f2fc5a1924dbaf1e0",

@@ -1,0 +1,35 @@
+# Rutile / Rutile — freedesktop.org desktop entry.
+#
+# Registers Rutile as a Markdown application so launchers and file managers can
+# offer "Open with Rutile" for text/markdown documents. The executable, icon
+# name, and product name are inferred from the local packaging layout
+# (xtask/src/local_package.rs installs /usr/bin/rutile) and the brand
+# constants in crates/rutile-app/src/brand.rs (PRODUCT_NAME = "Rutile").
+#
+# Exec contract: `rutile %f` passes the selected document path as the first
+# CLI argument. The Linux GTK entry point currently discards positional paths
+# (see crates/rutile-app/src/main.rs and README "Important product
+# limits"); wiring that argument through is tracked for Wave 3 packaging
+# hardening (release/assets/linux/icon-recipe.md). Until then the desktop entry
+# launches the editor; honoring %f is a product follow-up, not an asset defect.
+#
+# Icon names an entry in the installed hicolor icon theme (icon-recipe.md). The
+# PNG/SVG bytes are binary artifacts and are NOT fabricated here.
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=Rutile
+Name[es]=Rutile
+GenericName=Markdown Editor
+GenericName[es]=Editor de Markdown
+Comment=A local-first writing studio by Kyanite.
+Comment[es]=Un estudio de escritura local-first de Kyanite.
+Exec=rutile %f
+TryExec=rutile
+Icon=rutile
+Terminal=false
+StartupNotify=true
+Categories=Office;TextEditor;
+MimeType=text/markdown;text/x-markdown;
+Keywords=markdown;editor;writing;notes;rutile;rutile;
+Keywords[es]=markdown;editor;escritura;notas;rutile;rutile;

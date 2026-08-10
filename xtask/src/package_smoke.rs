@@ -1130,10 +1130,10 @@ fn linux_rpm_install_plan(request: &SmokeRequest) -> Result<StagePlan, SmokeErro
 
 fn linux_tar_zst_install_plan(request: &SmokeRequest) -> Result<StagePlan, SmokeError> {
     expect_extension(&request.package, request.kind)?;
-    // Archive layout: Rutile-linux-x86_64/bin/feathermark (+ manifest/sbom).
+    // Archive layout: Rutile-linux-x86_64/bin/rutile (+ manifest/sbom).
     // mkdir -p <install_target> then tar --strip-components=1 extracts
-    // bin/feathermark (and siblings) directly into <install_target>.
-    // Binary path: <install_target>/bin/feathermark.
+    // bin/rutile (and siblings) directly into <install_target>.
+    // Binary path: <install_target>/bin/rutile.
     let mkdir = timed(
         SmokeCommand::new(
             SmokeStage::Install,
@@ -1187,7 +1187,7 @@ fn linux_deb_uninstall_plan(request: &SmokeRequest) -> Result<StagePlan, SmokeEr
     // Post-uninstall verification (dpkg -s returning nonzero) is not included
     // as a stage command because the executor treats nonzero exit as failure;
     // the engine's residue check (binary_path absent) provides the guarantee.
-    let args = vec!["purge".into(), "-y".into(), "feathermark".into()];
+    let args = vec!["purge".into(), "-y".into(), "rutile".into()];
     Ok(StagePlan::single(timed(
         SmokeCommand::new(SmokeStage::Uninstall, "/usr/bin/apt-get", args),
         request,
@@ -1198,7 +1198,7 @@ fn linux_rpm_uninstall_plan(request: &SmokeRequest) -> Result<StagePlan, SmokeEr
     // Root-runner required. dnf remove uninstalls the package.
     // Post-uninstall verification (rpm -q returning nonzero) is documented
     // above; residue check provides the guarantee.
-    let args = vec!["remove".into(), "-y".into(), "feathermark".into()];
+    let args = vec!["remove".into(), "-y".into(), "rutile".into()];
     Ok(StagePlan::single(timed(
         SmokeCommand::new(SmokeStage::Uninstall, "/usr/bin/dnf", args),
         request,
@@ -1745,7 +1745,7 @@ mod tests {
         let mut request = macos_zip_request(
             temp.path(),
             b"pkg",
-            temp.path().join("Rutile.app/Contents/MacOS/FeatherMark"),
+            temp.path().join("Rutile.app/Contents/MacOS/Rutile"),
             b"bin",
             evidence,
         );
@@ -1775,7 +1775,7 @@ mod tests {
             PackageKind::MacosAppZip,
             valid_commit(),
             temp.path().join("Rutile.app"),
-            temp.path().join("Rutile.app/Contents/MacOS/FeatherMark"),
+            temp.path().join("Rutile.app/Contents/MacOS/Rutile"),
             valid_hash(),
             evidence,
         );
@@ -1791,7 +1791,7 @@ mod tests {
         let request = macos_zip_request(
             temp.path(),
             &bytes,
-            temp.path().join("Rutile.app/Contents/MacOS/FeatherMark"),
+            temp.path().join("Rutile.app/Contents/MacOS/Rutile"),
             b"bin",
             evidence,
         );
@@ -1806,7 +1806,7 @@ mod tests {
         let mut request = macos_zip_request(
             temp.path(),
             b"bytes",
-            temp.path().join("Rutile.app/Contents/MacOS/FeatherMark"),
+            temp.path().join("Rutile.app/Contents/MacOS/Rutile"),
             b"bin",
             evidence,
         );
@@ -1831,7 +1831,7 @@ mod tests {
             PackageKind::MacosAppZip,
             valid_commit(),
             temp.path().join("Rutile.app"),
-            temp.path().join("Rutile.app/Contents/MacOS/FeatherMark"),
+            temp.path().join("Rutile.app/Contents/MacOS/Rutile"),
             valid_hash(),
             evidence,
         );
@@ -1848,7 +1848,7 @@ mod tests {
         let evidence = temp.path().join("evidence");
         let binary_dir = temp.path().join("Rutile.app/Contents/MacOS");
         fs::create_dir_all(&binary_dir).unwrap();
-        let binary = binary_dir.join("FeatherMark");
+        let binary = binary_dir.join("Rutile");
         fs::write(&binary, b"stale").unwrap();
         let request = macos_zip_request(temp.path(), b"bytes", binary.clone(), b"bin", evidence);
         let err = run_smoke(request, &FnExecutor::new(|_, _| Ok(passed()))).unwrap_err();
@@ -1865,7 +1865,7 @@ mod tests {
         let mut request = macos_zip_request(
             temp.path(),
             b"bytes",
-            temp.path().join("Rutile.app/Contents/MacOS/FeatherMark"),
+            temp.path().join("Rutile.app/Contents/MacOS/Rutile"),
             b"bin",
             evidence,
         );
@@ -1890,7 +1890,7 @@ mod tests {
     fn open_stage_skipped_when_install_did_not_place_binary() {
         let temp = smoke_tempdir();
         let evidence = temp.path().join("evidence");
-        let binary = temp.path().join("Rutile.app/Contents/MacOS/FeatherMark");
+        let binary = temp.path().join("Rutile.app/Contents/MacOS/Rutile");
         let request = macos_zip_request(temp.path(), b"bytes", binary, b"bin", evidence);
         let exec = FnExecutor::new(|_, _| Ok(passed()));
         let execution = run_smoke(request, &exec).unwrap();
@@ -1904,7 +1904,7 @@ mod tests {
         let evidence = temp.path().join("evidence");
         let binary_dir = temp.path().join("Rutile.app/Contents/MacOS");
         fs::create_dir_all(&binary_dir).unwrap();
-        let binary = binary_dir.join("FeatherMark");
+        let binary = binary_dir.join("Rutile");
         // Binary will be created with WRONG hash by the executor.
         let request = macos_zip_request(
             temp.path(),
@@ -1942,7 +1942,7 @@ mod tests {
     fn nonzero_install_exit_fails_and_skips_open() {
         let temp = smoke_tempdir();
         let evidence = temp.path().join("evidence");
-        let binary = temp.path().join("Rutile.app/Contents/MacOS/FeatherMark");
+        let binary = temp.path().join("Rutile.app/Contents/MacOS/Rutile");
         let request = macos_zip_request(temp.path(), b"bytes", binary, b"bin", evidence);
         let exec = FnExecutor::new(move |stage, _| match stage {
             SmokeStage::Install => Ok(failed(5)),
@@ -1958,7 +1958,7 @@ mod tests {
     fn uninstall_residue_detected_when_binary_survives() {
         let temp = smoke_tempdir();
         let evidence = temp.path().join("evidence");
-        let binary = temp.path().join("Rutile.app/Contents/MacOS/FeatherMark");
+        let binary = temp.path().join("Rutile.app/Contents/MacOS/Rutile");
         let bin_contents = b"bin";
         let install_target = temp.path().join("Rutile.app");
         let request = SmokeRequest {
@@ -2000,7 +2000,7 @@ mod tests {
     fn executor_error_fails_stage_and_records_summary() {
         let temp = smoke_tempdir();
         let evidence = temp.path().join("evidence");
-        let binary = temp.path().join("Rutile.app/Contents/MacOS/FeatherMark");
+        let binary = temp.path().join("Rutile.app/Contents/MacOS/Rutile");
         let request = macos_zip_request(temp.path(), b"bytes", binary, b"bin", evidence);
         let exec = FnExecutor::new(move |stage, _| match stage {
             SmokeStage::Install => Err(SmokeError::ToolUnavailable {
@@ -2020,7 +2020,7 @@ mod tests {
     fn full_pass_produces_schema_valid_receipt() {
         let temp = smoke_tempdir();
         let evidence = temp.path().join("evidence");
-        let binary = temp.path().join("Rutile.app/Contents/MacOS/FeatherMark");
+        let binary = temp.path().join("Rutile.app/Contents/MacOS/Rutile");
         let bin_contents = b"binary payload";
         let install_target = temp.path().join("Rutile.app");
         let request = SmokeRequest {
@@ -2077,7 +2077,7 @@ mod tests {
     fn receipt_at_evidence_dir_root() {
         let temp = smoke_tempdir();
         let evidence = temp.path().join("ev");
-        let binary = temp.path().join("Rutile.app/Contents/MacOS/FeatherMark");
+        let binary = temp.path().join("Rutile.app/Contents/MacOS/Rutile");
         let bin_contents = b"bin";
         let install_target = temp.path().join("Rutile.app");
         let request = SmokeRequest {
@@ -2117,7 +2117,7 @@ mod tests {
 
     #[test]
     fn production_executor_rejects_unsafe_program() {
-        let exec = ProductionSmokeExecutor::new(PathBuf::from("/usr/bin/feathermark"));
+        let exec = ProductionSmokeExecutor::new(PathBuf::from("/usr/bin/rutile"));
         let cmd = SmokeCommand::new(
             SmokeStage::Install,
             "/bin/sh",
@@ -2133,7 +2133,7 @@ mod tests {
     #[test]
     fn production_executor_accepts_binary_path_for_open() {
         let temp = smoke_tempdir();
-        let fake_bin = temp.path().join("feathermark");
+        let fake_bin = temp.path().join("rutile");
         fs::write(&fake_bin, b"#!/bin/sh\nexit 0\n").unwrap();
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&fake_bin, fs::Permissions::from_mode(0o755)).unwrap();
@@ -2161,7 +2161,7 @@ mod tests {
             PackageKind::MacosDmg,
             valid_commit(),
             temp.path().join("Rutile.app"),
-            temp.path().join("Rutile.app/Contents/MacOS/FeatherMark"),
+            temp.path().join("Rutile.app/Contents/MacOS/Rutile"),
             valid_hash(),
             evidence,
         );
@@ -2186,7 +2186,7 @@ mod tests {
             PackageKind::MacosAppZip,
             valid_commit(),
             temp.path().join("Rutile.app"),
-            temp.path().join("Rutile.app/Contents/MacOS/FeatherMark"),
+            temp.path().join("Rutile.app/Contents/MacOS/Rutile"),
             valid_hash(),
             temp.path().join("ev"),
         );
@@ -2213,7 +2213,7 @@ mod tests {
             PackageKind::LinuxTarZst,
             valid_commit(),
             install_target.clone(),
-            install_target.join("bin/feathermark"),
+            install_target.join("bin/rutile"),
             valid_hash(),
             temp.path().join("ev"),
         );
@@ -2243,12 +2243,12 @@ mod tests {
     fn linux_open_plan_does_not_force_gdk_backend() {
         let temp = smoke_tempdir();
         let request = SmokeRequest::new(
-            write_package(temp.path(), "feathermark.deb", b"deb"),
+            write_package(temp.path(), "rutile.deb", b"deb"),
             sha256_hex(b"deb"),
             PackageKind::LinuxDeb,
             valid_commit(),
             PathBuf::from("/"),
-            PathBuf::from("/usr/bin/feathermark"),
+            PathBuf::from("/usr/bin/rutile"),
             valid_hash(),
             temp.path().join("ev"),
         );
@@ -2260,14 +2260,14 @@ mod tests {
     #[test]
     fn linux_deb_plan_uses_apt_get_install() {
         let temp = smoke_tempdir();
-        let package = write_package(temp.path(), "feathermark.deb", b"deb");
+        let package = write_package(temp.path(), "rutile.deb", b"deb");
         let request = SmokeRequest::new(
             package.clone(),
             sha256_hex(b"deb"),
             PackageKind::LinuxDeb,
             valid_commit(),
             PathBuf::from("/"),
-            PathBuf::from("/usr/bin/feathermark"),
+            PathBuf::from("/usr/bin/rutile"),
             valid_hash(),
             temp.path().join("ev"),
         );
@@ -2293,11 +2293,11 @@ mod tests {
     fn is_residue_candidate_rejects_root_prefix() {
         assert!(!is_residue_candidate(
             Path::new("/"),
-            Path::new("/usr/bin/feathermark")
+            Path::new("/usr/bin/rutile")
         ));
         assert!(is_residue_candidate(
             Path::new("/Applications/Rutile.app"),
-            Path::new("/Applications/Rutile.app/Contents/MacOS/FeatherMark")
+            Path::new("/Applications/Rutile.app/Contents/MacOS/Rutile")
         ));
     }
 

@@ -1483,7 +1483,7 @@ mod tests {
         let provenance = json!({
             "schema": "rutile.production-provenance.v1",
             "version": 1,
-            "product": "feathermark-app",
+            "product": "rutile-app",
             "product_version": "0.2.2",
             "source_commit": commit,
             "source_tree_clean": true,

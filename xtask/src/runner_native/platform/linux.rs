@@ -16,7 +16,7 @@ pub(in crate::runner_native) fn fexecve_capture(
 ) -> io::Result<Vec<u8>> {
     fexecve_capture_with_arguments(
         measured,
-        &["feathermark-runner-probe"],
+        &["rutile-runner-probe"],
         input,
         max_stdout,
         max_stderr,

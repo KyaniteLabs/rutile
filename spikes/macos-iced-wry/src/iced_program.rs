@@ -42,7 +42,7 @@ impl Program for SeamProgram {
     type Executor = iced_winit::futures::backend::default::Executor;
 
     fn name() -> &'static str {
-        "FeatherMark iced Wry seam"
+        "Rutile iced Wry seam"
     }
 
     fn settings(&self) -> core::Settings {

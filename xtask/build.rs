@@ -48,9 +48,9 @@ fn embed_release_assets(out_dir: &OsStr) {
     for (name, subdir) in &[
         ("document-types.plist", "macos"),
         ("AppIcon.icns", "macos"),
-        ("feathermark.desktop", "linux"),
-        ("feathermark.appdata.xml", "linux"),
-        ("feathermark-markdown.xml", "linux"),
+        ("rutile.desktop", "linux"),
+        ("rutile.appdata.xml", "linux"),
+        ("rutile-markdown.xml", "linux"),
     ] {
         let source = assets_root.join(subdir).join(name);
         if source.is_file() {

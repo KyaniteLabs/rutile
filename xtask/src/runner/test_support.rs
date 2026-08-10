@@ -69,7 +69,7 @@ pub(crate) fn build_valid_lock() -> LockFixture {
         identities.push(identity);
     }
     let mut lock = RunnerLockV1 {
-        schema: "feathermark.runner-lock.v1".into(),
+        schema: "rutile.runner-lock.v1".into(),
         runner_ids: RUNNERS.iter().map(|id| (*id).into()).collect(),
         trust_manifest_sha256: config.trust_manifest_sha256,
         dispatch_manifest_sha256: config.dispatch_manifest_sha256,

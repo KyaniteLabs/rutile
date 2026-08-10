@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use feathermark_protocol::{
+use rutile_protocol::{
     GUI_EVENT_TIMEOUT, GuiEventV1, ProtocolError, decode_gui_command, decode_gui_event,
 };
 use thiserror::Error;

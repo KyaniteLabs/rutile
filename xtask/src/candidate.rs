@@ -44,7 +44,7 @@ pub(crate) struct CandidateSnapshotExpectation {
 
 pub(crate) fn verify_manifest(bytes: &[u8]) -> Result<VerifiedCandidateManifest, CandidateError> {
     let manifest: CandidateManifestV1 = serde_json::from_slice(bytes)?;
-    if manifest.schema != "feathermark.candidate-manifest.v1"
+    if manifest.schema != "rutile.candidate-manifest.v1"
         || manifest.rows.len() != EXPECTED_RUNNERS.len()
     {
         return Err(CandidateError::Invalid);
@@ -113,7 +113,7 @@ mod tests {
             })
             .collect();
         let bytes = serde_json::to_vec(&serde_json::json!({
-            "schema": "feathermark.candidate-manifest.v1",
+            "schema": "rutile.candidate-manifest.v1",
             "rows": rows,
         }))
         .unwrap();

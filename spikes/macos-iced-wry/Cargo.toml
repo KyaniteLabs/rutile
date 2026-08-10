@@ -15,8 +15,8 @@ macos-iced = ["dep:iced_renderer", "dep:iced_widget", "dep:iced_winit", "dep:wry
 test-control = []
 
 [dependencies]
-feathermark-protocol = { path = "../../crates/feathermark-protocol", version = "=0.2.2" }
-feathermark-spike-support = { path = "../feathermark-spike-support", version = "=0.2.2" }
+rutile-protocol = { path = "../../crates/rutile-protocol", version = "=0.2.2" }
+rutile-spike-support = { path = "../rutile-spike-support", version = "=0.2.2" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 iced_winit = { version = "=0.14.0", optional = true }

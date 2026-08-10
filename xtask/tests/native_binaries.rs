@@ -5,8 +5,8 @@ use std::process::Command;
 #[test]
 fn native_binaries_reject_cli_configuration_and_emit_no_protocol_bytes() {
     for binary in [
-        env!("CARGO_BIN_EXE_feathermark-runner-probe"),
-        env!("CARGO_BIN_EXE_feathermark-runner-launcher"),
+        env!("CARGO_BIN_EXE_rutile-runner-probe"),
+        env!("CARGO_BIN_EXE_rutile-runner-launcher"),
     ] {
         let output = Command::new(binary)
             .arg("--config-from-caller")
@@ -20,9 +20,9 @@ fn native_binaries_reject_cli_configuration_and_emit_no_protocol_bytes() {
 
 #[test]
 fn service_definitions_are_one_request_root_sockets_and_install_private_inputs() {
-    let linux_service = include_str!("../launcher/feathermark-runner-launcher@.service");
-    let linux_socket = include_str!("../launcher/feathermark-runner-launcher.socket");
-    let macos = include_str!("../launcher/com.feathermark.runner-launcher.plist");
+    let linux_service = include_str!("../launcher/rutile-runner-launcher@.service");
+    let linux_socket = include_str!("../launcher/rutile-runner-launcher.socket");
+    let macos = include_str!("../launcher/com.rutile.runner-launcher.plist");
     let linux_install = include_str!("../launcher/install-linux.sh");
     let macos_install = include_str!("../launcher/install-macos.sh");
 

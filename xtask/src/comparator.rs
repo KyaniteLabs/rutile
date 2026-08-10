@@ -11,13 +11,13 @@ use thiserror::Error;
 use crate::tool_process;
 use walkdir::WalkDir;
 
-pub const SCAFFOLD_AUTHOR_NAME: &str = "FeatherMark Comparator";
-pub const SCAFFOLD_AUTHOR_EMAIL: &str = "feathermark-comparator@users.noreply.github.com";
+pub const SCAFFOLD_AUTHOR_NAME: &str = "Rutile Comparator";
+pub const SCAFFOLD_AUTHOR_EMAIL: &str = "rutile-comparator@users.noreply.github.com";
 pub const SCAFFOLD_TIMESTAMP: &str = "2026-07-09T00:00:00Z";
 
 const CONTRACTS_MANIFEST: &str = r#"[workspace]
 resolver = "2"
-members = ["feathermark-types", "feathermark-protocol"]
+members = ["rutile-types", "rutile-protocol"]
 
 [workspace.package]
 edition = "2024"
@@ -42,7 +42,7 @@ license.workspace = true
 [dependencies]
 clap.workspace = true
 ed25519-dalek.workspace = true
-feathermark-protocol.workspace = true
+rutile-protocol.workspace = true
 getrandom.workspace = true
 hex.workspace = true
 jsonschema.workspace = true
@@ -78,7 +78,7 @@ license = "MIT"
 [workspace.dependencies]
 clap = { version = "=4.5.41", features = ["derive", "env"] }
 ed25519-dalek = "=2.1.1"
-feathermark-protocol = { path = "../contracts/feathermark-protocol" }
+rutile-protocol = { path = "../contracts/rutile-protocol" }
 getrandom = "=0.3.3"
 hex = "=0.4.3"
 jsonschema = "=0.29.1"
@@ -126,7 +126,7 @@ pub enum ScaffoldError {
     Symlink(PathBuf),
     #[error("output repository must be absent or empty")]
     NonEmptyOutput,
-    #[error("contracts must be exactly feathermark-types and feathermark-protocol")]
+    #[error("contracts must be exactly rutile-types and rutile-protocol")]
     InvalidContracts,
     #[error("git command failed: {command}: {stderr}")]
     Git { command: String, stderr: String },
@@ -191,7 +191,7 @@ fn validate_contracts(contracts: &[PathBuf]) -> Result<(), ScaffoldError> {
         .iter()
         .filter_map(|path| path.file_name().and_then(OsStr::to_str))
         .collect();
-    let expected = BTreeSet::from(["feathermark-protocol", "feathermark-types"]);
+    let expected = BTreeSet::from(["rutile-protocol", "rutile-types"]);
     if contracts.len() != 2 || names != expected {
         return Err(ScaffoldError::InvalidContracts);
     }
@@ -341,7 +341,7 @@ fn inspect_repository(repo: &Path) -> Result<ScaffoldLock, ScaffoldError> {
         }
     }
     Ok(ScaffoldLock {
-        schema: "feathermark.comparator-scaffold-lock.v1".into(),
+        schema: "rutile.comparator-scaffold-lock.v1".into(),
         author_name: SCAFFOLD_AUTHOR_NAME.into(),
         author_email: SCAFFOLD_AUTHOR_EMAIL.into(),
         timestamp: SCAFFOLD_TIMESTAMP.into(),

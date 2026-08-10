@@ -131,7 +131,7 @@ pub(in crate::runner_native) fn copy_verify_posix_spawn_capture(
     limits: child_io::OutputLimits,
     deadline: Instant,
 ) -> io::Result<Vec<u8>> {
-    let arguments = ["feathermark-runner-probe"];
+    let arguments = ["rutile-runner-probe"];
     with_verified_copy(
         measured,
         execution_root,

@@ -1,9 +1,9 @@
-# FeatherMark Markdown Editor Landscape
+# Rutile Markdown Editor Landscape
 
 > **Status: Historical research snapshot.** The comparisons below are frozen to the stated snapshot date and are not current recommendations.
 
 **Snapshot date:** 2026-07-09
-**Scope:** open-source Rust desktop editors closest to FeatherMark's mandatory shape: macOS + Linux, a source editor beside a literal browser-rendered HTML/CSS preview, low weight, and no IDE or notes-platform surface.
+**Scope:** open-source Rust desktop editors closest to Rutile's mandatory shape: macOS + Linux, a source editor beside a literal browser-rendered HTML/CSS preview, low weight, and no IDE or notes-platform surface.
 
 ## Executive finding
 
@@ -23,7 +23,7 @@ Package size, installed size, executable size, and resident memory are not inter
 
 ## Verified comparison
 
-| Project | Platform evidence | Exact preview mode | License evidence | Maintenance as of snapshot | Weight evidence and caveat | FeatherMark fit |
+| Project | Platform evidence | Exact preview mode | License evidence | Maintenance as of snapshot | Weight evidence and caveat | Rutile fit |
 |---|---|---|---|---|---|---|
 | [Marco](https://github.com/Ranrar/Marco) | Linux packages; Windows support; no macOS target or package | **Split-pane, browser HTML/CSS** through WebKitGTK on Linux/Wry on Windows; scroll-sync toggle; generated-HTML source mode | MIT | Active; commit 2026-07-08, v0.24.0 2026-06-05 | 12.5 MB Linux `.deb` for editor + viewer; no startup/RSS data; WebKit process cost unmeasured | Best architecture reference; cannot adopt without a real macOS port |
 | [Ferrite](https://github.com/OlaProeis/Ferrite) | macOS and Linux packages; macOS described upstream as experimental | **Split-pane, native egui widgets**, two-way sync; not literal browser HTML/CSS; HTML export but no live source inspector | MIT | Active; v0.3.0 2026-05-22, pushed 2026-06-19 | 14.7 MB compressed macOS archive, 18.3 MB Linux archive; locally observed about 104 MiB RSS; package and RSS are different measures | Closest adopt candidate overall, but fails literal browser-preview gate and carries IDE/security scope drift |
@@ -60,4 +60,4 @@ The BUILD verdict does not mean inventing every layer. The following maintained 
 
 ## What the landscape does and does not prove
 
-It proves that small native Rust editors, split panes, browser previews, generated-HTML inspection, and offset-aware scroll sync all exist independently. It does **not** prove that iced or egui can host Wry robustly across macOS, Linux X11, and Linux Wayland while meeting FeatherMark's size/startup/RSS targets. It also does not provide comparable idle-memory data for most candidates. Those two unknowns are why the implementation plan begins with a measured iced+Wry versus egui+Wry integration spike.
+It proves that small native Rust editors, split panes, browser previews, generated-HTML inspection, and offset-aware scroll sync all exist independently. It does **not** prove that iced or egui can host Wry robustly across macOS, Linux X11, and Linux Wayland while meeting Rutile's size/startup/RSS targets. It also does not provide comparable idle-memory data for most candidates. Those two unknowns are why the implementation plan begins with a measured iced+Wry versus egui+Wry integration spike.

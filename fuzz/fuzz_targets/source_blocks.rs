@@ -1,6 +1,6 @@
 #![no_main]
 
-use feathermark_core::{
+use rutile_core::{
     MAX_SOURCE_BLOCK_BYTES, SourceBlockKind, build_source_blocks, validate_source_blocks,
 };
 use libfuzzer_sys::fuzz_target;

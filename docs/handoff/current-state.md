@@ -139,7 +139,7 @@ The direct fast-forward commit `c026250` on `main` (G012; not merged by PR)
 repaired the Linux package construction blockers and **superseded** G011:
 
 - **Production test-control marker gating.** The `--native-smoke` test-control
-  entrypoint in `crates/feathermark-app/src/main.rs` is now `cfg(feature =
+  entrypoint in `crates/rutile-app/src/main.rs` is now `cfg(feature =
   "test-control")`-gated, so production `linux-gtk` candidates no longer embed
   forbidden test-control markers. Artifact policy was not weakened.
 - **Explicit `--formats ubuntu` packaging.** A new `LinuxPackageFormats` enum
@@ -163,7 +163,7 @@ retained and remains authoritative for the Linux package surface:
 - Clean production candidate SHA-256
   `7cd8b4854cee8801f8b2c16f047af5a18167db0e755ae881106fefff4f303a77` (XPS 17,
   Ubuntu 24.04.4 LTS, physical X11, base `aeafce3`, source `c026250`).
-- Retained deb `target/g011-feathermark_0.2.2_amd64.deb` SHA-256
+- Retained deb `target/g011-rutile_0.2.2_amd64.deb` SHA-256
   `a54f583aad81a8b4c0f3b1868358fdf1bff09449d8f21f7ae9f61b03b626e639`.
 - Retained tar.zst `target/g011-Rutile-0.2.2-linux-x86_64.tar.zst` SHA-256
   `c8c13682a681a42467c778b9bb8a700ae91f86822460c4579f9d51ca581454d3`.

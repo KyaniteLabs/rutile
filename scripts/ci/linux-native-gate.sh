@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 #
-# FeatherMark Rutile Linux native gate (WebKitGTK).
+# Rutile Linux native gate (WebKitGTK).
 #
-# Builds the feathermark binary with the Linux product shell (--features
+# Builds the rutile binary with the Linux product shell (--features
 # linux-gtk) and runs the lifecycle harness under a PRIVATE, dynamically
 # allocated Xvfb display and an isolated D-Bus session bus. It never attaches
 # to an existing DISPLAY: DISPLAY is unset on entry and a fresh display number
@@ -103,8 +103,8 @@ now_ms() { date +%s%3N; }
 git_commit() { git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo "0000000000000000000000000000000000000000"; }
 
 # --- re-exec under an isolated D-Bus session ---------------------------------
-if [ "${FEATHERMARK_LINUX_GATE_ISOLATED:-0}" != "1" ]; then
-  export FEATHERMARK_LINUX_GATE_ISOLATED=1
+if [ "${RUTILE_LINUX_GATE_ISOLATED:-0}" != "1" ]; then
+  export RUTILE_LINUX_GATE_ISOLATED=1
   exec dbus-run-session -- "$0" "$@"
 fi
 
@@ -169,23 +169,23 @@ echo "linux-native-gate: xvfb log=${xvfb_log}"
 
 # --- build + run the lifecycle harness ---------------------------------------
 build_profile="debug"
-bin_path="${TARGET_DIR}/debug/feathermark"
+bin_path="${TARGET_DIR}/debug/rutile"
 if [ "$profile" = "release" ]; then
   build_profile="release"
-  bin_path="${TARGET_DIR}/release/feathermark"
+  bin_path="${TARGET_DIR}/release/rutile"
 fi
 
-# The smoke lifecycle path (FEATHERMARK_SMOKE_AUTOCLOSE_MS) is gated behind the
-# `test-control` cargo feature in feathermark-app (see linux_gtk.rs run_application).
+# The smoke lifecycle path (RUTILE_SMOKE_AUTOCLOSE_MS) is gated behind the
+# `test-control` cargo feature in rutile-app (see linux_gtk.rs run_application).
 # This gate bin is a TEST ARTIFACT: it enables test-control so the lifecycle harness
 # emits its ready/closed receipts. The shipped production bin is built separately
 # WITHOUT test-control (the rutile.production-provenance schema forbids test-control
 # in production artifacts); this gate verifies the lifecycle code on a test build.
 echo "=== linux-native-gate: cargo build (${build_profile}, linux-gtk, test-control smoke artifact) ==="
 if [ "$profile" = "release" ]; then
-  cargo build --locked --release -p feathermark-app --features linux-gtk,test-control --bin feathermark
+  cargo build --locked --release -p rutile-app --features linux-gtk,test-control --bin rutile
 else
-  cargo build --locked -p feathermark-app --features linux-gtk,test-control --bin feathermark
+  cargo build --locked -p rutile-app --features linux-gtk,test-control --bin rutile
 fi
 
 if [ ! -x "$bin_path" ]; then
@@ -201,7 +201,7 @@ started_ms="$(now_ms)"
 
 echo "=== linux-native-gate: lifecycle (${cycles} cycles, DISPLAY=${DISPLAY}) ==="
 set +e
-bash "${REPO_ROOT}/scripts/feathermark-linux-lifecycle.sh" \
+bash "${REPO_ROOT}/scripts/rutile-linux-lifecycle.sh" \
   --cycles "$cycles" \
   --display "$DISPLAY" \
   --binary "$bin_path" \
