@@ -13,7 +13,7 @@ use super::config::RunnerDispatchConfig;
 use super::encoding::encode_probe_request;
 use super::protocol::{ProbeRequestV1, SignedRunnerProbeV1};
 
-const MAGIC: &[u8] = b"FMRP\0v1\0";
+const MAGIC: &[u8] = b"RURP\0v1\0";
 const MAX_RECEIPT_BYTES: usize = 256 * 1024;
 const MAX_STDERR_BYTES: usize = 64 * 1024;
 const TRANSPORT_TIMEOUT: Duration = Duration::from_secs(30);

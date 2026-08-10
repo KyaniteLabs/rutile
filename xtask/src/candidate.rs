@@ -120,10 +120,10 @@ mod tests {
         let manifest = verify_manifest(&bytes).unwrap();
         assert_eq!(
             manifest
-                .expectation("fm-macos-arm64-v1")
+                .expectation("rutile-macos-arm64-v1")
                 .unwrap()
                 .snapshot_id,
-            "fm-macos-arm64-v1-pristine-abababababab"
+            "rutile-macos-arm64-v1-pristine-abababababab"
         );
         assert_ne!(&hex::encode(manifest.sha256)[..12], "abababababab");
     }

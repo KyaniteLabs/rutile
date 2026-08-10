@@ -268,7 +268,7 @@ mod tests {
     use crate::runner::config::PinnedRunnerIdentityConfig;
 
     fn identity(runner_id: &str) -> RunnerIdentityV1 {
-        let mac = runner_id.starts_with("fm-macos-");
+        let mac = runner_id.starts_with("rutile-macos-");
         RunnerIdentityV1 {
             runner_id: runner_id.into(),
             machine_id_sha256: [1; 32],
@@ -279,18 +279,18 @@ mod tests {
             }
             .into(),
             cpu_model: match runner_id {
-                "fm-macos-arm64-v1" => "Apple M1",
-                "fm-macos-x86_64-v1" => "Intel(R) Core(TM) i7-9750H CPU",
+                "rutile-macos-arm64-v1" => "Apple M1",
+                "rutile-macos-x86_64-v1" => "Intel(R) Core(TM) i7-9750H CPU",
                 _ => "Intel(R) Core(TM) i5-8500 CPU",
             }
             .into(),
-            cpu_cores: if runner_id == "fm-macos-arm64-v1" {
+            cpu_cores: if runner_id == "rutile-macos-arm64-v1" {
                 8
             } else {
                 6
             },
             ram_bytes: 16 * 1024 * 1024 * 1024,
-            arch: if runner_id == "fm-macos-arm64-v1" {
+            arch: if runner_id == "rutile-macos-arm64-v1" {
                 "aarch64"
             } else {
                 "x86_64"
@@ -298,7 +298,7 @@ mod tests {
             .into(),
             os_product: if mac {
                 "macOS"
-            } else if runner_id == "fm-fedora-wayland-v1" {
+            } else if runner_id == "rutile-fedora-wayland-v1" {
                 "Fedora Linux"
             } else {
                 "Ubuntu"
@@ -306,7 +306,7 @@ mod tests {
             .into(),
             os_version: if mac {
                 "15.5"
-            } else if runner_id == "fm-fedora-wayland-v1" {
+            } else if runner_id == "rutile-fedora-wayland-v1" {
                 "43"
             } else {
                 "24.04"
@@ -317,26 +317,26 @@ mod tests {
             kernel: if mac { "Darwin 24.5.0" } else { "Linux 6.8.0" }.into(),
             display_session: if mac {
                 "aqua"
-            } else if runner_id == "fm-ubuntu-x11-v1" {
+            } else if runner_id == "rutile-ubuntu-x11-v1" {
                 "x11"
             } else {
                 "wayland"
             }
             .into(),
             display_socket: (!mac).then(|| {
-                if runner_id == "fm-ubuntu-x11-v1" {
+                if runner_id == "rutile-ubuntu-x11-v1" {
                     ":0"
                 } else {
                     "wayland-0"
                 }
                 .into()
             }),
-            monitor_width_px: if runner_id == "fm-macos-arm64-v1" {
+            monitor_width_px: if runner_id == "rutile-macos-arm64-v1" {
                 2560
             } else {
                 1920
             },
-            monitor_height_px: if runner_id == "fm-macos-arm64-v1" {
+            monitor_height_px: if runner_id == "rutile-macos-arm64-v1" {
                 1600
             } else {
                 1080
@@ -353,7 +353,7 @@ mod tests {
     }
 
     fn pinned(runner_id: &str) -> PinnedRunnerIdentityConfig {
-        let mac = runner_id.starts_with("fm-macos-");
+        let mac = runner_id.starts_with("rutile-macos-");
         PinnedRunnerIdentityConfig {
             machine_id_sha256: [1; 32],
             hardware_model: if mac {
@@ -362,31 +362,31 @@ mod tests {
                 "Reference PC"
             },
             cpu_model: match runner_id {
-                "fm-macos-arm64-v1" => "Apple M1",
-                "fm-macos-x86_64-v1" => "Intel(R) Core(TM) i7-9750H CPU",
+                "rutile-macos-arm64-v1" => "Apple M1",
+                "rutile-macos-x86_64-v1" => "Intel(R) Core(TM) i7-9750H CPU",
                 _ => "Intel(R) Core(TM) i5-8500 CPU",
             },
-            cpu_cores: if runner_id == "fm-macos-arm64-v1" {
+            cpu_cores: if runner_id == "rutile-macos-arm64-v1" {
                 8
             } else {
                 6
             },
             ram_bytes: 16 * 1024 * 1024 * 1024,
-            arch: if runner_id == "fm-macos-arm64-v1" {
+            arch: if runner_id == "rutile-macos-arm64-v1" {
                 "aarch64"
             } else {
                 "x86_64"
             },
             os_product: if mac {
                 "macOS"
-            } else if runner_id == "fm-fedora-wayland-v1" {
+            } else if runner_id == "rutile-fedora-wayland-v1" {
                 "Fedora Linux"
             } else {
                 "Ubuntu"
             },
             os_version: if mac {
                 "15.5"
-            } else if runner_id == "fm-fedora-wayland-v1" {
+            } else if runner_id == "rutile-fedora-wayland-v1" {
                 "43"
             } else {
                 "24.04"
@@ -396,22 +396,22 @@ mod tests {
             kernel: if mac { "Darwin 24.5.0" } else { "Linux 6.8.0" },
             display_session: if mac {
                 "aqua"
-            } else if runner_id == "fm-ubuntu-x11-v1" {
+            } else if runner_id == "rutile-ubuntu-x11-v1" {
                 "x11"
             } else {
                 "wayland"
             },
-            display_socket: (!mac).then_some(if runner_id == "fm-ubuntu-x11-v1" {
+            display_socket: (!mac).then_some(if runner_id == "rutile-ubuntu-x11-v1" {
                 ":0"
             } else {
                 "wayland-0"
             }),
-            monitor_width_px: if runner_id == "fm-macos-arm64-v1" {
+            monitor_width_px: if runner_id == "rutile-macos-arm64-v1" {
                 2560
             } else {
                 1920
             },
-            monitor_height_px: if runner_id == "fm-macos-arm64-v1" {
+            monitor_height_px: if runner_id == "rutile-macos-arm64-v1" {
                 1600
             } else {
                 1080
@@ -440,22 +440,22 @@ mod tests {
         for runner in RUNNERS {
             assert!(validate(&identity(runner)).is_ok());
         }
-        let mut wrong_family = identity("fm-ubuntu-wayland-v1");
+        let mut wrong_family = identity("rutile-ubuntu-wayland-v1");
         wrong_family.os_product = "Fedora Linux".into();
         assert!(validate(&wrong_family).is_err());
 
-        let mut wrong_runtime = identity("fm-fedora-wayland-v1");
+        let mut wrong_runtime = identity("rutile-fedora-wayland-v1");
         wrong_runtime.webkitgtk_version = Some("6.0.0".into());
         assert!(validate(&wrong_runtime).is_err());
 
-        let mut wrong_socket_shape = identity("fm-ubuntu-x11-v1");
+        let mut wrong_socket_shape = identity("rutile-ubuntu-x11-v1");
         wrong_socket_shape.display_socket = Some("wayland-0".into());
         assert!(validate(&wrong_socket_shape).is_err());
     }
 
     #[test]
     fn macos_contract_requires_distinct_real_wkwebview_runtime() {
-        let mut mac = identity("fm-macos-arm64-v1");
+        let mut mac = identity("rutile-macos-arm64-v1");
         mac.wkwebview_version = Some(mac.os_build.clone());
         assert!(validate(&mac).is_err());
         mac.wkwebview_version = None;

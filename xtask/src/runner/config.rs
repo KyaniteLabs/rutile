@@ -1,9 +1,9 @@
 pub(crate) const RUNNERS: [&str; 5] = [
-    "fm-macos-arm64-v1",
-    "fm-macos-x86_64-v1",
-    "fm-ubuntu-x11-v1",
-    "fm-ubuntu-wayland-v1",
-    "fm-fedora-wayland-v1",
+    "rutile-macos-arm64-v1",
+    "rutile-macos-x86_64-v1",
+    "rutile-ubuntu-x11-v1",
+    "rutile-ubuntu-wayland-v1",
+    "rutile-fedora-wayland-v1",
 ];
 
 #[derive(Clone, Copy)]

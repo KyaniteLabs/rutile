@@ -43,12 +43,12 @@ This document closes items from `../evidence-debt.md`. Items are numbered as in 
 - Product gate re-run on Niko under weston 13.0.0 headless (`--backend=headless-backend.so`, socket `wayland-fm`, `XDG_RUNTIME_DIR` 0700) with `GDK_BACKEND=wayland` and `DISPLAY` unset: **37 passed, 0 failed** (`cargo test --locked -p rutile-app --no-default-features --features linux-gtk,test-control`).
 - Lifecycle gate (`scripts/rutile-linux-lifecycle.sh --cycles 50`): **ready=50 closed=50 failures=0**, exit 0.
 - Backend proof: `DISPLAY` unset (product gate) / pointing at a verified-dead X server (lifecycle), plus a `WAYLAND_DEBUG=1` cycle emitting 3,615 Wayland wire-protocol messages. Stale Xvfb from earlier runs was killed before testing.
-- Logs on Niko: `/root/fm-evidence/{wayland-gate.log,weston.log,wldebug.stdout,wldebug.stderr}`.
+- Logs on Niko: `/root/rutile-evidence/{wayland-gate.log,weston.log,wldebug.stdout,wldebug.stderr}`.
 
 ### 3. RPM runtime verification
 - `rutile-0.1.0-1.x86_64.rpm` (SHA-256 matches the release manifest) installed cleanly in a `fedora:40` container on Niko (`dnf install` rc=0; deps gtk3, gtksourceview4, webkit2gtk4.1 auto-resolved).
 - Installed `/usr/bin/rutile` launched under Xvfb + dbus with no sandbox workarounds, alive after 10 s, clean SIGTERM exit (143). Notably this exercised WebKitGTK **2.48.1** (Fedora 40) vs 2.52.3 on the Ubuntu build host — coverage of an older runtime.
-- Log on Niko: `/root/fm-evidence/rpm-verify.log`.
+- Log on Niko: `/root/rutile-evidence/rpm-verify.log`.
 
 ### 9. Full Linux test matrix as non-root
 - As user `fmtest` (uid 1002) on a byte-identical copy of the source tree: `cargo test --workspace --all-targets --locked` → **exit 0; 192 passed, 0 failed, 1 ignored-by-design** across 41 suites, including all six previously failing `runner_native` permission tests.

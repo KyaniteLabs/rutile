@@ -4,11 +4,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub(crate) const RUNNERS: [&str; 5] = [
-    "fm-macos-arm64-v1",
-    "fm-macos-x86_64-v1",
-    "fm-ubuntu-x11-v1",
-    "fm-ubuntu-wayland-v1",
-    "fm-fedora-wayland-v1",
+    "rutile-macos-arm64-v1",
+    "rutile-macos-x86_64-v1",
+    "rutile-ubuntu-x11-v1",
+    "rutile-ubuntu-wayland-v1",
+    "rutile-fedora-wayland-v1",
 ];
 
 #[derive(Clone, Debug)]
@@ -166,7 +166,7 @@ fn validate(trust: &TrustManifest, dispatch: &DispatchManifest) -> Result<(), St
             }
         }
         validate_pinned_identity(row)?;
-        let mac = expected.starts_with("fm-macos-");
+        let mac = expected.starts_with("rutile-macos-");
         if mac
             != (row
                 .macos_designated_requirement
@@ -213,7 +213,7 @@ fn validate_pinned_identity(row: &DispatchRow) -> Result<(), String> {
             return Err("zero virtualization image".into());
         }
     }
-    let mac = row.runner_id.starts_with("fm-macos-");
+    let mac = row.runner_id.starts_with("rutile-macos-");
     if mac
         != (identity.display_socket.is_none()
             && identity.gtk_version.is_none()
@@ -237,11 +237,11 @@ fn validate_pinned_identity(row: &DispatchRow) -> Result<(), String> {
 }
 
 fn expected_probe_path(runner_id: &str) -> Option<&'static str> {
-    if matches!(runner_id, "fm-macos-arm64-v1" | "fm-macos-x86_64-v1") {
+    if matches!(runner_id, "rutile-macos-arm64-v1" | "rutile-macos-x86_64-v1") {
         Some("/Library/Application Support/Rutile Runner/bin/rutile-runner-probe")
     } else if matches!(
         runner_id,
-        "fm-ubuntu-x11-v1" | "fm-ubuntu-wayland-v1" | "fm-fedora-wayland-v1"
+        "rutile-ubuntu-x11-v1" | "rutile-ubuntu-wayland-v1" | "rutile-fedora-wayland-v1"
     ) {
         Some("/usr/libexec/rutile-runner-probe")
     } else {
@@ -358,7 +358,7 @@ mod tests {
     fn every_runner_id_has_one_fixed_launcher_control_probe_path() {
         for runner in RUNNERS {
             let path = expected_probe_path(runner).unwrap();
-            if runner.starts_with("fm-macos-") {
+            if runner.starts_with("rutile-macos-") {
                 assert_eq!(
                     path,
                     "/Library/Application Support/Rutile Runner/bin/rutile-runner-probe"

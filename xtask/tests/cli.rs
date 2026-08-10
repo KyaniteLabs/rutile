@@ -200,7 +200,7 @@ fn metric_record() -> Vec<u8> {
         "rustc_version":"rustc 1.88.0","toolchain":"1.88.0","target_triple":"aarch64-apple-darwin",
         "release_profile":"release","features":["test-control"],"build_kind":"instrumented",
         "candidate_executable_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "package_sha256":null,"runner_id":"fm-macos-arm64-v1",
+        "package_sha256":null,"runner_id":"rutile-macos-arm64-v1",
         "runner_lock_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "pristine_snapshot_id":"snapshot","cpu_model":"Apple M1","cpu_cores":8,"ram_bytes":17179869184_u64,
         "os":"macOS","kernel":"Darwin","display_session":"native","display_environment":{},
