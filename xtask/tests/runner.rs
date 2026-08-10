@@ -4,7 +4,7 @@ use std::process::Command;
 
 use tempfile::tempdir;
 
-const CLOSED_RUNNERS: &str = "fm-macos-arm64-v1,fm-macos-x86_64-v1,fm-ubuntu-x11-v1,fm-ubuntu-wayland-v1,fm-fedora-wayland-v1";
+const CLOSED_RUNNERS: &str = "rutile-macos-arm64-v1,rutile-macos-x86_64-v1,rutile-ubuntu-x11-v1,rutile-ubuntu-wayland-v1,rutile-fedora-wayland-v1";
 
 #[test]
 fn normal_binary_is_unprovisioned_and_fails_before_io() {

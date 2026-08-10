@@ -205,7 +205,7 @@ jobs:
           set -euo pipefail
           mkdir -p release/evidence/runner target/runner-captures
           cargo run --locked -p xtask --bin xtask -- runner capture-verify-matrix \
-            --runners fm-macos-arm64-v1,fm-macos-x86_64-v1,fm-ubuntu-x11-v1,fm-ubuntu-wayland-v1,fm-fedora-wayland-v1 \
+            --runners rutile-macos-arm64-v1,rutile-macos-x86_64-v1,rutile-ubuntu-x11-v1,rutile-ubuntu-wayland-v1,rutile-fedora-wayland-v1 \
             --capture-dir target/runner-captures \
             --out release/evidence/runner/runner-lock-v1.json
       - name: verify independent readiness attestation (fails closed)

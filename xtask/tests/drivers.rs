@@ -72,7 +72,7 @@ fn metric_record(samples: &[u64]) -> Vec<u8> {
         "build_kind": "instrumented",
         "candidate_executable_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "package_sha256": null,
-        "runner_id": "fm-macos-arm64-v1",
+        "runner_id": "rutile-macos-arm64-v1",
         "runner_lock_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "pristine_snapshot_id": "snapshot",
         "cpu_model": "Apple M1",

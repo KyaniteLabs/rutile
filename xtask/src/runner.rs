@@ -114,7 +114,7 @@ mod tests {
         let request = ProbeRequestV1 {
             purpose: ProbePurpose::Enroll,
             run_id: [0; 32],
-            runner_id: "fm-macos-arm64-v1".into(),
+            runner_id: "rutile-macos-arm64-v1".into(),
             challenge: [1; 32],
             issued_at_unix_ms: 1_000,
             not_after_unix_ms: 31_000,

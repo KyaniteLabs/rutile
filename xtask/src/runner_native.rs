@@ -21,9 +21,9 @@ pub(crate) mod platform;
 mod replay;
 mod service_config;
 
-const COORDINATOR_MAGIC: &[u8; 8] = b"FMRP\0v1\0";
-const PROBE_INPUT_MAGIC: &[u8; 8] = b"FMPI\0v1\0";
-const PROBE_OUTPUT_MAGIC: &[u8; 8] = b"FMPO\0v1\0";
+const COORDINATOR_MAGIC: &[u8; 8] = b"RURP\0v1\0";
+const PROBE_INPUT_MAGIC: &[u8; 8] = b"RUPI\0v1\0";
+const PROBE_OUTPUT_MAGIC: &[u8; 8] = b"RUPO\0v1\0";
 const MAX_COORDINATOR_REQUEST: usize = 16 * 1024;
 const NATIVE_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_NATIVE_CHILD_STDERR_BYTES: usize = 8 * 1024;
@@ -425,7 +425,7 @@ fn native_report_fixture() -> NativeProbeReportV1 {
     NativeProbeReportV1 {
         challenge: [7; 32],
         identity: RunnerIdentityV1 {
-            runner_id: "fm-macos-arm64-v1".into(),
+            runner_id: "rutile-macos-arm64-v1".into(),
             machine_id_sha256: [1; 32],
             hardware_model: "Mac14,2".into(),
             cpu_model: "Apple M1".into(),
@@ -452,7 +452,7 @@ fn native_report_fixture() -> NativeProbeReportV1 {
         },
         boot_id_sha256: [2; 32],
         graphical_session_id_sha256: [3; 32],
-        snapshot_id: "fm-macos-arm64-v1-pristine".into(),
+        snapshot_id: "rutile-macos-arm64-v1-pristine".into(),
         snapshot_provider: "apfs".into(),
         snapshot_image_sha256: [4; 32],
         captured_at_unix_ms: 1_750_000_000_000,
@@ -465,11 +465,11 @@ fn probe_request_fixture() -> crate::runner::protocol::ProbeRequestV1 {
     ProbeRequestV1 {
         purpose: ProbePurpose::Enroll,
         run_id: [5; 32],
-        runner_id: "fm-macos-arm64-v1".into(),
+        runner_id: "rutile-macos-arm64-v1".into(),
         challenge: [7; 32],
         issued_at_unix_ms: 1_750_000_000_000,
         not_after_unix_ms: 1_750_000_030_000,
-        expected_snapshot_id: "fm-macos-arm64-v1-pristine".into(),
+        expected_snapshot_id: "rutile-macos-arm64-v1-pristine".into(),
         expected_snapshot_provider: "apfs".into(),
         expected_image_sha256: [4; 32],
         expected_probe_sha256: [8; 32],
@@ -666,8 +666,8 @@ mod tests {
     fn snapshot_attestation_is_closed_and_requires_nonzero_image_commitment() {
         let json = br#"{
           "schema":"rutile.runner-snapshot-attestation.v1",
-          "runner_id":"fm-macos-arm64-v1",
-          "snapshot_id":"fm-macos-arm64-v1-pristine",
+          "runner_id":"rutile-macos-arm64-v1",
+          "snapshot_id":"rutile-macos-arm64-v1-pristine",
           "snapshot_provider":"apfs",
           "snapshot_image_sha256":"0404040404040404040404040404040404040404040404040404040404040404",
           "virtualized":false,
@@ -775,7 +775,7 @@ mod tests {
     fn launcher_service_config_is_closed_and_pins_key_transport_and_probe() {
         let json = br#"{
           "schema":"rutile.runner-launcher-config.v1",
-          "runner_id":"fm-macos-arm64-v1",
+          "runner_id":"rutile-macos-arm64-v1",
           "key_id":"runner-key-1",
           "probe_sha256":"0202020202020202020202020202020202020202020202020202020202020202",
           "macos_designated_requirement":"identifier \"com.rutile.runner-probe\"",
@@ -792,14 +792,14 @@ mod tests {
 
         let linux = br#"{
           "schema":"rutile.runner-launcher-config.v1",
-          "runner_id":"fm-ubuntu-wayland-v1",
+          "runner_id":"rutile-ubuntu-wayland-v1",
           "key_id":"runner-key-2",
           "probe_sha256":"0202020202020202020202020202020202020202020202020202020202020202",
           "macos_designated_requirement":null,
           "macos_cdhash":null
         }"#;
         let linux = service_config::parse_launcher_config(linux).unwrap();
-        assert_eq!(linux.runner_id, "fm-ubuntu-wayland-v1");
+        assert_eq!(linux.runner_id, "rutile-ubuntu-wayland-v1");
     }
 
     #[test]
@@ -828,7 +828,7 @@ mod tests {
     #[test]
     fn native_collector_populates_the_closed_host_identity_and_session_fields() {
         let attestation = collector::SnapshotAttestationV1 {
-            runner_id: "fm-macos-arm64-v1".into(),
+            runner_id: "rutile-macos-arm64-v1".into(),
             snapshot_id: "local-test-snapshot".into(),
             snapshot_provider: "local-test-provider".into(),
             snapshot_image_sha256: [9; 32],

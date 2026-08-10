@@ -520,7 +520,7 @@ struct TempDir(std::path::PathBuf);
 impl TempDir {
     fn new(tag: &str) -> Self {
         let p = std::env::temp_dir().join(format!(
-            "fm-qa-{tag}-{}-{}",
+            "rutile-qa-{tag}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

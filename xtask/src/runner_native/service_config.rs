@@ -40,7 +40,7 @@ pub(super) fn parse_launcher_config(bytes: &[u8]) -> Result<LauncherConfigV1, St
         .as_deref()
         .map(decode_hash::<20>)
         .transpose()?;
-    let macos = wire.runner_id.starts_with("fm-macos-");
+    let macos = wire.runner_id.starts_with("rutile-macos-");
     if probe_sha256 == [0; 32]
         || macos
             != (wire
