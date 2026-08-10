@@ -544,8 +544,12 @@ impl ProductRunner {
         match self.session.inspect_external_change() {
             Ok(MacExternalOutcome::Unchanged) => {}
             Ok(MacExternalOutcome::Reloaded { .. }) => {
-                let _ = self.source_pane.replace(&self.session.snapshot());
-                let _ = self.schedule_render();
+                if let Err(error) = self.source_pane.replace(&self.session.snapshot()) {
+                    eprintln!("rutile: external-reload editor resync failed: {error}");
+                }
+                if let Err(error) = self.schedule_render() {
+                    eprintln!("rutile: external-reload render schedule failed: {error}");
+                }
                 self.sync_window_title();
             }
             Ok(MacExternalOutcome::Conflict) => self.sync_window_title(),
@@ -557,8 +561,9 @@ impl ProductRunner {
         if self.menu_installed {
             return;
         }
-        if install_file_menu().is_ok() {
-            self.menu_installed = true;
+        match install_file_menu() {
+            Ok(()) => self.menu_installed = true,
+            Err(error) => eprintln!("rutile: file menu install failed: {error}"),
         }
     }
 
@@ -767,20 +772,26 @@ impl ProductRunner {
         changes: &[ChangeSet],
         selection: Selection,
     ) -> Result<(), MacError> {
-        let applied_incrementally = !changes.is_empty() && {
-            let editor = self.source_pane.editor_mut();
-            let mut ok = true;
-            for change in changes {
-                if editor.apply_external_change(change).is_err() {
-                    ok = false;
-                    break;
+        let applied_incrementally = !changes.is_empty()
+            && {
+                let editor = self.source_pane.editor_mut();
+                let mut ok = true;
+                for change in changes {
+                    if editor.apply_external_change(change).is_err() {
+                        ok = false;
+                        break;
+                    }
                 }
-            }
-            if let (true, Some(last)) = (ok, changes.last()) {
-                ok = editor.set_selection(last.after, selection).is_ok();
-            }
-            ok
-        };
+                if let (true, Some(last)) = (ok, changes.last()) {
+                    if let Err(error) = editor.set_selection(last.after, selection) {
+                        eprintln!(
+                            "rutile: set_selection failed after shared edit; falling back to resync: {error}"
+                        );
+                        ok = false;
+                    }
+                }
+                ok
+            };
         if applied_incrementally {
             return Ok(());
         }
@@ -1409,7 +1420,9 @@ impl ProductRunner {
         let state =
             self.session
                 .capture_session_state(unix_ms_now(), selection, top_visible_byte, window);
-        let _ = self.session.save_session_state(&state);
+        if let Err(error) = self.session.save_session_state(&state) {
+            eprintln!("rutile: session-state save failed: {error}");
+        }
     }
 
     fn process_preview_event(&mut self, event_loop: &ActiveEventLoop, event: PreviewEventV1) {
@@ -2137,9 +2150,12 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
                     match event {
                         Ok(event) => self.process_preview_event(event_loop, event),
                         Err(
-                            HostError::NoLoadedDocument
-                            | HostError::Protocol(ProtocolError::StaleRevision),
-                        ) => continue,
+                            error @ (HostError::NoLoadedDocument
+                            | HostError::Protocol(ProtocolError::StaleRevision)),
+                        ) => {
+                            eprintln!("rutile: transient preview IPC drop ignored: {error}");
+                            continue;
+                        }
                         Err(error) => {
                             self.fail(event_loop, error.to_string());
                             return;
