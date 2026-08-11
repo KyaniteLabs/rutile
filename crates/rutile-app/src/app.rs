@@ -157,6 +157,12 @@ pub enum AppMessage {
     MirrorResyncCompleted {
         result: Result<(), String>,
     },
+    /// Clears the recent-documents list (roadmap 07).
+    ClearRecents,
+    /// Removes a single path from the recent-documents list (roadmap 07).
+    RemoveRecent {
+        path: PathBuf,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -210,6 +216,85 @@ pub enum AppEffect {
     QuitApplication,
 }
 
+/// MRU-ordered recent documents list.
+///
+/// Tracks file paths the user has opened, most-recently-used first, bounded
+/// by [`MAX_RECENT_FILES`](rutile_core::MAX_RECENT_FILES). Duplicate paths are
+/// deduplicated (moved to front on re-open). This is the headless contract
+/// layer; the platform shell reads [`paths`](RecentDocuments::paths) to
+/// populate its recent-documents menu.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentDocuments {
+    paths: Vec<PathBuf>,
+    cap: usize,
+}
+
+impl Default for RecentDocuments {
+    fn default() -> Self {
+        Self::new(rutile_core::MAX_RECENT_FILES)
+    }
+}
+
+impl RecentDocuments {
+    /// Creates an empty list bounded by `cap` (clamped to `MAX_RECENT_FILES`).
+    pub fn new(cap: usize) -> Self {
+        Self {
+            paths: Vec::new(),
+            cap: cap.min(rutile_core::MAX_RECENT_FILES),
+        }
+    }
+
+    /// Records that `path` was opened, moving it to the front (MRU).
+    /// Duplicate paths are removed first; the list is truncated to `cap`.
+    pub fn touch(&mut self, path: PathBuf) {
+        self.paths.retain(|p| p != &path);
+        self.paths.insert(0, path);
+        self.paths.truncate(self.cap);
+    }
+
+    /// Removes `path` from the list (e.g. user dismissed a missing file).
+    pub fn remove(&mut self, path: &Path) {
+        self.paths.retain(|p| p.as_path() != path);
+    }
+
+    /// Clears all entries.
+    pub fn clear(&mut self) {
+        self.paths.clear();
+    }
+
+    /// Returns the MRU-ordered paths.
+    pub fn paths(&self) -> &[PathBuf] {
+        &self.paths
+    }
+
+    /// Number of entries.
+    pub fn len(&self) -> usize {
+        self.paths.len()
+    }
+
+    /// Whether the list is empty.
+    pub fn is_empty(&self) -> bool {
+        self.paths.is_empty()
+    }
+
+    /// Serializes to the `Vec<String>` wire format used by `SessionStateV1`.
+    pub fn to_strings(&self) -> Vec<String> {
+        self.paths
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    /// Deserializes from the `Vec<String>` wire format, clamped to `cap`.
+    pub fn from_strings(strings: &[String], cap: usize) -> Self {
+        let cap = cap.min(rutile_core::MAX_RECENT_FILES);
+        Self {
+            paths: strings.iter().take(cap).map(PathBuf::from).collect(),
+            cap,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct AppState {
     revision: Revision,
@@ -231,6 +316,7 @@ pub struct AppState {
     /// A second failure while the resync is outstanding, or a failed resync
     /// completion, surfaces a durable [`UserNotice`] instead of looping forever.
     mirror_resync_pending: bool,
+    recents: RecentDocuments,
 }
 
 impl AppState {
@@ -265,6 +351,11 @@ impl AppState {
     /// Borrows the active user notices.
     pub fn notices(&self) -> &[UserNotice] {
         &self.notices
+    }
+
+    /// Borrows the MRU-ordered recent-documents list (roadmap 07).
+    pub fn recents(&self) -> &RecentDocuments {
+        &self.recents
     }
 
     /// Pushes a new notice and returns a clone for immediate presentation.
@@ -319,6 +410,7 @@ impl AppState {
             } => {
                 self.revision = revision;
                 self.dirty = false;
+                self.recents.touch(path.clone());
                 self.path = Some(path);
                 self.saved_disk = Some(disk);
                 self.external_conflict = None;
@@ -436,6 +528,7 @@ impl AppState {
                 Ok((revision, path, disk)) => {
                     self.revision = revision;
                     self.dirty = false;
+                    self.recents.touch(path.clone());
                     self.path = Some(path);
                     self.saved_disk = Some(disk);
                     self.external_conflict = None;
@@ -514,6 +607,10 @@ impl AppState {
                 vec![]
             }
             AppMessage::SessionRestored { state } => {
+                self.recents = RecentDocuments::from_strings(
+                    &state.recent_files,
+                    rutile_core::MAX_RECENT_FILES,
+                );
                 let restore = self.restore_session(&state);
                 if let Some(path) = restore.last_file {
                     vec![AppEffect::PerformOpen { path }]
@@ -563,6 +660,14 @@ impl AppState {
                         vec![AppEffect::PresentNotice { notice }]
                     }
                 }
+            }
+            AppMessage::ClearRecents => {
+                self.recents.clear();
+                vec![]
+            }
+            AppMessage::RemoveRecent { path } => {
+                self.recents.remove(&path);
+                vec![]
             }
         }
     }
@@ -956,7 +1061,7 @@ impl AppState {
         window: Option<SessionWindowV1>,
     ) -> SessionStateV1 {
         let last_file = self.path().map(|path| path.to_string_lossy().into_owned());
-        let recent_files = last_file.clone().into_iter().collect();
+        let recent_files = self.recents.to_strings();
         SessionStateV1 {
             schema: SESSION_SCHEMA_V1.to_owned(),
             v: 1,
