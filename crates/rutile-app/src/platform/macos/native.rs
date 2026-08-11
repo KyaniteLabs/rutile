@@ -44,10 +44,10 @@ use super::{
     AppKitMainThread, AxUiState, EditorVisualReceipt, IcedEditorAdapter, MacError,
     MacExternalOutcome, MacMenuCommand, MacSaveAction, MacScrollDispatch, MacUserEvent,
     PreviewIpcFatal, PreviewIpcIngress, ProductSession, bind_open_proxy, forward_open_urls,
-    install_file_menu_with_actions, preview_ipc_channel, split_panes,
+    install_file_menu_with_actions, preview_ipc_channel, split_panes, update_recent_documents,
 };
 use crate::actions::SessionRestore;
-use crate::app::{AppEffect, CloseDecision, CloseOutcome, UserNotice};
+use crate::app::{AppEffect, AppMessage, CloseDecision, CloseOutcome, UserNotice};
 use crate::brand::{PRODUCT_NAME, SOURCE_EDITOR_LABEL, STARTER_DOCUMENT, status_title};
 use crate::preview_host::{
     HostError, NavigationKind, PreviewControlSink, PreviewHost, SchemeRequest, SchemeResponse,
@@ -329,6 +329,8 @@ impl ProductRunner {
         if let Err(error) = self.refresh_after_document_swap(event_loop) {
             self.fail(event_loop, error.to_string());
         }
+        self.sync_window_title();
+        self.sync_recent_documents();
     }
 
     fn handle_menu_command(&mut self, event_loop: &ActiveEventLoop, command: MacMenuCommand) {
@@ -349,6 +351,10 @@ impl ProductRunner {
                     self.save_session_on_exit();
                     event_loop.exit();
                 }
+            }
+            MacMenuCommand::ClearRecents => {
+                self.session.core_mut().reduce(AppMessage::ClearRecents);
+                self.sync_recent_documents();
             }
         }
     }
@@ -448,6 +454,12 @@ impl ProductRunner {
             window.request_redraw();
             self.window_title = Some(title);
         }
+    }
+
+    /// Rebuilds the "Open Recent" submenu from the current recents list.
+    fn sync_recent_documents(&mut self) {
+        let paths = self.session.app_state().recents().to_strings();
+        update_recent_documents(paths);
     }
 
     /// Publish the NSAccessibility tree (CY-A11Y-001) onto the content NSView
