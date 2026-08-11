@@ -1609,7 +1609,8 @@ pub use editor::{IcedAdapterStats, IcedEditorAdapter};
 use native::run_native;
 pub use open_events::{
     MacMenuCommand, MacUserEvent, bind_open_proxy, forward_open_urls,
-    install_file_menu_with_actions, update_recent_documents,
+    install_file_menu_with_actions, install_window_menu, take_pending_switch,
+    update_recent_documents, update_tabs,
 };
 
 fn percent_decode_path(segment: &str) -> String {

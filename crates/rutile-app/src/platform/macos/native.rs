@@ -44,7 +44,8 @@ use super::{
     AppKitMainThread, AxUiState, EditorVisualReceipt, IcedEditorAdapter, MacError,
     MacExternalOutcome, MacMenuCommand, MacSaveAction, MacScrollDispatch, MacUserEvent,
     PreviewIpcFatal, PreviewIpcIngress, ProductSession, bind_open_proxy, forward_open_urls,
-    install_file_menu_with_actions, preview_ipc_channel, split_panes, update_recent_documents,
+    install_file_menu_with_actions, install_window_menu, preview_ipc_channel, split_panes,
+    take_pending_switch, update_recent_documents, update_tabs,
 };
 use crate::actions::SessionRestore;
 use crate::app::{AppEffect, AppMessage, CloseDecision, CloseOutcome, UserNotice};
@@ -331,6 +332,7 @@ impl ProductRunner {
         }
         self.sync_window_title();
         self.sync_recent_documents();
+        self.sync_tabs();
     }
 
     fn handle_menu_command(&mut self, event_loop: &ActiveEventLoop, command: MacMenuCommand) {
@@ -355,6 +357,26 @@ impl ProductRunner {
             MacMenuCommand::ClearRecents => {
                 self.session.core_mut().reduce(AppMessage::ClearRecents);
                 self.sync_recent_documents();
+            }
+            MacMenuCommand::NewTab => {
+                self.session.core_mut().reduce(AppMessage::NewTab);
+                self.sync_tabs();
+            }
+            MacMenuCommand::CloseTab => {
+                let active = self.session.app_state().documents().active_id();
+                self.session
+                    .core_mut()
+                    .reduce(AppMessage::CloseTab { id: active });
+                self.sync_tabs();
+            }
+            MacMenuCommand::SwitchTab => {
+                if let Some(index) = take_pending_switch() {
+                    let tabs: Vec<_> = self.session.app_state().documents().tab_order().to_vec();
+                    if let Some(&id) = tabs.get(index) {
+                        self.session.core_mut().reduce(AppMessage::SwitchTab { id });
+                        self.sync_tabs();
+                    }
+                }
             }
         }
     }
@@ -460,6 +482,28 @@ impl ProductRunner {
     fn sync_recent_documents(&mut self) {
         let paths = self.session.app_state().recents().to_strings();
         update_recent_documents(paths);
+    }
+
+    /// Rebuilds the Tabs submenu from the current DocumentManager state.
+    fn sync_tabs(&mut self) {
+        let docs = self.session.app_state().documents();
+        let tab_order = docs.tab_order();
+        let active = docs.active_id();
+        let active_index = tab_order.iter().position(|&id| id == active).unwrap_or(0);
+
+        let id_values: Vec<u64> = tab_order.iter().map(|id| id.get()).collect();
+        let labels: Vec<String> = tab_order
+            .iter()
+            .map(|id| {
+                docs.slot(*id)
+                    .and_then(|s| s.path.as_ref())
+                    .and_then(|p| p.file_name())
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "Untitled".to_owned())
+            })
+            .collect();
+
+        update_tabs(id_values, labels, active_index);
     }
 
     /// Publish the NSAccessibility tree (CY-A11Y-001) onto the content NSView
@@ -574,7 +618,12 @@ impl ProductRunner {
             return;
         }
         match install_file_menu() {
-            Ok(()) => self.menu_installed = true,
+            Ok(()) => {
+                self.menu_installed = true;
+                if let Err(error) = install_window_menu() {
+                    eprintln!("rutile: window menu install failed: {error}");
+                }
+            }
             Err(error) => eprintln!("rutile: file menu install failed: {error}"),
         }
     }

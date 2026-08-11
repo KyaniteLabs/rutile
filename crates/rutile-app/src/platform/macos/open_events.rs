@@ -28,6 +28,27 @@ fn recent_paths() -> &'static Mutex<Vec<String>> {
 
 const RECENT_SUBMENU_TITLE: &str = "Open Recent";
 
+/// Snapshot of open-tab DocumentIds for resolving switch-tab menu tags.
+static TAB_IDS: OnceLock<Mutex<Vec<u64>>> = OnceLock::new();
+
+fn tab_ids() -> &'static Mutex<Vec<u64>> {
+    TAB_IDS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Pending switch-tab index set by the menu target, read by the adapter.
+static PENDING_SWITCH: OnceLock<Mutex<Option<usize>>> = OnceLock::new();
+
+fn pending_switch() -> &'static Mutex<Option<usize>> {
+    PENDING_SWITCH.get_or_init(|| Mutex::new(None))
+}
+
+/// Reads and clears the pending switch-tab index (called by the adapter).
+pub fn take_pending_switch() -> Option<usize> {
+    pending_switch().lock().ok().and_then(|mut g| g.take())
+}
+
+const TABS_SUBMENU_TITLE: &str = "Tabs";
+
 /// User events delivered to [`ApplicationHandler::user_event`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MacUserEvent {
@@ -45,6 +66,10 @@ pub enum MacMenuCommand {
     SaveAs,
     Close,
     ClearRecents,
+    NewTab,
+    CloseTab,
+    /// Switch to the tab at the sender's tag index.
+    SwitchTab,
 }
 
 /// Binds the event-loop proxy used to wake the adapter with open / menu deliveries.
@@ -113,6 +138,26 @@ define_class!(
         #[unsafe(method(menuClearRecents:))]
         fn menu_clear_recents(&self, _sender: Option<&AnyObject>) {
             let _ = forward_menu_command(MacMenuCommand::ClearRecents);
+        }
+        #[unsafe(method(menuNewTab:))]
+        fn menu_new_tab(&self, _sender: Option<&AnyObject>) {
+            let _ = forward_menu_command(MacMenuCommand::NewTab);
+        }
+
+        #[unsafe(method(menuCloseTab:))]
+        fn menu_close_tab(&self, _sender: Option<&AnyObject>) {
+            let _ = forward_menu_command(MacMenuCommand::CloseTab);
+        }
+
+        #[unsafe(method(menuSwitchTab:))]
+        fn menu_switch_tab(&self, sender: Option<&AnyObject>) {
+            if let Some(sender) = sender {
+                let tag: isize = unsafe { msg_send![sender, tag] };
+                if let Ok(mut g) = pending_switch().lock() {
+                    *g = Some(tag as usize);
+                }
+                let _ = forward_menu_command(MacMenuCommand::SwitchTab);
+            }
         }
     }
 );
@@ -259,4 +304,128 @@ pub fn update_recent_documents(paths: Vec<String>) {
     let separator = NSMenuItem::separatorItem(mtm);
     recent_menu.addItem(&separator);
     recent_menu.addItem(&clear_item);
+}
+
+/// Installs a Window menu with New Tab / Close Tab / tab list.
+/// Must be called once after [`install_file_menu_with_actions`] on the main thread.
+pub fn install_window_menu() -> Result<(), String> {
+    let mtm =
+        MainThreadMarker::new().ok_or("window menu must be installed on the AppKit main thread")?;
+    let app = NSApplication::sharedApplication(mtm);
+    let main_menu = app
+        .mainMenu()
+        .ok_or("no main menu — install file menu first")?;
+
+    let target = menu_target();
+
+    let window_menu = NSMenu::new(mtm);
+    window_menu.setTitle(&NSString::from_str("Window"));
+
+    // New Tab (⌘T)
+    let new_tab = NSMenuItem::new(mtm);
+    new_tab.setTitle(&NSString::from_str("New Tab"));
+    new_tab.setKeyEquivalent(&NSString::from_str("t"));
+    unsafe {
+        new_tab.setTarget(Some(&***target));
+        new_tab.setAction(Some(sel!(menuNewTab:)));
+    }
+    window_menu.addItem(&new_tab);
+
+    // Close Tab (⌃⌘W)
+    let close_tab = NSMenuItem::new(mtm);
+    close_tab.setTitle(&NSString::from_str("Close Tab"));
+    close_tab.setKeyEquivalent(&NSString::from_str("w"));
+    unsafe {
+        close_tab.setTarget(Some(&***target));
+        close_tab.setAction(Some(sel!(menuCloseTab:)));
+    }
+    window_menu.addItem(&close_tab);
+
+    // Separator
+    window_menu.addItem(&NSMenuItem::separatorItem(mtm));
+
+    // "Tabs" submenu (initially empty placeholder).
+    let tabs_submenu = NSMenu::new(mtm);
+    tabs_submenu.setTitle(&NSString::from_str(TABS_SUBMENU_TITLE));
+    let tabs_holder = NSMenuItem::new(mtm);
+    tabs_holder.setTitle(&NSString::from_str(TABS_SUBMENU_TITLE));
+    tabs_holder.setSubmenu(Some(&tabs_submenu));
+    window_menu.addItem(&tabs_holder);
+
+    let placeholder = NSMenuItem::new(mtm);
+    placeholder.setTitle(&NSString::from_str("No Tabs"));
+    placeholder.setEnabled(false);
+    tabs_submenu.addItem(&placeholder);
+
+    let window_item = NSMenuItem::new(mtm);
+    window_item.setTitle(&NSString::from_str("Window"));
+    window_item.setSubmenu(Some(&window_menu));
+    main_menu.addItem(&window_item);
+    Ok(())
+}
+
+/// Rebuilds the Tabs submenu from `tab_id_values` (DocumentId .get() values)
+/// and `tab_labels` (display names). The active index gets a checkmark.
+pub fn update_tabs(tab_id_values: Vec<u64>, tab_labels: Vec<String>, active_index: usize) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    *tab_ids().lock().unwrap_or_else(|e| e.into_inner()) = tab_id_values.clone();
+
+    let app = NSApplication::sharedApplication(mtm);
+    let Some(main_menu) = app.mainMenu() else {
+        return;
+    };
+
+    // Find the Window menu.
+    let mut window_menu = None;
+    for i in 0..main_menu.numberOfItems() {
+        if let Some(item) = main_menu.itemAtIndex(i) {
+            if item.title().to_string() == "Window" {
+                window_menu = item.submenu();
+                break;
+            }
+        }
+    }
+    let Some(window_menu) = window_menu else {
+        return;
+    };
+
+    // Find the Tabs submenu.
+    let mut tabs_menu = None;
+    for i in 0..window_menu.numberOfItems() {
+        if let Some(item) = window_menu.itemAtIndex(i) {
+            if item.title().to_string() == TABS_SUBMENU_TITLE {
+                tabs_menu = item.submenu();
+                break;
+            }
+        }
+    }
+    let Some(tabs_menu) = tabs_menu else {
+        return;
+    };
+
+    tabs_menu.removeAllItems();
+    let target = menu_target();
+
+    if tab_labels.is_empty() {
+        let placeholder = NSMenuItem::new(mtm);
+        placeholder.setTitle(&NSString::from_str("No Tabs"));
+        placeholder.setEnabled(false);
+        tabs_menu.addItem(&placeholder);
+        return;
+    }
+
+    for (index, label) in tab_labels.iter().enumerate() {
+        let item = NSMenuItem::new(mtm);
+        item.setTitle(&NSString::from_str(label));
+        item.setTag(index as isize);
+        let state: isize = if index == active_index { 1 } else { 0 };
+        unsafe {
+            let _: () = msg_send![&item, setState: state];
+            item.setTarget(Some(&***target));
+            item.setAction(Some(sel!(menuSwitchTab:)));
+        }
+        tabs_menu.addItem(&item);
+    }
 }
