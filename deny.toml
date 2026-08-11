@@ -2,13 +2,10 @@
 version = 2
 ignore = [
     # quick-xml is pulled in only as a build-only transitive dependency of
-    # wayland-scanner (via winit/iced on macOS). The vulnerable NsReader API is
+    # wayland-scanner (via winit/iced). The vulnerable NsReader API is
     # not used by Rutile code.
     { id = "RUSTSEC-2026-0195", reason = "build-only transitive dependency; vulnerable API not used" },
     { id = "RUSTSEC-2026-0194", reason = "build-only transitive dependency; vulnerable API not used" },
-    # time is pulled in by `cookie` via wry. Rutile does not parse
-    # untrusted time strings from the network.
-    { id = "RUSTSEC-2026-0009", reason = "transitive via wry cookie; no untrusted time parsing" },
     # gtk-rs GTK3 bindings are unmaintained. Rutile intentionally uses
     # GTK3/WebKitGTK on Linux; migration to GTK4 is out of scope.
     { id = "RUSTSEC-2024-0413", reason = "intentional GTK3 binding" },
@@ -17,16 +14,21 @@ ignore = [
     { id = "RUSTSEC-2024-0418", reason = "intentional GTK3 binding" },
     { id = "RUSTSEC-2024-0415", reason = "intentional GTK3 binding" },
     { id = "RUSTSEC-2024-0420", reason = "intentional GTK3 binding" },
-    { id = "RUSTSEC-2024-0414", reason = "intentional GTK3 binding" },
-    { id = "RUSTSEC-2024-0417", reason = "intentional GTK3 binding" },
     { id = "RUSTSEC-2024-0419", reason = "intentional GTK3 binding" },
-    { id = "RUSTSEC-2024-0421", reason = "intentional GTK3 binding" },
+    # proc-macro-error is unmaintained; reached transitively via glib-macros from
+    # the GTK3/WebKitGTK stack that wry resolves into the lockfile. Advisory
+    # reports no safe upgrade; Rutile does not depend on its macro surface.
+    { id = "RUSTSEC-2024-0370", reason = "transitive via GTK3 glib-macros; no safe upgrade" },
+    # ttf-parser is unmaintained; reached transitively via cosmic-text (iced) and
+    # ab_glyph (winit). Rutile renders with system fonts via the GUI stack;
+    # advisory reports no safe upgrade.
+    { id = "RUSTSEC-2026-0192", reason = "transitive via iced cosmic-text/ab_glyph; no safe upgrade" },
 ]
 
 [licenses]
 version = 2
 confidence-threshold = 0.8
-allow = ["Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT", "Unicode-3.0", "Zlib"]
+allow = ["Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT", "MIT-0", "MPL-2.0", "BSL-1.0", "Unicode-3.0", "Zlib"]
 
 [bans]
 multiple-versions = "warn"
