@@ -378,7 +378,11 @@ for stage in "${stage_list[@]}"; do
       # G002 keystone crate (evidence_bind, package_smoke, readiness_keystone)
       # under locked all-targets coverage. Tests use in-process fakes (no native
       # shell deps) so this stays portable alongside the types/core/protocol row.
-      run_stage xtask-test cargo test --locked -p xtask --all-targets
+      # Serial (RUST_TEST_THREADS=1): the native-probe prompt-reaping tests
+      # assert a real 10s NATIVE_PROBE_PROMPT_BOUND that parallel test threads
+      # can starve under the full gate's CPU load. Serial execution removes
+      # intra-suite contention WITHOUT weakening the safety constant.
+      run_stage xtask-test env RUST_TEST_THREADS=1 cargo test --locked -p xtask --all-targets
       ;;
     build)
       # Production build: no GUI feature and no test-control, in a separate

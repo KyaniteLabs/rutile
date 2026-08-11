@@ -10,5 +10,5 @@ name = "macos-open-events-spike"
 path = "src/main.rs"
 
 [dependencies]
-rutile-app = { path = "../../crates/rutile-app", default-features = false, features = ["macos-shell"] }
+rutile-app = { path = "../../crates/rutile-app", version = "=0.2.2", default-features = false, features = ["macos-shell"] }
 iced_winit = "=0.14.0"

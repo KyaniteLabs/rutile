@@ -1,0 +1,15 @@
+# cargo-audit policy. Mirrors the justified ignores in deny.toml so the two
+# supply-chain tools report consistently. Every entry is a transitive,
+# build-only, or Linux-only dependency whose vulnerable surface is not reached
+# by Rutile code; revisit when the corresponding dependency is upgraded.
+[advisories]
+ignore = [
+    "RUSTSEC-2026-0195", # quick-xml DoS, build-only via wayland-scanner codegen
+    "RUSTSEC-2026-0194", # quick-xml quadratic, build-only via wayland-scanner
+    "RUSTSEC-2024-0412", "RUSTSEC-2024-0413", "RUSTSEC-2024-0415",
+    "RUSTSEC-2024-0416", "RUSTSEC-2024-0418", "RUSTSEC-2024-0419",
+    "RUSTSEC-2024-0420", # gtk-rs GTK3 unmaintained (Linux GTK3/WebKitGTK)
+    "RUSTSEC-2024-0429", # glib unsound VariantStrIter, unused API in GTK3 stack
+    "RUSTSEC-2024-0370", # proc-macro-error unmaintained, via glib-macros
+    "RUSTSEC-2026-0192", # ttf-parser unmaintained, via iced cosmic-text/winit
+]
