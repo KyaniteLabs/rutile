@@ -12,6 +12,7 @@ compile_error!("feature `macos-shell` requires a macOS target");
 pub mod actions;
 pub mod app;
 pub mod brand;
+pub mod document_manager;
 pub mod platform;
 pub mod preferences;
 pub mod preview_host;
