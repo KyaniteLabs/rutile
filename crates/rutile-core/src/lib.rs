@@ -2,6 +2,7 @@
 
 mod autosave;
 mod counts;
+mod design_tokens;
 mod document;
 mod editor_contract;
 mod export;
@@ -24,6 +25,10 @@ pub use autosave::{
     SESSION_STATE_FILE,
 };
 pub use counts::{Counts, READING_WPM, char_count, counts, reading_time_seconds, word_count};
+pub use design_tokens::{
+    DESIGN_TOKENS, DesignTokenSet, DesignTokenSetError, DesignTokenValue, MAX_TOKEN_VALUE_BYTES,
+    TokenValueError,
+};
 pub use document::{
     ChangeSet, Document, DocumentError, DocumentSnapshot, Edit, EditError, EditTransaction,
     HistoryBoundary, HistoryContext, HistoryEntry, MAX_DOCUMENT_BYTES, MAX_UNDO_BYTES, Selection,
