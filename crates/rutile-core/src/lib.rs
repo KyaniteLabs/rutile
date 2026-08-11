@@ -1,11 +1,14 @@
 //! Rutile's platform-independent document and editor contracts.
 
 mod autosave;
+mod chance_style;
 mod counts;
+mod design_tokens;
 mod document;
 mod editor_contract;
 mod export;
 mod export_contract;
+mod export_design;
 mod files;
 mod find_contract;
 mod find_engine;
@@ -23,7 +26,12 @@ pub use autosave::{
     PruneOutcome, RecoveredDocument, RecoveryReport, RejectedEntry, RejectionReason,
     SESSION_STATE_FILE,
 };
+pub use chance_style::{ChanceRoll, ChanceRollError, render_chance_css};
 pub use counts::{Counts, READING_WPM, char_count, counts, reading_time_seconds, word_count};
+pub use design_tokens::{
+    DESIGN_TOKENS, DesignTokenSet, DesignTokenSetError, DesignTokenValue, MAX_TOKEN_VALUE_BYTES,
+    TokenValueError,
+};
 pub use document::{
     ChangeSet, Document, DocumentError, DocumentSnapshot, Edit, EditError, EditTransaction,
     HistoryBoundary, HistoryContext, HistoryEntry, MAX_DOCUMENT_BYTES, MAX_UNDO_BYTES, Selection,
@@ -38,6 +46,10 @@ pub use export::render_export_page;
 pub use export_contract::{
     EXPORT_CSP, ExportError, ExportPage, ExportRequest, ExportViolation, MAX_EXPORT_PAGE_BYTES,
     MAX_EXPORT_TITLE_BYTES,
+};
+pub use export_design::{
+    ACCENT_RUTILE_GOLD, ContentType, DesignRail, SteeringAdjustment, apply_steering,
+    generate_candidate,
 };
 pub use files::{
     DiskVersion, DurabilityError, ExternalChange, ExternalChangeDebouncer, ExternalResolution,
