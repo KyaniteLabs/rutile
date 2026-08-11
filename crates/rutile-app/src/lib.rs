@@ -13,6 +13,7 @@ pub mod actions;
 pub mod app;
 pub mod brand;
 pub mod platform;
+pub mod preferences;
 pub mod preview_host;
 pub mod render_scheduler;
 pub mod session_core;

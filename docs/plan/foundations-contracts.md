@@ -84,8 +84,11 @@ never carry raw HTML/URLs/paths that bypass `validate_path`.
 
 ## Locking gate
 
-These contracts are LOCKED (frozen signatures) when roadmap 06 (palette) or 07 (recent-docs)
-begins implementation; until then this spec is the design of record. Implementing a contract
-requires: the types + their unit tests (uniqueness, purity, bounded fields, schema migration)
-merged behind the per-cluster gate, with no security-core edit. Re-plan the consuming roadmap
-wave against the locked signatures.
+These contracts are **LOCKED** (frozen signatures) as of the `feat/lock-03-contracts` merge.
+`ActionRegistry` (`CommandId`, `CommandDescriptor`, `CommandCategory`, `Shortcut`,
+`ActionRegistry`) is implemented in `crates/rutile-app/src/actions.rs`. `Preferences`
+(`Preferences`, `Appearance`, `EditorPrefs`, `ViewPrefs`, `RecentPrefs`, `PreferencesSchema`)
+is implemented in `crates/rutile-app/src/preferences.rs`. Both pass the per-cluster gate
+(fmt + clippy + 23 unit tests covering uniqueness, purity, bounded fields, schema migration)
+with no security-core edit. Consuming roadmap waves (06, 07, 08) now build against these
+locked signatures.

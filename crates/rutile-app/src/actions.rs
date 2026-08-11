@@ -37,7 +37,7 @@ use rutile_core::{
 use rutile_types::Revision;
 use thiserror::Error;
 
-use crate::app::AppEffect;
+use crate::app::{AppEffect, AppMessage, AppState};
 
 /// The live find/replace session held (optionally) by
 /// [`AppState`](crate::app::AppState).
@@ -224,4 +224,387 @@ pub enum ActionError {
     /// The document rejected the transaction (stale revision, bounds, …).
     #[error(transparent)]
     Edit(#[from] EditError),
+}
+
+// ---------------------------------------------------------------------------
+// ActionRegistry — declarative command catalog for the palette and menus
+// (roadmap 03 / 06). The registry DESCRIBES commands; dispatch still flows
+// through the single reducer via [`AppMessage`](crate::app::AppMessage).
+// -----------------------------------------------------------------------
+
+/// Globally-stable command id (kebab-case string; never reused).
+///
+/// Example: `"file.save"`, `"format.toggle-code-block"`, `"find.replace-all"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CommandId(pub &'static str);
+
+/// Keyboard modifier flags for a [`Shortcut`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct ShortcutModifiers {
+    pub cmd: bool,
+    pub shift: bool,
+    pub alt: bool,
+    pub ctrl: bool,
+}
+
+/// Platform-neutral keyboard shortcut (resolved by the platform shell).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Shortcut {
+    /// Logical key name (lowercase), e.g. `"s"`, `"o"`, `"p"`, `"f1"`.
+    pub key: &'static str,
+    pub modifiers: ShortcutModifiers,
+}
+
+impl Shortcut {
+    /// Shortcut with only the platform command modifier (⌘ on macOS).
+    pub const fn cmd(key: &'static str) -> Self {
+        Self {
+            key,
+            modifiers: ShortcutModifiers {
+                cmd: true,
+                shift: false,
+                alt: false,
+                ctrl: false,
+            },
+        }
+    }
+
+    /// Shortcut with command + shift.
+    pub const fn cmd_shift(key: &'static str) -> Self {
+        Self {
+            key,
+            modifiers: ShortcutModifiers {
+                cmd: true,
+                shift: true,
+                alt: false,
+                ctrl: false,
+            },
+        }
+    }
+}
+
+/// Semantic category for palette grouping and menu placement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CommandCategory {
+    File,
+    Edit,
+    Format,
+    Find,
+    View,
+    Window,
+    Help,
+}
+
+/// Declarative description of an invocable command for the palette/menus.
+///
+/// The shell queries [`message`](CommandDescriptor::message) against
+/// [`AppState`](AppState); the palette greys out rows that return `None`.
+/// The function pointer is pure over `&AppState` — no I/O, no side effects —
+/// so all state transitions still flow through the single reducer.
+///
+/// # Security-core fence
+///
+/// No command constructs raw HTML/URLs or bypasses
+/// [`SafeLinkTarget`](rutile_types::SafeLinkTarget) / `render.rs`.
+#[derive(Clone, Copy)]
+pub struct CommandDescriptor {
+    pub id: CommandId,
+    /// User-facing label shown in the palette.
+    pub title: &'static str,
+    pub category: CommandCategory,
+    /// Optional keybinding (resolved by the platform shell).
+    pub shortcut: Option<Shortcut>,
+    /// Returns the [`AppMessage`] to dispatch when invoked, or `None` when the
+    /// command is unavailable in the current state (palette shows it disabled).
+    pub message: fn(&AppState) -> Option<AppMessage>,
+}
+
+impl std::fmt::Debug for CommandDescriptor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CommandDescriptor")
+            .field("id", &self.id.0)
+            .field("title", &self.title)
+            .field("category", &self.category)
+            .field("shortcut", &self.shortcut)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Error returned when a duplicate command id is registered.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ActionRegistryError {
+    #[error("duplicate command id: {0}")]
+    DuplicateCommand(&'static str),
+}
+
+/// Static catalog plus runtime-registered platform commands.
+///
+/// Lookup is by [`CommandId`]; the palette filters by [`CommandCategory`] and
+/// free-text over [`title`](CommandDescriptor::title).
+pub struct ActionRegistry {
+    /// Compile-time catalog (const slice).
+    catalog: &'static [CommandDescriptor],
+    /// Runtime-registered platform commands.
+    dynamic: Vec<CommandDescriptor>,
+}
+
+impl ActionRegistry {
+    /// Builds a registry from a compile-time static catalog.
+    ///
+    /// In debug builds, panics if the catalog contains duplicate ids.
+    pub fn from_static(catalog: &'static [CommandDescriptor]) -> Self {
+        debug_assert!(
+            ids_unique(catalog),
+            "static command catalog has duplicate ids"
+        );
+        Self {
+            catalog,
+            dynamic: Vec::new(),
+        }
+    }
+
+    /// Registers a runtime platform command. Fails closed on duplicate id.
+    pub fn register(&mut self, descriptor: CommandDescriptor) -> Result<(), ActionRegistryError> {
+        if self.lookup(&descriptor.id).is_some() {
+            return Err(ActionRegistryError::DuplicateCommand(descriptor.id.0));
+        }
+        self.dynamic.push(descriptor);
+        Ok(())
+    }
+
+    /// Total number of commands (static + dynamic).
+    pub fn len(&self) -> usize {
+        self.catalog.len() + self.dynamic.len()
+    }
+
+    /// Whether the registry has zero commands.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Looks up a descriptor by id across both static and dynamic sets.
+    pub fn lookup(&self, id: &CommandId) -> Option<&CommandDescriptor> {
+        self.catalog
+            .iter()
+            .chain(self.dynamic.iter())
+            .find(|d| &d.id == id)
+    }
+
+    /// Iterates all descriptors (static first, then dynamic).
+    pub fn iter(&self) -> impl Iterator<Item = &CommandDescriptor> {
+        self.catalog.iter().chain(self.dynamic.iter())
+    }
+
+    /// Filters descriptors by category.
+    pub fn by_category(
+        &self,
+        category: CommandCategory,
+    ) -> impl Iterator<Item = &CommandDescriptor> {
+        self.iter().filter(move |d| d.category == category)
+    }
+
+    /// Free-text search over titles (case-insensitive substring).
+    pub fn search(&self, query: &str) -> Vec<&CommandDescriptor> {
+        let q = query.to_ascii_lowercase();
+        self.iter()
+            .filter(|d| d.title.to_ascii_lowercase().contains(&q))
+            .collect()
+    }
+}
+
+/// Checks that all `CommandId`s in a slice are unique.
+fn ids_unique(descriptors: &[CommandDescriptor]) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    descriptors.iter().all(|d| seen.insert(d.id.0))
+}
+
+#[cfg(test)]
+mod action_registry_tests {
+    use super::*;
+    use crate::app::AppState;
+
+    fn always_save(_state: &AppState) -> Option<AppMessage> {
+        Some(AppMessage::SaveRequested)
+    }
+
+    fn never(_state: &AppState) -> Option<AppMessage> {
+        None
+    }
+
+    fn always_new(_state: &AppState) -> Option<AppMessage> {
+        Some(AppMessage::NewDocument)
+    }
+
+    const SAVE_CMD: CommandDescriptor = CommandDescriptor {
+        id: CommandId("file.save"),
+        title: "Save",
+        category: CommandCategory::File,
+        shortcut: Some(Shortcut::cmd("s")),
+        message: always_save,
+    };
+
+    const NEW_CMD: CommandDescriptor = CommandDescriptor {
+        id: CommandId("file.new"),
+        title: "New Document",
+        category: CommandCategory::File,
+        shortcut: Some(Shortcut::cmd("n")),
+        message: always_new,
+    };
+
+    const FIND_CMD: CommandDescriptor = CommandDescriptor {
+        id: CommandId("find.open"),
+        title: "Find",
+        category: CommandCategory::Find,
+        shortcut: Some(Shortcut::cmd("f")),
+        message: never,
+    };
+
+    // -- Invariant 1: CommandIds are globally unique; duplicate registration fails ---
+
+    #[test]
+    fn duplicate_registration_fails_closed() {
+        let mut reg = ActionRegistry::from_static(&[SAVE_CMD]);
+        let dup = CommandDescriptor {
+            id: CommandId("file.save"),
+            title: "Another Save",
+            category: CommandCategory::File,
+            shortcut: None,
+            message: always_save,
+        };
+        assert_eq!(
+            reg.register(dup),
+            Err(ActionRegistryError::DuplicateCommand("file.save"))
+        );
+    }
+
+    #[test]
+    fn duplicate_registration_against_static_fails() {
+        let mut reg = ActionRegistry::from_static(&[SAVE_CMD, NEW_CMD]);
+        let dup = CommandDescriptor {
+            id: CommandId("file.new"),
+            title: "Override New",
+            category: CommandCategory::File,
+            shortcut: None,
+            message: always_new,
+        };
+        assert!(reg.register(dup).is_err());
+    }
+
+    #[test]
+    fn unique_registration_succeeds() {
+        let mut reg = ActionRegistry::from_static(&[SAVE_CMD]);
+        assert!(reg.register(NEW_CMD).is_ok());
+        assert!(reg.register(FIND_CMD).is_ok());
+        assert_eq!(reg.len(), 3);
+    }
+
+    // -- Lookup --------------------------------------------------------------
+
+    #[test]
+    fn lookup_finds_static_and_dynamic() {
+        let mut reg = ActionRegistry::from_static(&[SAVE_CMD]);
+        reg.register(FIND_CMD).unwrap();
+
+        assert!(reg.lookup(&CommandId("file.save")).is_some());
+        assert!(reg.lookup(&CommandId("find.open")).is_some());
+        assert!(reg.lookup(&CommandId("nonexistent")).is_none());
+    }
+
+    // -- Category filter -----------------------------------------------------
+
+    #[test]
+    fn by_category_returns_only_matching() {
+        let mut reg = ActionRegistry::from_static(&[SAVE_CMD, NEW_CMD]);
+        reg.register(FIND_CMD).unwrap();
+
+        let file_cmds: Vec<_> = reg.by_category(CommandCategory::File).collect();
+        assert_eq!(file_cmds.len(), 2);
+        assert!(
+            file_cmds
+                .iter()
+                .all(|d| d.category == CommandCategory::File)
+        );
+
+        let find_cmds: Vec<_> = reg.by_category(CommandCategory::Find).collect();
+        assert_eq!(find_cmds.len(), 1);
+        assert_eq!(find_cmds[0].id.0, "find.open");
+    }
+
+    // -- Free-text search ----------------------------------------------------
+
+    #[test]
+    fn search_matches_case_insensitive_substring() {
+        let reg = ActionRegistry::from_static(&[SAVE_CMD, NEW_CMD, FIND_CMD]);
+        let results = reg.search("save");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id.0, "file.save");
+
+        let results = reg.search("DOC");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id.0, "file.new");
+    }
+
+    #[test]
+    fn search_empty_query_returns_all() {
+        let reg = ActionRegistry::from_static(&[SAVE_CMD, NEW_CMD]);
+        assert_eq!(reg.search("").len(), 2);
+    }
+
+    // -- Invariant 2: message() purity (function pointer returns correct msg) --
+
+    #[test]
+    fn message_returns_expected_app_message() {
+        let reg = ActionRegistry::from_static(&[SAVE_CMD]);
+        let state = AppState::new();
+        let cmd = reg.lookup(&CommandId("file.save")).unwrap();
+        let msg = (cmd.message)(&state);
+        assert!(matches!(msg, Some(AppMessage::SaveRequested)));
+    }
+
+    #[test]
+    fn disabled_command_returns_none() {
+        let reg = ActionRegistry::from_static(&[FIND_CMD]);
+        let state = AppState::new();
+        let cmd = reg.lookup(&CommandId("find.open")).unwrap();
+        let msg = (cmd.message)(&state);
+        assert!(msg.is_none());
+    }
+
+    // -- Static catalog uniqueness (debug_assert) ----------------------------
+
+    #[test]
+    fn static_catalog_with_unique_ids_constructs() {
+        let reg = ActionRegistry::from_static(&[SAVE_CMD, NEW_CMD, FIND_CMD]);
+        assert_eq!(reg.len(), 3);
+        assert!(!reg.is_empty());
+    }
+
+    #[test]
+    fn empty_registry() {
+        let reg = ActionRegistry::from_static(&[]);
+        assert!(reg.is_empty());
+        assert_eq!(reg.len(), 0);
+    }
+
+    // -- Shortcut constructors ----------------------------------------------
+
+    #[test]
+    fn shortcut_cmd_sets_only_cmd_modifier() {
+        let s = Shortcut::cmd("s");
+        assert_eq!(s.key, "s");
+        assert!(s.modifiers.cmd);
+        assert!(!s.modifiers.shift);
+        assert!(!s.modifiers.alt);
+        assert!(!s.modifiers.ctrl);
+    }
+
+    #[test]
+    fn shortcut_cmd_shift_sets_cmd_and_shift() {
+        let s = Shortcut::cmd_shift("p");
+        assert_eq!(s.key, "p");
+        assert!(s.modifiers.cmd);
+        assert!(s.modifiers.shift);
+        assert!(!s.modifiers.alt);
+        assert!(!s.modifiers.ctrl);
+    }
 }

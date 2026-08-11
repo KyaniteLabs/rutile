@@ -20,6 +20,7 @@ rutile-core = { path = "../rutile-core", version = "=0.2.2" }
 rutile-protocol = { path = "../rutile-protocol", version = "=0.2.2" }
 rutile-types = { path = "../rutile-types", version = "=0.2.2" }
 getrandom = "=0.3.3"
+serde = { version = "=1.0.220", features = ["derive"] }
 serde_json = "=1.0.140"
 thiserror = "=2.0.12"
 url = "=2.5.4"

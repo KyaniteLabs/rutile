@@ -3401,6 +3401,7 @@ dependencies = [
  "rutile-core",
  "rutile-protocol",
  "rutile-types",
+ "serde",
  "serde_json",
  "sourceview4",
  "thiserror 2.0.12",
