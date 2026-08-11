@@ -1303,3 +1303,49 @@ fn recents_respect_max_cap() {
     // MAX_RECENT_FILES = 10
     assert_eq!(state.recents().len(), rutile_core::MAX_RECENT_FILES);
 }
+
+// --- Roadmap 08: multi-document tabs -----------------------------------------
+
+#[test]
+fn new_tab_creates_second_document() {
+    let mut state = AppState::new();
+    state.reduce(AppMessage::NewTab);
+    // The DocumentManager should now have 2 tabs (ROOT + new)
+    assert_eq!(state.documents().len(), 2);
+}
+
+#[test]
+fn switch_tab_changes_active_document() {
+    let mut state = AppState::new();
+    // Edit the first document
+    state.reduce(AppMessage::DocumentEdited { revision: 1 });
+    assert_eq!(state.revision(), 1);
+
+    // Create a new tab
+    state.reduce(AppMessage::NewTab);
+
+    // The new tab should have revision 0 (fresh document)
+    assert_eq!(state.revision(), 0);
+    assert!(!state.dirty());
+
+    // Switch back to ROOT tab
+    state.reduce(AppMessage::SwitchTab {
+        id: rutile_types::DocumentId::ROOT,
+    });
+    assert_eq!(state.revision(), 1);
+    assert!(state.dirty());
+}
+
+#[test]
+fn close_tab_removes_and_reseeds() {
+    let mut state = AppState::new();
+    state.reduce(AppMessage::NewTab);
+    assert_eq!(state.documents().len(), 2);
+
+    // Close ROOT — should re-seed or switch to remaining tab
+    state.reduce(AppMessage::CloseTab {
+        id: rutile_types::DocumentId::ROOT,
+    });
+    // At least one tab must remain
+    assert!(!state.documents().is_empty());
+}
