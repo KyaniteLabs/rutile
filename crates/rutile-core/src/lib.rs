@@ -7,6 +7,7 @@ mod document;
 mod editor_contract;
 mod export;
 mod export_contract;
+mod export_design;
 mod files;
 mod find_contract;
 mod find_engine;
@@ -43,6 +44,10 @@ pub use export::render_export_page;
 pub use export_contract::{
     EXPORT_CSP, ExportError, ExportPage, ExportRequest, ExportViolation, MAX_EXPORT_PAGE_BYTES,
     MAX_EXPORT_TITLE_BYTES,
+};
+pub use export_design::{
+    ACCENT_RUTILE_GOLD, ContentType, DesignRail, SteeringAdjustment, apply_steering,
+    generate_candidate,
 };
 pub use files::{
     DiskVersion, DurabilityError, ExternalChange, ExternalChangeDebouncer, ExternalResolution,
