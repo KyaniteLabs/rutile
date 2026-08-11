@@ -18,6 +18,7 @@ pub mod platform;
 pub mod preferences;
 pub mod preview_host;
 pub mod render_scheduler;
+pub mod revision_history;
 pub mod session_core;
 
 /// Dispatches to the selected native adapter. With no platform feature this is
