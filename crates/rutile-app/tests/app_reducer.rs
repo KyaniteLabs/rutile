@@ -1141,3 +1141,165 @@ fn mirror_resync_completed_err_pushes_error_notice() {
     assert_eq!(notice.severity, NoticeSeverity::Error);
     assert!(notice.message.contains("adapter timeout"));
 }
+
+// --- Roadmap 07: recent documents -------------------------------------------
+
+#[test]
+fn open_request_completed_touches_recents() {
+    let (path, disk) = disk_version("recents-open", "hello");
+    let mut state = AppState::new();
+    state.reduce(AppMessage::OpenRequestCompleted {
+        result: Ok((1, path.clone(), disk)),
+    });
+
+    assert_eq!(state.recents().paths(), [path.clone()]);
+
+    // Opening a second file moves it to front.
+    let (path2, disk2) = disk_version("recents-open-2", "world");
+    state.reduce(AppMessage::OpenRequestCompleted {
+        result: Ok((2, path2.clone(), disk2)),
+    });
+
+    assert_eq!(state.recents().paths(), [path2.clone(), path.clone()]);
+
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(path2);
+}
+
+#[test]
+fn document_opened_touches_recents() {
+    let (path, disk) = disk_version("recents-doc-opened", "hi");
+    let mut state = AppState::new();
+    state.reduce(AppMessage::DocumentOpened {
+        revision: 1,
+        path: path.clone(),
+        disk,
+    });
+
+    assert_eq!(state.recents().paths(), [path.clone()]);
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn reopening_same_file_deduplicates_and_moves_to_front() {
+    let (path_a, disk_a) = disk_version("recents-dedup-a", "a");
+    let (path_b, disk_b) = disk_version("recents-dedup-b", "b");
+    let mut state = AppState::new();
+    state.reduce(AppMessage::OpenRequestCompleted {
+        result: Ok((1, path_a.clone(), disk_a.clone())),
+    });
+    state.reduce(AppMessage::OpenRequestCompleted {
+        result: Ok((2, path_b.clone(), disk_b)),
+    });
+
+    // Re-open A → A should move to front, B stays.
+    state.reduce(AppMessage::OpenRequestCompleted {
+        result: Ok((3, path_a.clone(), disk_a)),
+    });
+
+    assert_eq!(state.recents().paths(), [path_a.clone(), path_b.clone()]);
+
+    let _ = std::fs::remove_file(path_a);
+    let _ = std::fs::remove_file(path_b);
+}
+
+#[test]
+fn clear_recents_empties_the_list() {
+    let (path, disk) = disk_version("recents-clear", "x");
+    let mut state = AppState::new();
+    state.reduce(AppMessage::OpenRequestCompleted {
+        result: Ok((1, path.clone(), disk)),
+    });
+    assert!(!state.recents().is_empty());
+
+    state.reduce(AppMessage::ClearRecents);
+    assert!(state.recents().is_empty());
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn remove_recent_drops_a_single_entry() {
+    let (path_a, disk_a) = disk_version("recents-rm-a", "a");
+    let (path_b, disk_b) = disk_version("recents-rm-b", "b");
+    let mut state = AppState::new();
+    state.reduce(AppMessage::OpenRequestCompleted {
+        result: Ok((1, path_a.clone(), disk_a)),
+    });
+    state.reduce(AppMessage::OpenRequestCompleted {
+        result: Ok((2, path_b.clone(), disk_b)),
+    });
+
+    state.reduce(AppMessage::RemoveRecent {
+        path: path_a.clone(),
+    });
+
+    assert_eq!(state.recents().paths(), [path_b.clone()]);
+
+    let _ = std::fs::remove_file(path_a);
+    let _ = std::fs::remove_file(path_b);
+}
+
+#[test]
+fn session_restored_restores_recents() {
+    let mut state = AppState::new();
+    let session = SessionStateV1 {
+        schema: rutile_core::SESSION_SCHEMA_V1.to_owned(),
+        v: 1,
+        saved_at_unix_ms: 100,
+        last_file: None,
+        selection: None,
+        top_visible_byte: None,
+        window: None,
+        recent_files: vec!["/tmp/a.md".into(), "/tmp/b.md".into()],
+    };
+
+    state.reduce(AppMessage::SessionRestored {
+        state: session.clone(),
+    });
+
+    assert_eq!(state.recents().len(), 2);
+    assert_eq!(
+        state.recents().paths(),
+        [
+            std::path::PathBuf::from("/tmp/a.md"),
+            std::path::PathBuf::from("/tmp/b.md")
+        ]
+    );
+}
+
+#[test]
+fn capture_session_state_serializes_recents() {
+    let (path_a, disk_a) = disk_version("recents-capture-a", "a");
+    let (path_b, disk_b) = disk_version("recents-capture-b", "b");
+    let mut state = AppState::new();
+    state.reduce(AppMessage::OpenRequestCompleted {
+        result: Ok((1, path_a.clone(), disk_a)),
+    });
+    state.reduce(AppMessage::OpenRequestCompleted {
+        result: Ok((2, path_b.clone(), disk_b)),
+    });
+
+    let captured = state.capture_session_state(42, None, None, None);
+    assert_eq!(captured.recent_files.len(), 2);
+    assert_eq!(captured.recent_files[0], path_b.to_string_lossy());
+    assert_eq!(captured.recent_files[1], path_a.to_string_lossy());
+
+    let _ = std::fs::remove_file(path_a);
+    let _ = std::fs::remove_file(path_b);
+}
+
+#[test]
+fn recents_respect_max_cap() {
+    let mut state = AppState::new();
+    for i in 0..15 {
+        let (path, disk) = disk_version(&format!("recents-cap-{i}"), &i.to_string());
+        state.reduce(AppMessage::OpenRequestCompleted {
+            result: Ok((i + 1, path, disk)),
+        });
+    }
+
+    // MAX_RECENT_FILES = 10
+    assert_eq!(state.recents().len(), rutile_core::MAX_RECENT_FILES);
+}
