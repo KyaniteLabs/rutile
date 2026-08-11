@@ -56,7 +56,11 @@ pub fn write_html(html: &str) -> Result<(), MacError> {
     Ok(())
 }
 
-/// Reads the best paste flavor for smart paste: HTML first, then plain text.
+/// Reads the best single paste flavor (HTML first, then plain). NOTE: the
+/// production smart-paste path uses [`read_paste_flavors`] (both flavors in one
+/// interaction) + [`crate::platform::paste::resolve_paste_text`]; this HTML-first
+/// helper is retained for tests/inspection and MUST NOT be wired back into the
+/// paste path (it would re-introduce the raw-HTML fallback, H-L4-1).
 pub fn read_paste_text() -> Result<String, MacError> {
     let pasteboard = NSPasteboard::generalPasteboard();
     let html_type = unsafe { NSPasteboardTypeHTML };

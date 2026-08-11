@@ -269,6 +269,29 @@ fn session_recent_files_are_bounded_and_non_empty() {
 }
 
 #[test]
+fn session_path_with_traversal_or_control_components_is_rejected() {
+    // ParentDir traversal inside an otherwise-absolute path must be rejected —
+    // defense against session-state path injection on restore.
+    let parent = SessionStateV1 {
+        recent_files: vec!["/notes/../escape.md".to_owned()],
+        ..state()
+    };
+    assert!(matches!(
+        encode_session_state(&parent),
+        Err(SessionError::InvalidMetadata(_))
+    ));
+    // Control characters (a superset of NUL) must be rejected.
+    let control = SessionStateV1 {
+        recent_files: vec!["/notes/to\x07do.md".to_owned()],
+        ..state()
+    };
+    assert!(matches!(
+        encode_session_state(&control),
+        Err(SessionError::InvalidMetadata(_))
+    ));
+}
+
+#[test]
 fn session_window_dimensions_must_be_positive() {
     let flat = SessionStateV1 {
         window: Some(SessionWindowV1 {
