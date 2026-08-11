@@ -12,7 +12,7 @@
 //! journal (referenced by bare file name only — path traversal is
 //! unrepresentable). Session restore is a single [`SessionStateV1`] record.
 
-use std::path::Path;
+use std::path::{Component, Path};
 
 use rutile_types::Revision;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -228,11 +228,22 @@ fn validate_path(path: &str) -> Result<(), SessionError> {
     if path.len() > MAX_SESSION_PATH_BYTES {
         return Err(SessionError::InvalidMetadata("path exceeds its byte cap"));
     }
-    if path.contains('\0') {
-        return Err(SessionError::InvalidMetadata("path must not contain NUL"));
+    if path.chars().any(|character| character.is_control()) {
+        return Err(SessionError::InvalidMetadata(
+            "path must not contain control characters",
+        ));
     }
-    if !Path::new(path).is_absolute() {
+    let path = Path::new(path);
+    if !path.is_absolute() {
         return Err(SessionError::InvalidMetadata("path must be absolute"));
+    }
+    if path
+        .components()
+        .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+    {
+        return Err(SessionError::InvalidMetadata(
+            "path must not contain traversal components",
+        ));
     }
     Ok(())
 }
