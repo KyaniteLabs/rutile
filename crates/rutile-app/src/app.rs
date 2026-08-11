@@ -9,12 +9,13 @@ use rutile_core::{
     TransactionKind, apply_format, render_export_page, smart_enter,
 };
 use rutile_protocol::PreviewEventV1;
-use rutile_types::{InteractionId, Revision, SafeLinkTarget};
+use rutile_types::{DocumentId, InteractionId, Revision, SafeLinkTarget};
 
 use crate::actions::{
     ActionError, ExportOutput, FindSession, FormatApplied, InsertApplied, ReplaceApplied,
     SessionRestore,
 };
+use crate::document_manager::{DocumentManager, DocumentSlot};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum PreviewState {
@@ -163,6 +164,13 @@ pub enum AppMessage {
     RemoveRecent {
         path: PathBuf,
     },
+    NewTab,
+    SwitchTab {
+        id: DocumentId,
+    },
+    CloseTab {
+        id: DocumentId,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -295,28 +303,28 @@ impl RecentDocuments {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct AppState {
-    revision: Revision,
-    dirty: bool,
-    preview: PreviewState,
-    path: Option<PathBuf>,
-    saved_disk: Option<DiskVersion>,
-    external_conflict: Option<DiskVersion>,
-    // Wave 2S shared shell-integration state.
-    find: Option<FindSession>,
-    autosave: Option<AutosaveStore>,
-    next_transaction_id: u64,
+    documents: DocumentManager,
     // Wave 2-A: durable user notices.
     notices: Vec<UserNotice>,
     next_notice_id: usize,
-    /// True while a one-shot full mirror resync is outstanding.
-    ///
-    /// Incremental mirror failure triggers exactly one full authoritative resync.
-    /// A second failure while the resync is outstanding, or a failed resync
-    /// completion, surfaces a durable [`UserNotice`] instead of looping forever.
-    mirror_resync_pending: bool,
     recents: RecentDocuments,
+}
+
+impl std::fmt::Debug for AppState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let slot = self.documents.active_slot();
+        f.debug_struct("AppState")
+            .field("tabs", &self.documents.len())
+            .field("active_id", &self.documents.active_id())
+            .field("active_revision", &slot.revision)
+            .field("dirty", &slot.dirty)
+            .field("path", &slot.path)
+            .field("notices", &self.notices)
+            .field("recents", &self.recents)
+            .finish()
+    }
 }
 
 impl AppState {
@@ -325,27 +333,32 @@ impl AppState {
     }
 
     pub fn revision(&self) -> Revision {
-        self.revision
+        self.documents.active_slot().revision
     }
 
     pub fn dirty(&self) -> bool {
-        self.dirty
+        self.documents.active_slot().dirty
     }
 
     pub fn preview(&self) -> &PreviewState {
-        &self.preview
+        &self.documents.active_slot().preview
     }
 
     pub fn path(&self) -> Option<&Path> {
-        self.path.as_deref()
+        self.documents.active_slot().path.as_deref()
     }
 
     pub fn saved_disk(&self) -> Option<&DiskVersion> {
-        self.saved_disk.as_ref()
+        self.documents.active_slot().saved_disk.as_ref()
     }
 
     pub fn external_conflict(&self) -> Option<&DiskVersion> {
-        self.external_conflict.as_ref()
+        self.documents.active_slot().external_conflict.as_ref()
+    }
+
+    /// Mutably borrows the active document's slot (private helper).
+    fn slot_mut(&mut self) -> &mut DocumentSlot {
+        self.documents.active_slot_mut()
     }
 
     /// Borrows the active user notices.
@@ -356,6 +369,11 @@ impl AppState {
     /// Borrows the MRU-ordered recent-documents list (roadmap 07).
     pub fn recents(&self) -> &RecentDocuments {
         &self.recents
+    }
+
+    /// Borrows the multi-document tab manager (roadmap 08).
+    pub fn documents(&self) -> &DocumentManager {
+        &self.documents
     }
 
     /// Pushes a new notice and returns a clone for immediate presentation.
@@ -395,12 +413,13 @@ impl AppState {
     pub fn reduce(&mut self, message: AppMessage) -> Vec<AppEffect> {
         match message {
             AppMessage::NewDocument => {
-                self.revision = 0;
-                self.dirty = false;
-                self.path = None;
-                self.saved_disk = None;
-                self.external_conflict = None;
-                self.preview = PreviewState::Waiting { revision: 0 };
+                let slot = self.documents.active_slot_mut();
+                slot.revision = 0;
+                slot.dirty = false;
+                slot.path = None;
+                slot.saved_disk = None;
+                slot.external_conflict = None;
+                slot.preview = PreviewState::Waiting { revision: 0 };
                 vec![AppEffect::ScheduleRender { revision: 0 }]
             }
             AppMessage::DocumentOpened {
@@ -408,33 +427,38 @@ impl AppState {
                 path,
                 disk,
             } => {
-                self.revision = revision;
-                self.dirty = false;
                 self.recents.touch(path.clone());
-                self.path = Some(path);
-                self.saved_disk = Some(disk);
-                self.external_conflict = None;
-                self.preview = PreviewState::Waiting { revision };
+                let slot = self.documents.active_slot_mut();
+                slot.revision = revision;
+                slot.dirty = false;
+                slot.path = Some(path);
+                slot.saved_disk = Some(disk);
+                slot.external_conflict = None;
+                slot.preview = PreviewState::Waiting { revision };
                 vec![AppEffect::ScheduleRender { revision }]
             }
-            AppMessage::DocumentEdited { revision } if revision <= self.revision => {
+            AppMessage::DocumentEdited { revision }
+                if revision <= self.documents.active_slot().revision =>
+            {
                 vec![AppEffect::IgnoredStale { revision }]
             }
             AppMessage::DocumentEdited { revision } => {
-                self.revision = revision;
-                self.dirty = true;
-                self.preview = PreviewState::Waiting { revision };
+                let slot = self.documents.active_slot_mut();
+                slot.revision = revision;
+                slot.dirty = true;
+                slot.preview = PreviewState::Waiting { revision };
                 vec![AppEffect::ScheduleRender { revision }]
             }
             AppMessage::SaveCompleted {
                 revision,
                 path,
                 disk,
-            } if revision == self.revision => {
-                self.dirty = false;
-                self.path = Some(path);
-                self.saved_disk = Some(disk);
-                self.external_conflict = None;
+            } if revision == self.documents.active_slot().revision => {
+                let slot = self.documents.active_slot_mut();
+                slot.dirty = false;
+                slot.path = Some(path);
+                slot.saved_disk = Some(disk);
+                slot.external_conflict = None;
                 vec![]
             }
             AppMessage::SaveCompleted { revision, .. } => {
@@ -444,21 +468,24 @@ impl AppState {
                 revision,
                 path,
                 disk,
-            } if revision == self.revision => {
+            } if revision == self.documents.active_slot().revision => {
                 // The atomic rename committed but parent-directory durability
                 // could not be verified. Keep dirty set so the user can re-save
                 // to flush the directory, but record the disk version/path so
                 // external-change detection can proceed.
-                self.dirty = true;
-                self.path = Some(path);
-                self.saved_disk = Some(disk);
-                self.external_conflict = None;
+                let slot = self.documents.active_slot_mut();
+                slot.dirty = true;
+                slot.path = Some(path);
+                slot.saved_disk = Some(disk);
+                slot.external_conflict = None;
                 vec![]
             }
             AppMessage::SaveDurabilityUnknown { revision, .. } => {
                 vec![AppEffect::IgnoredStale { revision }]
             }
-            AppMessage::SaveFailed { revision } if revision == self.revision => {
+            AppMessage::SaveFailed { revision }
+                if revision == self.documents.active_slot().revision =>
+            {
                 // A failed save leaves the document dirty and any conflict
                 // unresolved; the platform shell must present the error and
                 // keep the document open.
@@ -468,27 +495,33 @@ impl AppState {
                 vec![AppEffect::IgnoredStale { revision }]
             }
             AppMessage::ExternalConflictDetected { disk } => {
-                if self.saved_disk.as_ref() == Some(&disk) {
-                    return vec![];
-                }
-                let Some(path) = self.path.clone() else {
+                let path = {
+                    let slot = self.documents.active_slot();
+                    if slot.saved_disk.as_ref() == Some(&disk) {
+                        return vec![];
+                    }
+                    slot.path.clone()
+                };
+                let Some(path) = path else {
                     return vec![];
                 };
-                self.external_conflict = Some(disk.clone());
+                self.documents.active_slot_mut().external_conflict = Some(disk.clone());
                 vec![AppEffect::PresentExternalConflict { path, disk }]
             }
             AppMessage::ResolveExternalConflict(resolution) => {
-                let Some(disk) = self.external_conflict.take() else {
+                let Some(disk) = self.documents.active_slot_mut().external_conflict.take() else {
                     return vec![];
                 };
                 match resolution {
                     ExternalResolution::ReloadDisk => self
+                        .documents
+                        .active_slot()
                         .path
                         .clone()
                         .map(|path| vec![AppEffect::ReloadExternal { path }])
                         .unwrap_or_default(),
                     ExternalResolution::KeepBuffer => {
-                        self.saved_disk = Some(disk);
+                        self.documents.active_slot_mut().saved_disk = Some(disk);
                         vec![]
                     }
                     ExternalResolution::SaveBufferAs(path) => {
@@ -499,8 +532,8 @@ impl AppState {
             AppMessage::RenderAccepted {
                 revision,
                 page_bytes,
-            } if revision == self.revision => {
-                self.preview = PreviewState::Navigating { revision };
+            } if revision == self.documents.active_slot().revision => {
+                self.documents.active_slot_mut().preview = PreviewState::Navigating { revision };
                 vec![AppEffect::NavigatePreview {
                     revision,
                     page_bytes,
@@ -509,11 +542,14 @@ impl AppState {
             AppMessage::RenderAccepted { revision, .. } => {
                 vec![AppEffect::IgnoredStale { revision }]
             }
-            AppMessage::RenderFailed { revision, error } if revision == self.revision => {
-                self.preview = match error {
+            AppMessage::RenderFailed { revision, error }
+                if revision == self.documents.active_slot().revision =>
+            {
+                let preview = match error {
                     RenderError::PreviewTooLarge => PreviewState::TooLarge { revision },
                     error => PreviewState::Failed { revision, error },
                 };
+                self.documents.active_slot_mut().preview = preview;
                 vec![]
             }
             AppMessage::RenderFailed { revision, .. } => {
@@ -526,13 +562,14 @@ impl AppState {
             }
             AppMessage::OpenRequestCompleted { result } => match result {
                 Ok((revision, path, disk)) => {
-                    self.revision = revision;
-                    self.dirty = false;
                     self.recents.touch(path.clone());
-                    self.path = Some(path);
-                    self.saved_disk = Some(disk);
-                    self.external_conflict = None;
-                    self.preview = PreviewState::Waiting { revision };
+                    let slot = self.documents.active_slot_mut();
+                    slot.revision = revision;
+                    slot.dirty = false;
+                    slot.path = Some(path);
+                    slot.saved_disk = Some(disk);
+                    slot.external_conflict = None;
+                    slot.preview = PreviewState::Waiting { revision };
                     vec![AppEffect::ScheduleRender { revision }]
                 }
                 Err(error) => {
@@ -545,17 +582,21 @@ impl AppState {
                 }
             },
             AppMessage::SaveRequested => {
-                let Some(path) = self.path.clone() else {
+                let (path, dirty) = {
+                    let slot = self.documents.active_slot();
+                    (slot.path.clone(), slot.dirty)
+                };
+                let Some(path) = path else {
                     return vec![AppEffect::RequestCloseDecision];
                 };
-                if self.dirty {
+                if dirty {
                     vec![AppEffect::PerformSave { path }]
                 } else {
                     vec![]
                 }
             }
             AppMessage::SaveAsRequested { path } => {
-                if self.dirty {
+                if self.documents.active_slot().dirty {
                     vec![AppEffect::PerformSaveAs { path }]
                 } else {
                     vec![]
@@ -563,11 +604,15 @@ impl AppState {
             }
             AppMessage::CloseRequested { decision } => match decision {
                 CloseDecision::Save { untitled_path } => {
-                    let path = self.path.clone().or(untitled_path);
+                    let (path, dirty) = {
+                        let slot = self.documents.active_slot();
+                        (slot.path.clone(), slot.dirty)
+                    };
+                    let path = path.or(untitled_path);
                     let Some(path) = path else {
                         return vec![AppEffect::RequestCloseDecision];
                     };
-                    if self.dirty {
+                    if dirty {
                         vec![AppEffect::PerformSave { path }]
                     } else {
                         vec![AppEffect::QuitApplication]
@@ -577,7 +622,8 @@ impl AppState {
                 CloseDecision::Cancel => vec![],
             },
             AppMessage::AutosaveTick => {
-                if self.dirty && self.autosave.is_some() {
+                let slot = self.documents.active_slot();
+                if slot.dirty && slot.autosave.is_some() {
                     vec![AppEffect::PerformAutosave]
                 } else {
                     vec![]
@@ -607,6 +653,7 @@ impl AppState {
                 vec![]
             }
             AppMessage::SessionRestored { state } => {
+                self.documents = DocumentManager::new();
                 self.recents = RecentDocuments::from_strings(
                     &state.recent_files,
                     rutile_core::MAX_RECENT_FILES,
@@ -635,7 +682,7 @@ impl AppState {
                 // Contract: one full authoritative resync after incremental failure.
                 // If a resync is already outstanding (or already failed without
                 // clearing), surface a durable notice rather than retry forever.
-                if self.mirror_resync_pending {
+                if self.documents.active_slot().mirror_resync_pending {
                     let notice = self.push_notice(
                         NoticeSeverity::Error,
                         format!("Preview mirror failed: {error}"),
@@ -643,12 +690,12 @@ impl AppState {
                     );
                     vec![AppEffect::PresentNotice { notice }]
                 } else {
-                    self.mirror_resync_pending = true;
+                    self.documents.active_slot_mut().mirror_resync_pending = true;
                     vec![AppEffect::PerformMirrorResync]
                 }
             }
             AppMessage::MirrorResyncCompleted { result } => {
-                self.mirror_resync_pending = false;
+                self.documents.active_slot_mut().mirror_resync_pending = false;
                 match result {
                     Ok(()) => vec![],
                     Err(error) => {
@@ -669,12 +716,31 @@ impl AppState {
                 self.recents.remove(&path);
                 vec![]
             }
+            AppMessage::NewTab => match self.documents.new_tab() {
+                Ok(_) => vec![],
+                Err(_) => {
+                    let notice = self.push_notice(
+                        NoticeSeverity::Warning,
+                        "Too many open documents to create a new tab.".to_owned(),
+                        "too many open documents",
+                    );
+                    vec![AppEffect::PresentNotice { notice }]
+                }
+            },
+            AppMessage::SwitchTab { id } => {
+                let _ = self.documents.switch_tab(id);
+                vec![]
+            }
+            AppMessage::CloseTab { id } => {
+                let _ = self.documents.close_tab(id);
+                vec![]
+            }
         }
     }
 
     fn reduce_preview_event(&mut self, event: PreviewEventV1) -> Vec<AppEffect> {
         let revision = event_revision(&event);
-        if revision != self.revision {
+        if revision != self.documents.active_slot().revision {
             return vec![AppEffect::IgnoredStale { revision }];
         }
 
@@ -685,7 +751,7 @@ impl AppState {
                 frame_seq,
             } => {
                 if frame_seq >= 2 {
-                    self.preview = PreviewState::Ready { revision };
+                    self.documents.active_slot_mut().preview = PreviewState::Ready { revision };
                 }
                 vec![]
             }
@@ -764,17 +830,17 @@ impl AppState {
 
     /// Opens (or replaces) the active find session.
     pub fn start_find(&mut self, query: FindQuery, direction: FindDirection, wrap: bool) {
-        self.find = Some(FindSession::new(query, direction, wrap));
+        self.slot_mut().find = Some(FindSession::new(query, direction, wrap));
     }
 
     /// Borrows the active find session, if any.
     pub fn find_session(&self) -> Option<&FindSession> {
-        self.find.as_ref()
+        self.documents.active_slot().find.as_ref()
     }
 
     /// Closes the active find session.
     pub fn end_find(&mut self) {
-        self.find = None;
+        self.slot_mut().find = None;
     }
 
     /// Finds the next match in the session's direction from `from_byte`,
@@ -785,6 +851,8 @@ impl AppState {
         from_byte: usize,
     ) -> Result<Option<Range<usize>>, ActionError> {
         let direction = self
+            .documents
+            .active_slot()
             .find
             .as_ref()
             .ok_or(ActionError::NoFindSession)?
@@ -800,6 +868,8 @@ impl AppState {
         from_byte: usize,
     ) -> Result<Option<Range<usize>>, ActionError> {
         let direction = self
+            .documents
+            .active_slot()
             .find
             .as_ref()
             .ok_or(ActionError::NoFindSession)?
@@ -819,7 +889,12 @@ impl AppState {
         replacement: String,
     ) -> Result<ReplaceApplied, ActionError> {
         let (query, current) = {
-            let session = self.find.as_ref().ok_or(ActionError::NoFindSession)?;
+            let session = self
+                .documents
+                .active_slot()
+                .find
+                .as_ref()
+                .ok_or(ActionError::NoFindSession)?;
             (session.query.clone(), session.current.clone())
         };
         let Some(current) = current else {
@@ -835,7 +910,7 @@ impl AppState {
         let text = document.snapshot().to_string();
         let plan = rutile_core::replace_current(document.revision(), &text, &spec, current)?;
         let (selection_after, changes, effects) = self.apply_edit_plans(document, vec![plan])?;
-        if let Some(session) = self.find.as_mut() {
+        if let Some(session) = self.documents.active_slot_mut().find.as_mut() {
             session.current = None;
         }
         Ok(ReplaceApplied {
@@ -859,6 +934,8 @@ impl AppState {
         replacement: String,
     ) -> Result<ReplaceApplied, ActionError> {
         let query = self
+            .documents
+            .active_slot()
             .find
             .as_ref()
             .ok_or(ActionError::NoFindSession)?
@@ -878,7 +955,7 @@ impl AppState {
         }
         let replaced = rutile_core::match_count(&text, spec.query());
         let (selection_after, changes, effects) = self.apply_edit_plans(document, plans)?;
-        if let Some(session) = self.find.as_mut() {
+        if let Some(session) = self.documents.active_slot_mut().find.as_mut() {
             session.current = None;
         }
         Ok(ReplaceApplied {
@@ -913,8 +990,12 @@ impl AppState {
     ) -> Result<InsertApplied, ActionError> {
         let start = selection.anchor.min(selection.head);
         let end = selection.anchor.max(selection.head);
-        let id = self.next_transaction_id;
-        self.next_transaction_id = self.next_transaction_id.saturating_add(1);
+        let id = {
+            let slot = self.documents.active_slot_mut();
+            let id = slot.next_transaction_id;
+            slot.next_transaction_id = slot.next_transaction_id.saturating_add(1);
+            id
+        };
         let change = document.apply(EditTransaction {
             base_revision: document.revision(),
             id,
@@ -979,13 +1060,13 @@ impl AppState {
     /// is internal to the store, so recovery-then-continue keeps monotonically
     /// increasing sequences without caller bookkeeping.
     pub fn bind_autosave(&mut self, store: AutosaveStore) -> Result<(), AutosaveError> {
-        self.autosave = Some(store);
+        self.slot_mut().autosave = Some(store);
         Ok(())
     }
 
     /// Borrows the bound autosave store, if any.
     pub fn autosave_store(&self) -> Option<&AutosaveStore> {
-        self.autosave.as_ref()
+        self.documents.active_slot().autosave.as_ref()
     }
 
     /// Writes one autosave entry for `document`'s current snapshot. Returns
@@ -995,7 +1076,7 @@ impl AppState {
         document: &Document,
         captured_at_unix_ms: u64,
     ) -> Result<Option<AutosaveEntryV1>, AutosaveError> {
-        let Some(store) = self.autosave.clone() else {
+        let Some(store) = self.documents.active_slot().autosave.clone() else {
             return Ok(None);
         };
         let snapshot = document.snapshot();
@@ -1007,7 +1088,7 @@ impl AppState {
     /// Recovery-on-startup: returns the highest verifiable autosaved document,
     /// or `None` when there is nothing to recover / no store is bound.
     pub fn recover(&self) -> Result<Option<RecoveredDocument>, AutosaveError> {
-        match &self.autosave {
+        match &self.documents.active_slot().autosave {
             Some(store) => Ok(store.recover()?.recovered),
             None => Ok(None),
         }
@@ -1038,17 +1119,15 @@ impl AppState {
         document: &Document,
         document_path: Option<PathBuf>,
     ) -> Vec<AppEffect> {
-        self.revision = document.revision();
-        self.dirty = true;
-        self.path = document_path;
-        self.saved_disk = None;
-        self.external_conflict = None;
-        self.preview = PreviewState::Waiting {
-            revision: self.revision,
-        };
-        vec![AppEffect::ScheduleRender {
-            revision: self.revision,
-        }]
+        let revision = document.revision();
+        let slot = self.documents.active_slot_mut();
+        slot.revision = revision;
+        slot.dirty = true;
+        slot.path = document_path;
+        slot.saved_disk = None;
+        slot.external_conflict = None;
+        slot.preview = PreviewState::Waiting { revision };
+        vec![AppEffect::ScheduleRender { revision }]
     }
 
     /// Captures session-restore state from the current document path plus the
@@ -1080,7 +1159,7 @@ impl AppState {
     /// Persists session-restore `state` through the bound store. A no-op when
     /// no store is bound.
     pub fn save_session_state(&self, state: &SessionStateV1) -> Result<(), AutosaveError> {
-        match &self.autosave {
+        match &self.documents.active_slot().autosave {
             Some(store) => store.save_session_state(state),
             None => Ok(()),
         }
@@ -1089,7 +1168,7 @@ impl AppState {
     /// Loads and re-validates persisted session state, or `None` when absent /
     /// no store is bound.
     pub fn load_session_state(&self) -> Result<Option<SessionStateV1>, AutosaveError> {
-        match &self.autosave {
+        match &self.documents.active_slot().autosave {
             Some(store) => store.load_session_state(),
             None => Ok(None),
         }
@@ -1120,7 +1199,7 @@ impl AppState {
         from_byte: usize,
         direction: FindDirection,
     ) -> Option<Range<usize>> {
-        let session = self.find.as_mut()?;
+        let session = self.documents.active_slot_mut().find.as_mut()?;
         let text = document.snapshot().to_string();
         let found =
             rutile_core::find_next(&text, &session.query, from_byte, direction, session.wrap);
@@ -1166,8 +1245,12 @@ impl AppState {
         let mut changes = Vec::with_capacity(plans.len());
         for plan in plans {
             selection_after = plan.selection_after();
-            let id = self.next_transaction_id;
-            self.next_transaction_id = self.next_transaction_id.saturating_add(1);
+            let id = {
+                let slot = self.documents.active_slot_mut();
+                let id = slot.next_transaction_id;
+                slot.next_transaction_id = slot.next_transaction_id.saturating_add(1);
+                id
+            };
             changes.push(document.apply(plan.into_transaction(id))?);
         }
         let effects = self.reduce(AppMessage::DocumentEdited {
