@@ -1,6 +1,7 @@
 //! Rutile's platform-independent document and editor contracts.
 
 mod autosave;
+mod chance_style;
 mod counts;
 mod design_tokens;
 mod document;
@@ -25,6 +26,7 @@ pub use autosave::{
     PruneOutcome, RecoveredDocument, RecoveryReport, RejectedEntry, RejectionReason,
     SESSION_STATE_FILE,
 };
+pub use chance_style::{ChanceRoll, ChanceRollError, render_chance_css};
 pub use counts::{Counts, READING_WPM, char_count, counts, reading_time_seconds, word_count};
 pub use design_tokens::{
     DESIGN_TOKENS, DesignTokenSet, DesignTokenSetError, DesignTokenValue, MAX_TOKEN_VALUE_BYTES,
