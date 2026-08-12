@@ -19,7 +19,7 @@
 //! path.
 
 use crate::design_tokens::{DESIGN_TOKENS, DesignTokenSet, DesignTokenValue};
-use crate::export_design::{ACCENT_RUTILE_GOLD, ContentType, generate_candidate};
+use crate::export_design::{ContentType, generate_candidate};
 use std::collections::HashMap;
 
 /// Seed advanced on each re-roll to vary unlocked dimensions (the "timestamp"
@@ -75,11 +75,13 @@ impl ChanceRoll {
         if self.locked.contains_key(static_id) {
             return Ok(false);
         }
-        let value = self
-            .last
-            .get(static_id)
-            .cloned()
-            .unwrap_or_else(|| DesignTokenValue::new(ACCENT_RUTILE_GOLD).unwrap());
+        // Only lock tokens that are present in the current candidate.
+        // generate_candidate sets only 6 of 24 DESIGN_TOKENS; locking an
+        // unset token would fall back to the accent color and inject gold
+        // into the export on the next reroll.
+        let Some(value) = self.last.get(static_id).cloned() else {
+            return Ok(false);
+        };
         self.locked.insert(static_id, value);
         Ok(true)
     }
@@ -147,6 +149,7 @@ pub fn render_chance_css(set: &DesignTokenSet) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ACCENT_RUTILE_GOLD;
 
     #[test]
     fn initial_roll_is_deterministic_for_same_seed_and_type() {
@@ -216,6 +219,37 @@ mod tests {
             roll.lock("not-a-real-token"),
             Err(ChanceRollError::UnknownToken(_))
         ));
+    }
+
+    #[test]
+    fn lock_non_candidate_token_is_noop_not_gold() {
+        let mut roll = ChanceRoll::new(42, ContentType::Note);
+        // generate_candidate sets only 6 tokens (measure, density-scale,
+        // line-height, heading-weight, font-body, accent). Locking 'bg'
+        // (not set) must return Ok(false), NOT inject gold.
+        assert!(!roll.lock("bg").unwrap());
+        assert!(!roll.is_locked("bg"));
+        // Verify gold was NOT injected by checking the CSS doesn't contain
+        // a gold-colored --bg entry.
+        let css = render_chance_css(roll.current());
+        assert!(
+            !css.contains("--bg:#C9921E"),
+            "locking non-candidate token must not inject gold"
+        );
+    }
+
+    #[test]
+    fn lock_candidate_token_succeeds_and_survives_reroll() {
+        let mut roll = ChanceRoll::new(7, ContentType::Spec);
+        // 'measure' IS set by generate_candidate.
+        assert!(roll.lock("measure").unwrap());
+        let locked_val = roll.current().get("measure").cloned();
+        roll.reroll();
+        assert_eq!(
+            roll.current().get("measure").cloned(),
+            locked_val,
+            "locked token must survive reroll"
+        );
     }
 
     #[test]
