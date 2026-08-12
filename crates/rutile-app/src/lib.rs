@@ -19,6 +19,7 @@ pub mod outline;
 pub mod platform;
 pub mod preferences;
 pub mod preview_host;
+pub mod publishing;
 pub mod render_scheduler;
 pub mod revision_history;
 pub mod session_core;
