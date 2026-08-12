@@ -1,19 +1,19 @@
-//! NSAccessibility bridge for the Rutile macOS shell (CY-A11Y-001).
+//! `NSAccessibility` bridge for the Rutile macOS shell (CY-A11Y-001).
 //!
 //! ## Why this exists
 //!
 //! The macOS source pane is an iced program rendered through a custom
 //! tiny-skia compositor into a winit `NSView` (see `native.rs::IcedCompositor`
-//! and `draw_and_present`). AppKit's NSAccessibility tree — the tree VoiceOver
+//! and `draw_and_present`). `AppKit`'s `NSAccessibility` tree — the tree `VoiceOver`
 //! reads — is not populated by iced widgets, so the editor, toolbar, and
-//! notices are invisible to VoiceOver (see `docs/wave4/accessibility-audit.md`
+//! notices are invisible to `VoiceOver` (see `docs/wave4/accessibility-audit.md`
 //! gap G-1). This module bridges the two.
 //!
 //! ## Design: logic separate from wiring
 //!
-//! The AX **logic** is pure Rust and fully testable headlessly (no VoiceOver,
+//! The AX **logic** is pure Rust and fully testable headlessly (no `VoiceOver`,
 //! no GUI, no TCC permission). It derives an accessibility tree from a small
-//! UI snapshot. The AppKit **wiring** is defensive `unsafe` objc2 that
+//! UI snapshot. The `AppKit` **wiring** is defensive `unsafe` objc2 that
 //! consumes the same pure tree and publishes it onto the content `NSView`.
 //!
 //! Scope is deliberately minimal: the window, the editor document text, the
@@ -28,18 +28,18 @@
 //! deliberate and documented here, NOT closed:
 //!
 //! - **Pseudo-fields and caret are perceivability-only (INV-3).** The
-//!   find/replace bar and the editor caret are exposed to VoiceOver as
+//!   find/replace bar and the editor caret are exposed to `VoiceOver` as
 //!   labels / values / focus / `AXSelectedTextRange` so an AT user can
 //!   *perceive* them, but they are not real `AXTextArea` providers backed by
 //!   `NSTextStorage`. Direct AT text entry (typing into the find field, or
-//!   driving the caret per-character from VoiceOver) still requires a full
+//!   driving the caret per-character from `VoiceOver`) still requires a full
 //!   AccessKit migration and remains out of scope.
 //! - **Announcement priority is modeled but not posted.** [`AxAnnouncement`]
 //!   carries a priority mapped from `NoticeSeverity`, but posting
 //!   `NSAccessibilityPriorityKey` requires an `NSNumber` value, and the
 //!   `objc2-foundation/NSNumber` feature is not enabled (a `Cargo.toml`
 //!   change owned by the integration slice). The spoken *message* is posted
-//!   via `NSAccessibilityAnnouncementRequestedNotification`; AppKit announces
+//!   via `NSAccessibilityAnnouncementRequestedNotification`; `AppKit` announces
 //!   it at its default priority.
 
 use crate::app::NoticeSeverity;
@@ -49,16 +49,16 @@ use crate::brand::{PRODUCT_NAME, SOURCE_EDITOR_LABEL, status_title};
 // Pure accessibility logic (no AppKit link; fully testable headlessly).
 // ---------------------------------------------------------------------------
 
-/// An accessibility role. A pure mirror of the AppKit `NSAccessibilityRole`
+/// An accessibility role. A pure mirror of the `AppKit` `NSAccessibilityRole`
 /// constants we publish, kept as a Rust enum so the logic is testable without
-/// linking AppKit. `as_str` returns the stable AppKit role identifier.
+/// linking `AppKit`. `as_str` returns the stable `AppKit` role identifier.
 ///
 /// `Window` and `Group` are part of the complete model (the window node is
-/// owned by NSWindow; the group is the content view). They are exercised by
-/// the test suite and the AppKit role mapping, and are allowed dead in the
+/// owned by `NSWindow`; the group is the content view). They are exercised by
+/// the test suite and the `AppKit` role mapping, and are allowed dead in the
 /// non-test library build where no pure node carries them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum AxRole {
+pub enum AxRole {
     /// `AXWindow` — the top-level window.
     #[allow(dead_code)]
     Window,
@@ -75,7 +75,7 @@ pub(crate) enum AxRole {
 }
 
 impl AxRole {
-    /// The stable AppKit role identifier (`AXTextArea`, `AXButton`, …).
+    /// The stable `AppKit` role identifier (`AXTextArea`, `AXButton`, …).
     #[allow(dead_code)]
     pub(crate) fn as_str(self) -> &'static str {
         match self {
@@ -92,10 +92,10 @@ impl AxRole {
 ///
 /// Maps to `AXSelectedTextRange`. `location`/`length` are byte offsets into
 /// `AxUiState::editor_text`, clamped by the caller. Advisory only — see the
-/// module-level residual (INV-3): without real `NSTextStorage`, VoiceOver may
+/// module-level residual (INV-3): without real `NSTextStorage`, `VoiceOver` may
 /// not honor per-character caret movement driven from the AT side.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct AxSelection {
+pub struct AxSelection {
     /// Inclusive start byte offset into the editor text.
     pub location: usize,
     /// Selection length in bytes (`0` ⇒ a bare caret).
@@ -119,7 +119,7 @@ impl AxSelection {
 /// the native runner. `native.rs` maps `FindField::Query → AxFindField::Find`
 /// and `FindField::Replace → AxFindField::Replace` when building the snapshot.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) enum AxFindField {
+pub enum AxFindField {
     /// The "Find" / query field (mirrors `native::FindField::Query`).
     #[default]
     Find,
@@ -131,7 +131,7 @@ pub(crate) enum AxFindField {
 /// (one for "Find", one for "Replace" when replacement is enabled) plus a
 /// status `AXStaticText`. Perceivability-only — see the module-level residual.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct AxFindBar {
+pub struct AxFindBar {
     /// The current find query.
     pub query: String,
     /// The current replacement text. `None` ⇒ replace is disabled and the
@@ -146,7 +146,7 @@ pub(crate) struct AxFindBar {
 
 /// Spoken-announcement priority, mapped from the reducer's `NoticeSeverity`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum AxAnnouncementPriority {
+pub enum AxAnnouncementPriority {
     /// Polite/low priority (background information).
     Low,
     /// Assertive/high priority (warnings and errors).
@@ -169,15 +169,15 @@ impl AxAnnouncementPriority {
 
 /// A spoken announcement to post via
 /// `NSAccessibilityAnnouncementRequestedNotification`. Not a tree child — it
-/// is passed through the state as a side-channel consumed by the AppKit wiring.
+/// is passed through the state as a side-channel consumed by the `AppKit` wiring.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct AxAnnouncement {
+pub struct AxAnnouncement {
     /// The reducer-owned notice id, used by `native.rs` as a shell-local dedup
     /// cursor (mirrors the `window_title` dedup). Stored here so the wiring
     /// round-trip is self-describing and testable.
     #[allow(dead_code)]
     pub notice_id: usize,
-    /// The message AppKit should speak.
+    /// The message `AppKit` should speak.
     pub message: String,
     /// The announcement priority (modeled; see module-level residual re.
     /// posting).
@@ -186,12 +186,12 @@ pub(crate) struct AxAnnouncement {
 
 /// A single node in the derived accessibility tree.
 ///
-/// Each field maps to a standard NSAccessibility attribute:
+/// Each field maps to a standard `NSAccessibility` attribute:
 /// `title` → `AXTitle`, `label` → `AXDescription`/`AXLabel`,
 /// `value` → `AXValue`, `focused` → `AXFocused`, `selection` →
 /// `AXSelectedTextRange`.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct AxNode {
+pub struct AxNode {
     pub role: AxRole,
     /// The announced title (maps to `accessibilityTitle`). Used for buttons.
     pub title: Option<String>,
@@ -246,13 +246,13 @@ impl AxNode {
 
 /// The minimal UI state the bridge needs, projected from the runner. Every
 /// field is owned/cheap so the snapshot can be built on the redraw path
-/// without holding runner locks across AppKit calls.
+/// without holding runner locks across `AppKit` calls.
 ///
 /// `toolbar_labels` doubles as the toolbar-visibility flag: empty means the
 /// toolbar is hidden (no buttons exposed), non-empty exposes one `AXButton`
 /// per label in the given order.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct AxUiState {
+pub struct AxUiState {
     /// The document text currently rendered in the source editor.
     pub editor_text: String,
     /// The toolbar button labels to expose, in display order. Empty when the
@@ -275,23 +275,23 @@ pub(crate) struct AxUiState {
 }
 
 /// Pure accessibility description of the Rutile window. Built from a UI
-/// snapshot and consumed both by the headless tests and by the AppKit wiring.
+/// snapshot and consumed both by the headless tests and by the `AppKit` wiring.
 #[derive(Clone, Debug)]
-pub(crate) struct MacAccessibilityState {
-    /// The window title VoiceOver should announce (`PRODUCT_NAME`, or
+pub struct MacAccessibilityState {
+    /// The window title `VoiceOver` should announce (`PRODUCT_NAME`, or
     /// `"{PRODUCT_NAME} — {status}"` when a status/notice is active). The
-    /// NSWindow already owns its title; this field mirrors it so the pure
+    /// `NSWindow` already owns its title; this field mirrors it so the pure
     /// model is self-describing and testable.
     #[allow(dead_code)]
     pub window_title: String,
     /// The label of the content group (always `PRODUCT_NAME`).
     pub group_label: String,
-    /// The exposed children, in VoiceOver navigation order: the editor text
+    /// The exposed children, in `VoiceOver` navigation order: the editor text
     /// area first, then the find/replace pseudo-fields (when open), then the
     /// toolbar buttons (when visible), then the active notice/status (when
     /// present).
     pub children: Vec<AxNode>,
-    /// The pending announcement, if any. Consumed by the AppKit wiring to post
+    /// The pending announcement, if any. Consumed by the `AppKit` wiring to post
     /// `NSAccessibilityAnnouncementRequestedNotification`. Not a child node.
     pub announcement: Option<AxAnnouncement>,
 }
@@ -308,7 +308,7 @@ impl MacAccessibilityState {
         // toolbar + notice.
         let find_extra = match &state.find_bar {
             Some(find) => {
-                1 + find.replacement.is_some() as usize + (!find.status.is_empty()) as usize
+                1 + usize::from(find.replacement.is_some()) + usize::from(!find.status.is_empty())
             }
             None => 0,
         };
@@ -387,13 +387,13 @@ mod appkit {
     use objc2_foundation::{NSArray, NSDictionary, NSRange, NSString};
     use std::fmt;
 
-    /// Non-fatal AppKit wiring error. AX publishing is best-effort: the caller
-    /// discards it so a wiring miss never blocks the editor or hangs VoiceOver.
+    /// Non-fatal `AppKit` wiring error. AX publishing is best-effort: the caller
+    /// discards it so a wiring miss never blocks the editor or hangs `VoiceOver`.
     #[derive(Debug)]
-    pub(crate) enum AxWireError {
+    pub enum AxWireError {
         /// `Window::window_handle()` returned an error.
         Handle(raw_window_handle::HandleError),
-        /// Retaining the content NSView returned nil (the view is gone).
+        /// Retaining the content `NSView` returned nil (the view is gone).
         RetainFailed,
     }
 
@@ -414,12 +414,12 @@ mod appkit {
         }
     }
 
-    /// Map a pure role to its AppKit `NSAccessibilityRole` constant.
+    /// Map a pure role to its `AppKit` `NSAccessibilityRole` constant.
     ///
     /// # Safety
     ///
-    /// The returned reference is an `extern static` AppKit framework constant;
-    /// reading an extern static is the unsafe operation, but AppKit's role
+    /// The returned reference is an `extern static` `AppKit` framework constant;
+    /// reading an extern static is the unsafe operation, but `AppKit`'s role
     /// constants are immutable and always initialized.
     unsafe fn role_constant(role: AxRole) -> &'static objc2_app_kit::NSAccessibilityRole {
         match role {
@@ -473,7 +473,7 @@ mod appkit {
     /// The *priority* (`NSAccessibilityPriorityKey`) is modeled on
     /// [`AxAnnouncement::priority`] but is NOT included here: its value must
     /// be an `NSNumber`, and the `objc2-foundation/NSNumber` feature is not
-    /// enabled (a `Cargo.toml` change owned by the integration slice). AppKit
+    /// enabled (a `Cargo.toml` change owned by the integration slice). `AppKit`
     /// therefore announces the message at its default priority. The pure
     /// severity→priority mapping is still covered by the headless test suite.
     pub(super) fn build_announcement_user_info(
@@ -493,15 +493,15 @@ mod appkit {
 
     /// Post a spoken announcement onto `ns_view` via
     /// `NSAccessibilityAnnouncementRequestedNotification`. Best-effort and
-    /// non-fatal: every AppKit call here is either a safe setter or a C call
+    /// non-fatal: every `AppKit` call here is either a safe setter or a C call
     /// that returns no error, so an announcement miss can never block the
-    /// editor or hang VoiceOver.
+    /// editor or hang `VoiceOver`.
     fn post_announcement(ns_view: &NSView, announcement: &AxAnnouncement) {
         let user_info = build_announcement_user_info(announcement);
         // SAFETY: every Objective-C object (here an NSView) is an `id`
         // (`AnyObject`); `NSView` and `AnyObject` are pointer types with an
         // identical object-pointer layout, so the reference cast is sound.
-        let element: &AnyObject = unsafe { &*(ns_view as *const NSView as *const AnyObject) };
+        let element: &AnyObject = unsafe { &*std::ptr::from_ref::<NSView>(ns_view).cast::<AnyObject>() };
         // SAFETY: `element` is a live NSView; the announcement notification
         // name and the userInfo `NSDictionary` are the documented argument
         // types for this AppKit function.
@@ -563,7 +563,7 @@ mod appkit {
         Ok(())
     }
 
-    /// Convenience: retain the content NSView from a raw pointer.
+    /// Convenience: retain the content `NSView` from a raw pointer.
     ///
     /// # Safety
     ///
@@ -577,8 +577,8 @@ mod appkit {
     /// Publish the accessibility tree onto the content `NSView` of a winit
     /// window. This is the public entry point called from the runner's redraw
     /// path. Best-effort: returns `Err` on any wiring miss so the caller can
-    /// log and continue without blocking the editor or hanging VoiceOver.
-    pub(crate) fn publish_to_window(
+    /// log and continue without blocking the editor or hanging `VoiceOver`.
+    pub fn publish_to_window(
         window: &raw_window_handle::AppKitWindowHandle,
         state: &MacAccessibilityState,
     ) -> Result<(), AxWireError> {
@@ -592,7 +592,7 @@ mod appkit {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) use appkit::publish_to_window;
+pub use appkit::publish_to_window;
 
 // ---------------------------------------------------------------------------
 // Headless tests (no VoiceOver, no GUI, no TCC).

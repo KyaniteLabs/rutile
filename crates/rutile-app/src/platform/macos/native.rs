@@ -233,8 +233,8 @@ impl ProductRunner {
                 load_session_err.as_deref(),
             );
             pending_recovery_notice = match notice {
-                Some(crate::platform::paste::RecoveryNotice::DataLoss(m))
-                | Some(crate::platform::paste::RecoveryNotice::Recoverable(m)) => Some(m),
+                Some(crate::platform::paste::RecoveryNotice::DataLoss(m) |
+crate::platform::paste::RecoveryNotice::Recoverable(m)) => Some(m),
                 Some(crate::platform::paste::RecoveryNotice::CosmeticLog(m)) => {
                     eprintln!("rutile: session-state cosmetic warning: {m}");
                     None
@@ -404,7 +404,7 @@ impl ProductRunner {
     fn run_open_panel(&mut self, event_loop: &ActiveEventLoop) {
         match choose_open_path() {
             Ok(Some(path)) => {
-                self.handle_open_delivery(event_loop, vec![path.display().to_string()])
+                self.handle_open_delivery(event_loop, vec![path.display().to_string()]);
             }
             Ok(None) => {}
             Err(error) => self.surface_error(error.to_string()),
@@ -416,14 +416,13 @@ impl ProductRunner {
             self.surface_error("Resolve the external file conflict before saving");
             return;
         }
-        if let Err(MacError::ExternalConflict) =
-            self.session.ensure_no_external_conflict_before_save()
+        if matches!(self.session.ensure_no_external_conflict_before_save(), Err(MacError::ExternalConflict))
         {
             self.surface_error("The file changed on disk; resolve the conflict before saving");
             return;
         }
         match self.session.request_save() {
-            Ok(MacSaveAction::Completed) | Ok(MacSaveAction::Noop) => {
+            Ok(MacSaveAction::Completed | MacSaveAction::Noop) => {
                 self.sync_window_title();
             }
             Ok(MacSaveAction::NeedSaveAs) => self.run_save_as_md(event_loop),
@@ -435,9 +434,7 @@ impl ProductRunner {
         let default = self
             .session
             .path()
-            .and_then(Path::file_name)
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "Untitled.md".to_owned());
+            .and_then(Path::file_name).map_or_else(|| "Untitled.md".to_owned(), |name| name.to_string_lossy().into_owned());
         match choose_save_path(&default) {
             Ok(Some(path)) => match self.session.request_save_as(path) {
                 Ok(()) => self.sync_window_title(),
@@ -451,7 +448,7 @@ impl ProductRunner {
     /// The first undismissed reducer notice, if any. This is the single
     /// notice that drives both [`Self::active_status`] and the spoken
     /// [`AxAnnouncement`] in [`Self::publish_accessibility`], so the visible
-    /// status and VoiceOver never disagree about *which* notice is current.
+    /// status and `VoiceOver` never disagree about *which* notice is current.
     /// Pending pseudo-decisions (dirty-close / recovery) are deliberately NOT
     /// modeled here — only reducer-owned notices are announced.
     fn active_notice(&self) -> Option<&UserNotice> {
@@ -463,10 +460,10 @@ impl ProductRunner {
     }
 
     /// The active status/notice message that should be surfaced to the user
-    /// (both as the window-title suffix and as an NSAccessibility element).
+    /// (both as the window-title suffix and as an `NSAccessibility` element).
     /// `None` means the buffer is clean with no outstanding notice. This is
     /// the single source of truth shared by [`Self::sync_window_title`] and
-    /// [`Self::publish_accessibility`] so the title bar and VoiceOver never
+    /// [`Self::publish_accessibility`] so the title bar and `VoiceOver` never
     /// disagree.
     fn active_status(&self) -> Option<String> {
         if let Some(notice) = self.active_notice() {
@@ -504,7 +501,7 @@ impl ProductRunner {
         update_recent_documents(paths);
     }
 
-    /// Rebuilds the Tabs submenu from the current DocumentManager state.
+    /// Rebuilds the Tabs submenu from the current `DocumentManager` state.
     fn sync_tabs(&mut self) {
         let docs = self.session.app_state().documents();
         let tab_order = docs.tab_order();
@@ -517,17 +514,15 @@ impl ProductRunner {
             .map(|id| {
                 docs.slot(*id)
                     .and_then(|s| s.path.as_ref())
-                    .and_then(|p| p.file_name())
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "Untitled".to_owned())
+                    .and_then(|p| p.file_name()).map_or_else(|| "Untitled".to_owned(), |n| n.to_string_lossy().into_owned())
             })
             .collect();
 
         update_tabs(id_values, labels, active_index);
     }
 
-    /// Publish the NSAccessibility tree (CY-A11Y-001) onto the content NSView
-    /// so VoiceOver can announce the window, read the document text, speak the
+    /// Publish the `NSAccessibility` tree (CY-A11Y-001) onto the content `NSView`
+    /// so `VoiceOver` can announce the window, read the document text, speak the
     /// toolbar button labels, surface the active notice, and — when a *new*
     /// reducer notice appears — speak it once.
     ///
@@ -536,11 +531,11 @@ impl ProductRunner {
     /// [`AxSelection`]/caret are exposed so an AT user can *perceive* them
     /// (label / value / focus / `AXSelectedTextRange`), but they are not real
     /// `AXTextArea` providers backed by `NSTextStorage`. Direct AT text entry
-    /// into the find field, or per-character caret driving from VoiceOver,
+    /// into the find field, or per-character caret driving from `VoiceOver`,
     /// still requires a full AccessKit migration and remains out of scope.
     ///
     /// Best-effort: any wiring miss is silently dropped so an AX failure can
-    /// never block the editor or hang the app under VoiceOver (which calls AX
+    /// never block the editor or hang the app under `VoiceOver` (which calls AX
     /// callbacks on the main thread). The announcement dedup cursor
     /// (`last_announced_notice_id`) is advanced *only* after a successful
     /// `publish_to_window`, so a wiring failure retries the announcement on the
@@ -899,7 +894,7 @@ impl ProductRunner {
         };
         match self.session.apply_format(selection, command) {
             Ok(applied) => {
-                self.after_shared_edit(event_loop, &applied.changes, applied.selection_after)
+                self.after_shared_edit(event_loop, &applied.changes, applied.selection_after);
             }
             Err(error) => self.surface_error(error.to_string()),
         }
@@ -916,7 +911,7 @@ impl ProductRunner {
         };
         match self.session.smart_enter(selection) {
             Ok(applied) => {
-                self.after_shared_edit(event_loop, &applied.changes, applied.selection_after)
+                self.after_shared_edit(event_loop, &applied.changes, applied.selection_after);
             }
             Err(error) => self.surface_error(error.to_string()),
         }
@@ -971,7 +966,7 @@ impl ProductRunner {
         };
         match self.session.insert_text(selection, &text) {
             Ok(applied) => {
-                self.after_shared_edit(event_loop, &applied.changes, applied.selection_after)
+                self.after_shared_edit(event_loop, &applied.changes, applied.selection_after);
             }
             Err(error) => self.surface_error(error.to_string()),
         }
@@ -983,9 +978,7 @@ impl ProductRunner {
         let default = self
             .session
             .path()
-            .and_then(Path::file_stem)
-            .map(|stem| format!("{}.html", stem.to_string_lossy()))
-            .unwrap_or_else(|| "Untitled.html".to_owned());
+            .and_then(Path::file_stem).map_or_else(|| "Untitled.html".to_owned(), |stem| format!("{}.html", stem.to_string_lossy()));
         match choose_save_path(&default) {
             Ok(Some(path)) => match self.session.save_html_as(&path) {
                 Ok(()) => self.surface_error(format!("Exported HTML to {}", path.display())),
@@ -1354,7 +1347,7 @@ impl ProductRunner {
 
     /// Execute a dirty-close decision through the reducer-owned
     /// [`ProductSession::request_close`] path. Returns `true` when the event
-    /// loop has been asked to exit. Shared by both the native NSAlert decision
+    /// loop has been asked to exit. Shared by both the native `NSAlert` decision
     /// (G003 production) and the smoke keyboard pseudo-decision fallback so
     /// both routes preserve identical reducer and save-path semantics:
     /// untitled Save still routes through `choose_save_path("Untitled.md")`,
@@ -1495,8 +1488,8 @@ impl ProductRunner {
             let position = window.outer_position().ok();
             let size = window.inner_size();
             SessionWindowV1 {
-                x: position.map(|p| p.x).unwrap_or(0),
-                y: position.map(|p| p.y).unwrap_or(0),
+                x: position.map_or(0, |p| p.x),
+                y: position.map_or(0, |p| p.y),
                 width: size.width,
                 height: size.height,
             }
@@ -1604,7 +1597,7 @@ impl ProductRunner {
                 if let Some(webview) = &self.webview {
                     if let Err(error) = webview
                         .set_visible(false)
-                        .and_then(|_| webview.set_visible(true))
+                        .and_then(|()| webview.set_visible(true))
                     {
                         self.fail(event_loop, error.to_string());
                         return;
@@ -1695,7 +1688,7 @@ impl ProductRunner {
                 .editor_mut()
                 .apply_external_change(&undo)
                 .map_err(|error| MacError::Core(error.to_string()))
-                .and_then(|_| self.render_and_navigate())
+                .and_then(|()| self.render_and_navigate())
             {
                 self.fail(event_loop, error.to_string());
                 return;
@@ -1709,7 +1702,7 @@ impl ProductRunner {
                 .editor_mut()
                 .apply_external_change(&redo)
                 .map_err(|error| MacError::Core(error.to_string()))
-                .and_then(|_| self.render_and_navigate())
+                .and_then(|()| self.render_and_navigate())
             {
                 self.fail(event_loop, error.to_string());
                 return;
@@ -2169,7 +2162,7 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
                         .editor_mut()
                         .apply_external_change(&change)
                         .map_err(|error| MacError::Core(error.to_string()))
-                        .and_then(|_| self.render_and_navigate())
+                        .and_then(|()| self.render_and_navigate())
                     {
                         self.fail(event_loop, error.to_string());
                     }
@@ -3199,7 +3192,7 @@ fn close_dialog_action(response: NSModalResponse) -> CloseDialogAction {
     }
 }
 
-/// Presents the crash-recovery `NSAlert` on the AppKit main thread and projects
+/// Presents the crash-recovery `NSAlert` on the `AppKit` main thread and projects
 /// its `runModal` response onto `RecoveryDialogAction`. Buttons are added in
 /// `RECOVERY_DIALOG_BUTTONS` order so the first button restores; the "Dismiss"
 /// button is bound to Escape (⎋) so the recovered buffer can be dropped without
@@ -3226,10 +3219,10 @@ fn run_recovery_alert() -> Result<RecoveryDialogAction, MacError> {
     Ok(recovery_dialog_action(alert.runModal()))
 }
 
-/// Presents the unsaved-changes-on-close `NSAlert` on the AppKit main thread
+/// Presents the unsaved-changes-on-close `NSAlert` on the `AppKit` main thread
 /// and projects its `runModal` response onto `CloseDialogAction`. Buttons are
 /// added in `CLOSE_DIALOG_BUTTONS` order ("Save", "Don't Save", "Cancel").
-/// "Cancel" and "Don't Save" pick up their standard AppKit key equivalents
+/// "Cancel" and "Don't Save" pick up their standard `AppKit` key equivalents
 /// (Escape / ⌘D) from their native titles, so no equivalent is set here. A
 /// failure to reach the main thread is returned as an error — the caller
 /// surfaces it and leaves the dirty window open rather than dropping changes.

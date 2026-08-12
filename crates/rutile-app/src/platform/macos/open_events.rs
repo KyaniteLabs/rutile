@@ -28,7 +28,7 @@ fn recent_paths() -> &'static Mutex<Vec<String>> {
 
 const RECENT_SUBMENU_TITLE: &str = "Open Recent";
 
-/// Snapshot of open-tab DocumentIds for resolving switch-tab menu tags.
+/// Snapshot of open-tab `DocumentIds` for resolving switch-tab menu tags.
 static TAB_IDS: OnceLock<Mutex<Vec<u64>>> = OnceLock::new();
 
 fn tab_ids() -> &'static Mutex<Vec<u64>> {
@@ -48,7 +48,7 @@ pub fn take_pending_switch() -> Option<usize> {
 }
 
 const TABS_SUBMENU_TITLE: &str = "Tabs";
-/// NSEventModifierFlagControl (1<<18) | NSEventModifierFlagCommand (1<<20).
+/// `NSEventModifierFlagControl` (1<<18) | `NSEventModifierFlagCommand` (1<<20).
 /// Raw values so we don't need to enable the `NSEvent` feature in objc2-app-kit.
 const MASK_CONTROL_COMMAND: isize = (1 << 18) | (1 << 20);
 
@@ -57,7 +57,7 @@ const MASK_CONTROL_COMMAND: isize = (1 << 18) | (1 << 20);
 pub enum MacUserEvent {
     /// One or more file URLs from drag/drop or a future delegate hook.
     OpenUrls(Vec<String>),
-    /// File menu action selected from the AppKit menu bar.
+    /// File menu action selected from the `AppKit` menu bar.
     MenuCommand(MacMenuCommand),
 }
 
@@ -257,13 +257,13 @@ pub fn install_file_menu_with_actions() -> Result<(), String> {
 ///
 /// Each item's `tag` is its index in `paths`; the [`MenuTarget`] resolves the
 /// tag → path via [`recent_paths`] and forwards through [`forward_open_urls`].
-/// Must be called on the AppKit main thread (guaranteed inside winit's event
+/// Must be called on the `AppKit` main thread (guaranteed inside winit's event
 /// loop on macOS).
 pub fn update_recent_documents(paths: Vec<String>) {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
-    *recent_paths().lock().unwrap_or_else(|e| e.into_inner()) = paths.clone();
+    *recent_paths().lock().unwrap_or_else(std::sync::PoisonError::into_inner) = paths.clone();
 
     let app = NSApplication::sharedApplication(mtm);
     let Some(main_menu) = app.mainMenu() else {
@@ -307,9 +307,7 @@ pub fn update_recent_documents(paths: Vec<String>) {
     for (index, path) in paths.iter().enumerate() {
         let item = NSMenuItem::new(mtm);
         let display = std::path::Path::new(path)
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.clone());
+            .file_name().map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
         item.setTitle(&NSString::from_str(&display));
         item.setTag(index as isize);
         unsafe {
@@ -438,13 +436,13 @@ pub fn install_view_menu() -> Result<(), String> {
     Ok(())
 }
 
-/// Rebuilds the Tabs submenu from `tab_id_values` (DocumentId .get() values)
+/// Rebuilds the Tabs submenu from `tab_id_values` (`DocumentId` .`get()` values)
 /// and `tab_labels` (display names). The active index gets a checkmark.
 pub fn update_tabs(tab_id_values: Vec<u64>, tab_labels: Vec<String>, active_index: usize) {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
-    *tab_ids().lock().unwrap_or_else(|e| e.into_inner()) = tab_id_values.clone();
+    *tab_ids().lock().unwrap_or_else(std::sync::PoisonError::into_inner) = tab_id_values;
 
     let app = NSApplication::sharedApplication(mtm);
     let Some(main_menu) = app.mainMenu() else {
@@ -494,7 +492,7 @@ pub fn update_tabs(tab_id_values: Vec<u64>, tab_labels: Vec<String>, active_inde
         let item = NSMenuItem::new(mtm);
         item.setTitle(&NSString::from_str(label));
         item.setTag(index as isize);
-        let state: isize = if index == active_index { 1 } else { 0 };
+        let state: isize = isize::from(index == active_index);
         unsafe {
             let _: () = msg_send![&item, setState: state];
             item.setTarget(Some(&***target));

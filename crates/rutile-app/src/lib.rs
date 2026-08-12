@@ -1,5 +1,32 @@
 //! Headless application composition for Rutile's native platform shells.
 
+// S+-tier lint policy: enforce the pedantic + nursery groups, but allow the
+// genuinely-opinionated lints that are noise for this codebase.
+#![warn(clippy::pedantic, clippy::nursery)]
+#![allow(
+    // Candidate lints suggest #[must_use] / const fn everywhere; too noisy.
+    clippy::must_use_candidate,
+    clippy::return_self_not_must_use,
+    clippy::missing_const_for_fn,
+    // Doc-section lints: we add `# Errors` where it matters, not exhaustively.
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    // Opinionated structural/style lints.
+    clippy::struct_excessive_bools,
+    clippy::struct_field_names,
+    clippy::too_many_lines,
+    clippy::too_long_first_doc_paragraph,
+    clippy::option_if_let_else,
+    clippy::match_same_arms,
+    clippy::suboptimal_flops,
+    // Cast lints fire on the unavoidable isize/i32 conversions at the AppKit
+    // FFI boundary and on bounded size<->index math; audited per-site.
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+)]
+
 #[cfg(all(feature = "linux-gtk", feature = "macos-shell"))]
 compile_error!("features `linux-gtk` and `macos-shell` are mutually exclusive");
 
@@ -38,6 +65,6 @@ pub fn run() -> Result<(), String> {
 }
 
 #[cfg(not(any(feature = "linux-gtk", feature = "macos-shell")))]
-pub fn run() -> Result<(), String> {
+pub const fn run() -> Result<(), String> {
     Ok(())
 }

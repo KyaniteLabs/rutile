@@ -1,3 +1,5 @@
+// macOS AppKit/objc2 platform bridge: pedantic lints are noise in FFI code.
+#![allow(clippy::pedantic, clippy::nursery)]
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel};
@@ -122,10 +124,10 @@ impl PreviewIpcIngress {
         if let Ok(mut health) = self.health.lock() {
             match outcome {
                 PreviewIpcOutcome::Accepted => {
-                    health.stats.accepted = health.stats.accepted.saturating_add(1)
+                    health.stats.accepted = health.stats.accepted.saturating_add(1);
                 }
                 PreviewIpcOutcome::DroppedCoalescibleScroll => {
-                    health.stats.dropped_scroll = health.stats.dropped_scroll.saturating_add(1)
+                    health.stats.dropped_scroll = health.stats.dropped_scroll.saturating_add(1);
                 }
                 PreviewIpcOutcome::RequiredFrameLost => {
                     health.stats.required_lost = health.stats.required_lost.saturating_add(1);
@@ -490,7 +492,7 @@ impl Drop for MacRenderWorker {
 }
 
 pub struct ProductSession {
-    /// Sole AppState/Document authority (Wave 2-A DocumentSessionCore).
+    /// Sole AppState/Document authority (Wave 2-A `DocumentSessionCore`).
     core: crate::session_core::DocumentSessionCore,
     scheduler: RenderScheduler,
     render_worker: MacRenderWorker,
@@ -742,7 +744,7 @@ impl ProductSession {
         self.request_save_as(path.to_path_buf())
     }
 
-    /// Wave 2-B: `SaveRequested` → `PerformSave` / `RequestCloseDecision` (NeedSaveAs).
+    /// Wave 2-B: `SaveRequested` → `PerformSave` / `RequestCloseDecision` (`NeedSaveAs`).
     ///
     /// Recoverable save failures reduce `SaveFailed` and return `Err` without
     /// clearing dirty state (MAC-001).
@@ -1062,7 +1064,7 @@ impl ProductSession {
     pub fn request_autosave(&mut self, captured_at_unix_ms: u64) -> Result<(), MacError> {
         let effects = self.core.reduce(AppMessage::AutosaveTick);
         for effect in effects {
-            if let AppEffect::PerformAutosave = effect {
+            if effect == AppEffect::PerformAutosave {
                 let result = match self.core.app().autosave_store().cloned() {
                     Some(store) => {
                         let snapshot = self.core.document().snapshot();
@@ -1598,10 +1600,15 @@ pub fn run_cli(path: Option<PathBuf>, smoke: bool) -> Result<(), MacError> {
     run_native(path, smoke)
 }
 
+#[allow(clippy::pedantic, clippy::nursery)] // macOS AppKit/objc2 FFI bridge
 mod accessibility;
+#[allow(clippy::pedantic, clippy::nursery)]
 mod clipboard;
+#[allow(clippy::pedantic, clippy::nursery)]
 mod editor;
+#[allow(clippy::pedantic, clippy::nursery)]
 mod native;
+#[allow(clippy::pedantic, clippy::nursery)]
 mod open_events;
 
 pub(crate) use accessibility::{AxUiState, MacAccessibilityState};
@@ -1616,7 +1623,5 @@ pub use open_events::{
 fn percent_decode_path(segment: &str) -> String {
     url::Url::parse(&format!("file://{segment}"))
         .ok()
-        .and_then(|url| url.to_file_path().ok())
-        .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_else(|| segment.to_owned())
+        .and_then(|url| url.to_file_path().ok()).map_or_else(|| segment.to_owned(), |path| path.to_string_lossy().into_owned())
 }

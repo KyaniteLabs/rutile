@@ -30,6 +30,7 @@ pub enum PageFormat {
 
 impl PageFormat {
     /// The CSS `@page` size keyword.
+    #[must_use]
     pub const fn css_size(self) -> &'static str {
         match self {
             Self::A4 => "A4",
@@ -40,6 +41,7 @@ impl PageFormat {
     }
 
     /// A short, filesystem-safe slug for export filenames.
+    #[must_use]
     pub const fn slug(self) -> &'static str {
         match self {
             Self::A4 => "a4",
@@ -61,6 +63,7 @@ pub enum FontFamily {
 
 impl FontFamily {
     /// The CSS font-family stack. System fonts only — no `url()` / `@font-face`.
+    #[must_use]
     pub const fn css_stack(self) -> &'static str {
         match self {
             Self::Serif => "Georgia, \"Times New Roman\", serif",
@@ -93,6 +96,7 @@ impl Default for PublishingPreset {
 
 impl PublishingPreset {
     /// Builds a preset, clamping every field to its safe range.
+    #[must_use]
     pub fn new(
         format: PageFormat,
         margin_mm: u16,
@@ -108,37 +112,45 @@ impl PublishingPreset {
     }
 
     /// Draft: A4, comfortable sans, generous margins (PP5).
+    #[must_use]
     pub fn draft() -> Self {
         Self::new(PageFormat::A4, 25, FontFamily::SansSerif, 12)
     }
 
     /// Manuscript: Letter, 12pt serif, 1in (≈25mm) margins — standard format.
+    #[must_use]
     pub fn manuscript() -> Self {
         Self::new(PageFormat::Letter, 25, FontFamily::Serif, 12)
     }
 
     /// Print-ready: A4, 11pt serif, balanced margins (default).
+    #[must_use]
     pub fn print_ready() -> Self {
         Self::new(PageFormat::A4, 18, FontFamily::Serif, 11)
     }
 
-    pub fn format(&self) -> PageFormat {
+    #[must_use]
+    pub const fn format(&self) -> PageFormat {
         self.format
     }
 
-    pub fn margin_mm(&self) -> u16 {
+    #[must_use]
+    pub const fn margin_mm(&self) -> u16 {
         self.margin_mm
     }
 
-    pub fn font(&self) -> FontFamily {
+    #[must_use]
+    pub const fn font(&self) -> FontFamily {
         self.font
     }
 
-    pub fn base_font_size_pt(&self) -> u8 {
+    #[must_use]
+    pub const fn base_font_size_pt(&self) -> u8 {
         self.base_font_size_pt
     }
 
     /// A filesystem-safe slug for this preset (format only — never user input).
+    #[must_use]
     pub fn slug(&self) -> String {
         self.format.slug().to_owned()
     }
@@ -148,6 +160,7 @@ impl PublishingPreset {
     /// Contains only `@page` size/margin and body font declarations — no
     /// `url()`, `@import`, or `expression()` — so it re-validates as a safe
     /// export block.
+    #[must_use]
     pub fn print_stylesheet(&self) -> String {
         format!(
             "@media print{{@page{{size:{size};margin:{margin}mm}}\
@@ -160,6 +173,7 @@ impl PublishingPreset {
     }
 
     /// The ready-to-inject `<style>` block wrapping the print stylesheet.
+    #[must_use]
     pub fn print_style_block(&self) -> String {
         format!("<style>{}</style>", self.print_stylesheet())
     }
@@ -167,6 +181,7 @@ impl PublishingPreset {
     /// Derives an export filename `<stem>-<slug>.html` from a document stem.
     /// `stem` is expected to be a file name without extension; the slug is a
     /// fixed format identifier, so the result can't be spoofed.
+    #[must_use]
     pub fn suggested_filename(&self, stem: &str) -> String {
         let clean = stem
             .trim()

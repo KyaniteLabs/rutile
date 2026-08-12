@@ -34,7 +34,8 @@ impl std::fmt::Debug for RenderSource {
 }
 
 impl RenderRequest {
-    pub fn new(revision: Revision, source: Arc<str>) -> Self {
+    #[must_use]
+    pub const fn new(revision: Revision, source: Arc<str>) -> Self {
         Self {
             revision,
             source: RenderSource::Flat(source),
@@ -44,7 +45,8 @@ impl RenderRequest {
     /// Captures Rope storage in O(1). Any full UTF-8 flattening happens only
     /// when the render permit executes, which native shells dispatch off the
     /// UI thread.
-    pub fn from_snapshot(snapshot: DocumentSnapshot) -> Self {
+    #[must_use]
+    pub const fn from_snapshot(snapshot: DocumentSnapshot) -> Self {
         Self {
             revision: snapshot.revision,
             source: RenderSource::Rope(snapshot),
@@ -60,10 +62,12 @@ pub struct RenderPermit {
 }
 
 impl RenderPermit {
-    pub fn revision(&self) -> Revision {
+    #[must_use]
+    pub const fn revision(&self) -> Revision {
         self.revision
     }
 
+    #[must_use]
     pub fn execute(self) -> CompletedRender {
         self.execute_with(|source, revision| match render_markdown(source, revision) {
             Ok(page) => RenderJobResult::Rendered(page),
@@ -109,7 +113,7 @@ pub enum RenderJobResult {
 }
 
 impl RenderJobResult {
-    fn revision(&self) -> Revision {
+    const fn revision(&self) -> Revision {
         match self {
             Self::Rendered(page) => page.revision,
             Self::Failed { revision, .. } => *revision,
@@ -163,6 +167,7 @@ pub struct RenderScheduler {
 }
 
 impl RenderScheduler {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -203,11 +208,12 @@ impl RenderScheduler {
         Some(permit)
     }
 
+    #[allow(clippy::suspicious_operation_groupings)] // intentional stale-job mismatch check
     pub fn finish(&mut self, completed: CompletedRender, current_revision: Revision) -> Completion {
         let Some(running) = self.running.as_ref() else {
             return Completion::UnknownJob { id: completed.id };
         };
-        if running.id != completed.id || running.revision != completed.issued_revision {
+        if (running.id != completed.id) || (running.revision != completed.issued_revision) {
             return Completion::UnknownJob { id: completed.id };
         }
 
@@ -235,21 +241,25 @@ impl RenderScheduler {
         }
     }
 
+    #[must_use]
     pub fn running_revision(&self) -> Option<Revision> {
         self.running.as_ref().map(|running| running.revision)
     }
 
+    #[must_use]
     pub fn pending_revision(&self) -> Option<Revision> {
         self.pending
             .as_ref()
             .map(|pending| pending.request.revision)
     }
 
+    #[must_use]
     pub fn pending_depth(&self) -> usize {
         usize::from(self.pending.is_some())
     }
 
-    pub fn stats(&self) -> SchedulerStats {
+    #[must_use]
+    pub const fn stats(&self) -> SchedulerStats {
         self.stats
     }
 }

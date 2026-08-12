@@ -64,7 +64,8 @@ pub struct CommandPalette {
 
 impl CommandPalette {
     /// Whether the palette is currently visible.
-    pub fn is_open(&self) -> bool {
+    #[must_use]
+    pub const fn is_open(&self) -> bool {
         self.open
     }
 
@@ -85,21 +86,25 @@ impl CommandPalette {
     }
 
     /// The current query string.
+    #[must_use]
     pub fn query(&self) -> &str {
         &self.query
     }
 
     /// The ranked candidate rows for the current query.
+    #[must_use]
     pub fn candidates(&self) -> &[PaletteCandidate] {
         &self.candidates
     }
 
     /// The index of the selected row, or `None` when there are no candidates.
+    #[must_use]
     pub fn selected_index(&self) -> Option<usize> {
         (!self.candidates.is_empty()).then_some(self.selected)
     }
 
     /// The selected candidate, or `None` when empty.
+    #[must_use]
     pub fn selected_candidate(&self) -> Option<&PaletteCandidate> {
         self.candidates.get(self.selected)
     }
@@ -189,6 +194,7 @@ fn word_prefix_match(title: &str, q: &str) -> bool {
 /// macOS-style glyphs ("⇧⌘P"). The platform shell is the canonical resolver.
 impl Shortcut {
     /// Returns a display string like `"⇧⌘P"`, or `None` when there is no key.
+    #[must_use]
     pub fn display(&self) -> Option<String> {
         if self.key.is_empty() {
             return None;

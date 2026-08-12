@@ -17,6 +17,7 @@
 //! The buffer stores only diagnostic metadata the app itself produces. It never
 //! reads files, never interprets URLs, and never constructs HTML.
 
+use std::fmt::Write;
 /// Maximum entries retained in the ring buffer.
 pub const DIAGNOSTICS_CAPACITY: usize = 256;
 /// Maximum bytes of a single message before it is truncated.
@@ -32,7 +33,7 @@ pub enum DiagnosticSeverity {
 }
 
 impl DiagnosticSeverity {
-    fn as_str(self) -> &'static str {
+    const fn as_str(self) -> &'static str {
         match self {
             Self::Info => "INFO",
             Self::Warning => "WARN",
@@ -53,7 +54,7 @@ pub enum DiagnosticCategory {
 }
 
 impl DiagnosticCategory {
-    fn as_str(self) -> &'static str {
+    const fn as_str(self) -> &'static str {
         match self {
             Self::Render => "render",
             Self::Autosave => "autosave",
@@ -89,6 +90,7 @@ impl Default for DiagnosticsBuffer {
 impl DiagnosticsBuffer {
     /// Creates an empty buffer bounded by `capacity` (clamped to
     /// `DIAGNOSTICS_CAPACITY` so a hostile caller can't balloon memory).
+    #[must_use]
     pub fn new(capacity: usize) -> Self {
         Self {
             entries: Vec::with_capacity(capacity.min(DIAGNOSTICS_CAPACITY)),
@@ -123,16 +125,19 @@ impl DiagnosticsBuffer {
     }
 
     /// Number of entries currently held.
-    pub fn len(&self) -> usize {
+    #[must_use]
+    pub const fn len(&self) -> usize {
         self.entries.len()
     }
 
     /// Whether the buffer is empty.
-    pub fn is_empty(&self) -> bool {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
     /// The entries in insertion order (oldest first).
+    #[must_use]
     pub fn entries(&self) -> &[DiagnosticEntry] {
         &self.entries
     }
@@ -145,16 +150,18 @@ impl DiagnosticsBuffer {
     /// Produces a redacted, privacy-safe text dump for "Copy Diagnostics".
     ///
     /// Absolute paths are reduced to basenames; no document text is included.
+    #[must_use]
     pub fn copy_diagnostics(&self) -> String {
         let mut out = String::from("# Rutile diagnostics (redacted)\n\n");
         for e in &self.entries {
-            out.push_str(&format!(
-                "[{}] {} {}: {}\n",
+            let _ = writeln!(
+                out,
+                "[{}] {} {}: {}",
                 e.timestamp_ms,
                 e.severity.as_str(),
                 e.category.as_str(),
                 redact_paths(&e.message),
-            ));
+            );
         }
         out
     }
@@ -175,41 +182,33 @@ fn truncate_in_place(s: &mut String, max_bytes: usize) {
 
 /// Replaces absolute path-like substrings (`/foo/bar/baz`) with their basename.
 fn redact_paths(message: &str) -> String {
-    // Match runs of /segment that look like paths (at least one slash + a leaf).
+    // Tokenize on whitespace; reduce any `/`-containing token to its basename
+    // so absolute paths never leak into a diagnostics dump.
     let mut out = String::with_capacity(message.len());
-    let bytes = message.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'/' {
-            // Scan forward to the end of a /-separated run of non-space chars.
-            let start = i;
-            let mut j = i + 1;
-            while j < bytes.len() && !bytes[j].is_ascii_whitespace() {
-                j += 1;
-            }
-            let segment = &message[start..j];
-            // Keep only the basename (last path component).
-            if let Some(pos) = segment.rfind('/') {
-                out.push_str(&segment[pos + 1..]);
-            } else {
-                out.push_str(segment);
-            }
-            i = j;
+    let mut token = String::new();
+    for ch in message.chars() {
+        if ch.is_whitespace() {
+            flush_token(&mut out, &mut token);
+            out.push(ch);
         } else {
-            // Copy through the next non-space run verbatim.
-            let start = i;
-            while i < bytes.len() && bytes[i] != b'/' {
-                // Stop at whitespace so the next /-run is detected.
-                if bytes[i].is_ascii_whitespace() {
-                    i += 1;
-                    break;
-                }
-                i += 1;
-            }
-            out.push_str(&message[start..i]);
+            token.push(ch);
         }
     }
+    flush_token(&mut out, &mut token);
     out
+}
+
+/// Flushes a buffered token, reducing any `/`-containing path to its basename.
+fn flush_token(out: &mut String, token: &mut String) {
+    if token.is_empty() {
+        return;
+    }
+    if let Some(pos) = token.rfind('/') {
+        out.push_str(&token[pos + 1..]);
+    } else {
+        out.push_str(token);
+    }
+    token.clear();
 }
 
 #[cfg(test)]

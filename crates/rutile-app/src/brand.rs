@@ -3,6 +3,7 @@ pub const ENDORSEMENT: &str = "A local-first writing studio by Kyanite.";
 pub const STARTER_DOCUMENT: &str = "# Rutile\n\nStart writing…\n";
 pub const SOURCE_EDITOR_LABEL: &str = "Rutile source editor";
 
+#[must_use]
 pub fn status_title(status: &str) -> String {
     format!("{PRODUCT_NAME} — {status}")
 }

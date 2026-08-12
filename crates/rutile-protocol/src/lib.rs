@@ -1,6 +1,21 @@
 //! Versioned native/webview, GUI-control, and metric protocol contracts.
 
+// S+-tier lint policy: enforce pedantic + nursery, allow the opinionated set.
+#![warn(clippy::pedantic, clippy::nursery)]
+#![allow(
+    clippy::must_use_candidate,
+    clippy::missing_const_for_fn,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::too_many_lines,
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+
 use std::collections::BTreeMap;
+use std::fmt::Write;
 use std::time::Duration;
 
 use rutile_types::{InteractionId, Revision, SafeLinkTarget};
@@ -21,24 +36,27 @@ pub struct RenderUrl {
 }
 
 impl RenderUrl {
-    pub fn new(revision: Revision, nonce: [u8; 16]) -> Self {
+    #[must_use]
+    pub const fn new(revision: Revision, nonce: [u8; 16]) -> Self {
         Self { revision, nonce }
     }
 
-    pub fn revision(&self) -> Revision {
+    #[must_use]
+    pub const fn revision(&self) -> Revision {
         self.revision
     }
 
-    pub fn nonce(&self) -> &[u8; 16] {
+    #[must_use]
+    pub const fn nonce(&self) -> &[u8; 16] {
         &self.nonce
     }
 
+    #[must_use]
     pub fn document_path(&self) -> String {
-        let nonce: String = self
-            .nonce
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
+        let mut nonce = String::with_capacity(self.nonce.len() * 2);
+        for byte in &self.nonce {
+            let _ = write!(nonce, "{byte:02x}");
+        }
         format!("/v1/document/{}/{nonce}", self.revision)
     }
 }
@@ -277,7 +295,8 @@ pub enum GuiCommandV1 {
 }
 
 impl GuiCommandV1 {
-    pub fn request_id(&self) -> u64 {
+    #[must_use]
+    pub const fn request_id(&self) -> u64 {
         match self {
             Self::OpenFixture { request_id, .. }
             | Self::Edit { request_id, .. }
@@ -435,14 +454,14 @@ pub fn decode_gui_event(bytes: &[u8]) -> Result<GuiEventV1, ProtocolError> {
 impl From<&GuiEventV1> for GuiEventWireV1 {
     fn from(event: &GuiEventV1) -> Self {
         match event {
-            GuiEventV1::ControlReady { request_id } => GuiEventWireV1::ControlReady {
+            GuiEventV1::ControlReady { request_id } => Self::ControlReady {
                 v: 1,
                 request_id: *request_id,
             },
             GuiEventV1::EditAccepted {
                 request_id,
                 revision,
-            } => GuiEventWireV1::EditAccepted {
+            } => Self::EditAccepted {
                 v: 1,
                 request_id: *request_id,
                 revision: *revision,
@@ -451,7 +470,7 @@ impl From<&GuiEventV1> for GuiEventWireV1 {
                 request_id,
                 revision,
                 frame_seq,
-            } => GuiEventWireV1::SourcePainted {
+            } => Self::SourcePainted {
                 v: 1,
                 request_id: *request_id,
                 revision: *revision,
@@ -461,7 +480,7 @@ impl From<&GuiEventV1> for GuiEventWireV1 {
                 request_id,
                 revision,
                 frame_seq,
-            } => GuiEventWireV1::PreviewPainted {
+            } => Self::PreviewPainted {
                 v: 1,
                 request_id: *request_id,
                 revision: *revision,
@@ -470,7 +489,7 @@ impl From<&GuiEventV1> for GuiEventWireV1 {
             GuiEventV1::Interactive {
                 request_id,
                 revision,
-            } => GuiEventWireV1::Interactive {
+            } => Self::Interactive {
                 v: 1,
                 request_id: *request_id,
                 revision: *revision,
@@ -478,7 +497,7 @@ impl From<&GuiEventV1> for GuiEventWireV1 {
             GuiEventV1::FocusChanged {
                 request_id,
                 surface,
-            } => GuiEventWireV1::FocusChanged {
+            } => Self::FocusChanged {
                 v: 1,
                 request_id: *request_id,
                 surface: *surface,
@@ -487,13 +506,13 @@ impl From<&GuiEventV1> for GuiEventWireV1 {
                 request_id,
                 width,
                 height,
-            } => GuiEventWireV1::BoundsChanged {
+            } => Self::BoundsChanged {
                 v: 1,
                 request_id: *request_id,
                 width: *width,
                 height: *height,
             },
-            GuiEventV1::Closed { request_id } => GuiEventWireV1::Closed {
+            GuiEventV1::Closed { request_id } => Self::Closed {
                 v: 1,
                 request_id: *request_id,
             },
@@ -501,7 +520,7 @@ impl From<&GuiEventV1> for GuiEventWireV1 {
                 request_id,
                 code,
                 message,
-            } => GuiEventWireV1::Error {
+            } => Self::Error {
                 v: 1,
                 request_id: *request_id,
                 code: *code,
@@ -512,7 +531,7 @@ impl From<&GuiEventV1> for GuiEventWireV1 {
 }
 
 impl GuiEventWireV1 {
-    fn version(&self) -> u8 {
+    const fn version(&self) -> u8 {
         match self {
             Self::ControlReady { v, .. }
             | Self::EditAccepted { v, .. }
@@ -674,7 +693,7 @@ enum GuiCommandWireV1 {
 }
 
 impl GuiCommandWireV1 {
-    fn version(&self) -> u8 {
+    const fn version(&self) -> u8 {
         match self {
             Self::OpenFixture { v, .. }
             | Self::Edit { v, .. }
@@ -1014,7 +1033,7 @@ fn is_lower_hex(value: &str, length: usize) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-fn validate_header(v: u8, revision: Revision, loaded: Revision) -> Result<(), ProtocolError> {
+const fn validate_header(v: u8, revision: Revision, loaded: Revision) -> Result<(), ProtocolError> {
     if v != 1 {
         return Err(ProtocolError::UnsupportedVersion);
     }

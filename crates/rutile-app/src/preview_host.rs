@@ -43,6 +43,7 @@ pub struct SchemeResponse {
 }
 
 impl SchemeResponse {
+    #[must_use]
     pub fn header(&self, name: &str) -> Option<&str> {
         self.headers
             .iter()
@@ -86,6 +87,7 @@ pub struct ScrollDelivery {
 }
 
 impl ScrollDelivery {
+    #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
@@ -112,6 +114,7 @@ pub struct PreviewHost {
 }
 
 impl PreviewHost {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -143,6 +146,7 @@ impl PreviewHost {
         Ok(command)
     }
 
+    #[must_use]
     pub fn serve(&self, request: &SchemeRequest) -> SchemeResponse {
         if request.method != "GET" || !is_exact_preview_url(&request.url) {
             return SchemeResponse::not_found();
@@ -182,10 +186,12 @@ impl PreviewHost {
         true
     }
 
+    #[must_use]
     pub const fn allow_new_window(&self, _url: &str) -> bool {
         false
     }
 
+    #[must_use]
     pub const fn allow_download(&self, _url: &str) -> bool {
         false
     }

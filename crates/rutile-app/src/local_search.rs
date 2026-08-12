@@ -54,7 +54,7 @@ pub struct Backlink {
 /// matching. Results are ranked by active-document-first, then frequency,
 /// then recency.
 pub struct SearchIndex {
-    /// Document texts keyed by DocumentId, plus their revision.
+    /// Document texts keyed by `DocumentId`, plus their revision.
     documents: BTreeMap<DocumentId, IndexedDoc>,
     /// The active document (boosted in ranking).
     active_id: DocumentId,
@@ -81,6 +81,7 @@ impl Default for SearchIndex {
 
 impl SearchIndex {
     /// Creates an empty index.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -112,6 +113,7 @@ impl SearchIndex {
     /// Searches all indexed documents for `query` (case-insensitive substring).
     /// Returns results ranked: active document first, then by tab order, then
     /// by frequency within each document.
+    #[must_use]
     pub fn search(&self, query: &str) -> Vec<SearchResult> {
         if query.is_empty() {
             return Vec::new();
@@ -165,11 +167,13 @@ impl SearchIndex {
     }
 
     /// Number of indexed documents.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.documents.len()
     }
 
     /// Whether no documents are indexed.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.documents.is_empty()
     }
@@ -178,7 +182,7 @@ impl SearchIndex {
 /// Backlink graph tracking inter-document links (roadmap 12).
 ///
 /// Parses markdown links `[text](path)` and wiki-links `[[path]]` from each
-/// document's text, then answers "which documents link to target_path?"
+/// document's text, then answers "which documents link to `target_path`?"
 #[derive(Default)]
 pub struct BacklinkGraph {
     /// All known backlinks, keyed by source document.
@@ -187,6 +191,7 @@ pub struct BacklinkGraph {
 
 impl BacklinkGraph {
     /// Creates an empty graph.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -205,6 +210,7 @@ impl BacklinkGraph {
     }
 
     /// Returns all backlinks pointing TO `target_path` from any document.
+    #[must_use]
     pub fn backlinks_to(&self, target_path: &str) -> Vec<&Backlink> {
         self.backlinks
             .values()
@@ -214,16 +220,17 @@ impl BacklinkGraph {
     }
 
     /// Returns all outgoing links FROM `source` document.
+    #[must_use]
     pub fn links_from(&self, source: DocumentId) -> &[Backlink] {
         self.backlinks
             .get(&source)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[])
+            .map_or(&[], std::vec::Vec::as_slice)
     }
 
     /// Total number of links in the graph.
+    #[must_use]
     pub fn link_count(&self) -> usize {
-        self.backlinks.values().map(|v| v.len()).sum()
+        self.backlinks.values().map(std::vec::Vec::len).sum()
     }
 }
 
@@ -254,10 +261,7 @@ fn nearest_heading(text: &str, heading_starts: &[usize], offset: usize) -> Optio
         .rev()
         .find(|&&hs| hs <= offset)
         .copied()?;
-    let line_end = text[start..]
-        .find('\n')
-        .map(|e| start + e)
-        .unwrap_or(text.len());
+    let line_end = text[start..].find('\n').map_or(text.len(), |e| start + e);
     let heading = &text[start..line_end];
     // Strip leading `#`s and whitespace
     Some(heading.trim_start_matches('#').trim().to_owned())
@@ -276,6 +280,12 @@ fn make_snippet(text: &str, pos: usize, len: usize) -> String {
 }
 
 /// Parses markdown links `[text](path)` from document text.
+/// Case-insensitive suffix check (no allocation).
+fn ends_with_ci(haystack: &str, needle: &str) -> bool {
+    haystack.len() >= needle.len()
+        && haystack[haystack.len() - needle.len()..].eq_ignore_ascii_case(needle)
+}
+
 fn parse_markdown_links(source: DocumentId, text: &str) -> Vec<Backlink> {
     let mut links = Vec::new();
     let bytes = text.as_bytes();
@@ -292,7 +302,7 @@ fn parse_markdown_links(source: DocumentId, text: &str) -> Vec<Backlink> {
                     if let Some(paren_end) = text[after + 1..].find(')') {
                         let path = &text[after + 1..after + 1 + paren_end];
                         // Only accept .md paths (basic filter)
-                        if path.ends_with(".md") || path.ends_with(".markdown") {
+                        if ends_with_ci(path, ".md") || ends_with_ci(path, ".markdown") {
                             links.push(Backlink {
                                 source,
                                 target_path: path.to_owned(),
