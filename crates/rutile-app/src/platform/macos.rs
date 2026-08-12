@@ -1609,7 +1609,7 @@ pub use editor::{IcedAdapterStats, IcedEditorAdapter};
 use native::run_native;
 pub use open_events::{
     MacMenuCommand, MacUserEvent, bind_open_proxy, forward_open_urls,
-    install_file_menu_with_actions, install_window_menu, take_pending_switch,
+    install_file_menu_with_actions, install_view_menu, install_window_menu, take_pending_switch,
     update_recent_documents, update_tabs,
 };
 

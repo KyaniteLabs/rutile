@@ -1357,8 +1357,8 @@ fn palette_open_lists_all_default_commands() {
     assert!(!state.palette().is_open());
     state.reduce(AppMessage::OpenCommandPalette);
     assert!(state.palette().is_open());
-    // The default catalog ships 7 dispatchable commands.
-    assert_eq!(state.palette().candidates().len(), 7);
+    // The default catalog ships 10 dispatchable commands.
+    assert_eq!(state.palette().candidates().len(), 10);
 }
 
 #[test]
@@ -1420,4 +1420,68 @@ fn palette_close_resets_query_and_candidates() {
     assert!(!state.palette().is_open());
     assert!(state.palette().query().is_empty());
     assert!(state.palette().candidates().is_empty());
+}
+// --- Roadmap 04: reader-first view mode -----------------------------------
+
+#[test]
+fn default_mode_is_split() {
+    let state = AppState::new();
+    assert_eq!(state.mode(), rutile_app::app::DocumentMode::Split);
+}
+
+#[test]
+fn set_document_mode_updates_state() {
+    let mut state = AppState::new();
+    state.reduce(AppMessage::SetDocumentMode {
+        mode: rutile_app::app::DocumentMode::View,
+    });
+    assert_eq!(state.mode(), rutile_app::app::DocumentMode::View);
+
+    state.reduce(AppMessage::SetDocumentMode {
+        mode: rutile_app::app::DocumentMode::Edit,
+    });
+    assert_eq!(state.mode(), rutile_app::app::DocumentMode::Edit);
+
+    // Back to split.
+    state.reduce(AppMessage::SetDocumentMode {
+        mode: rutile_app::app::DocumentMode::Split,
+    });
+    assert_eq!(state.mode(), rutile_app::app::DocumentMode::Split);
+}
+
+#[test]
+fn view_mode_change_emits_no_effects() {
+    let mut state = AppState::new();
+    let effects = state.reduce(AppMessage::SetDocumentMode {
+        mode: rutile_app::app::DocumentMode::View,
+    });
+    assert!(
+        effects.is_empty(),
+        "mode change must not trigger render/autosave"
+    );
+}
+
+#[test]
+fn view_mode_survives_tab_switch() {
+    let mut state = AppState::new();
+    state.reduce(AppMessage::SetDocumentMode {
+        mode: rutile_app::app::DocumentMode::View,
+    });
+    state.reduce(AppMessage::NewTab);
+    // Mode is shell-level (not per-tab): it persists across tab switches.
+    assert_eq!(state.mode(), rutile_app::app::DocumentMode::View);
+}
+
+#[test]
+fn palette_can_switch_to_reading_view() {
+    let mut state = AppState::new();
+    state.reduce(AppMessage::OpenCommandPalette);
+    state.reduce(AppMessage::PaletteQueryChanged {
+        query: "reading".into(),
+    });
+    assert_eq!(state.palette().candidates().len(), 1);
+    assert_eq!(state.palette().candidates()[0].id.0, "view.read-mode");
+    state.reduce(AppMessage::PaletteSubmit);
+    assert_eq!(state.mode(), rutile_app::app::DocumentMode::View);
+    assert!(!state.palette().is_open());
 }

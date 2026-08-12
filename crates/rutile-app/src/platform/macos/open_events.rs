@@ -48,6 +48,9 @@ pub fn take_pending_switch() -> Option<usize> {
 }
 
 const TABS_SUBMENU_TITLE: &str = "Tabs";
+/// NSEventModifierFlagControl (1<<18) | NSEventModifierFlagCommand (1<<20).
+/// Raw values so we don't need to enable the `NSEvent` feature in objc2-app-kit.
+const MASK_CONTROL_COMMAND: isize = (1 << 18) | (1 << 20);
 
 /// User events delivered to [`ApplicationHandler::user_event`].
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -72,6 +75,12 @@ pub enum MacMenuCommand {
     SwitchTab,
     /// Open the command palette (⇧⌘P).
     OpenCommandPalette,
+    /// Set view mode: editor only.
+    ViewModeEdit,
+    /// Set view mode: split (editor + preview).
+    ViewModeSplit,
+    /// Set view mode: reading (preview only).
+    ViewModeRead,
 }
 
 /// Binds the event-loop proxy used to wake the adapter with open / menu deliveries.
@@ -164,6 +173,18 @@ define_class!(
         #[unsafe(method(menuCommandPalette:))]
         fn menu_command_palette(&self, _sender: Option<&AnyObject>) {
             let _ = forward_menu_command(MacMenuCommand::OpenCommandPalette);
+        }
+        #[unsafe(method(menuViewEdit:))]
+        fn menu_view_edit(&self, _sender: Option<&AnyObject>) {
+            let _ = forward_menu_command(MacMenuCommand::ViewModeEdit);
+        }
+        #[unsafe(method(menuViewSplit:))]
+        fn menu_view_split(&self, _sender: Option<&AnyObject>) {
+            let _ = forward_menu_command(MacMenuCommand::ViewModeSplit);
+        }
+        #[unsafe(method(menuViewRead:))]
+        fn menu_view_read(&self, _sender: Option<&AnyObject>) {
+            let _ = forward_menu_command(MacMenuCommand::ViewModeRead);
         }
     }
 );
@@ -377,6 +398,43 @@ pub fn install_window_menu() -> Result<(), String> {
     window_item.setTitle(&NSString::from_str("Window"));
     window_item.setSubmenu(Some(&window_menu));
     main_menu.addItem(&window_item);
+    Ok(())
+}
+/// Installs a View menu with Edit / Split / Reading mode items (roadmap 04).
+/// Must be called once after [`install_window_menu`] on the main thread.
+/// Checkmark-on-active sync is deferred (the items are functional without it).
+pub fn install_view_menu() -> Result<(), String> {
+    let mtm =
+        MainThreadMarker::new().ok_or("view menu must be installed on the AppKit main thread")?;
+    let app = NSApplication::sharedApplication(mtm);
+    let main_menu = app
+        .mainMenu()
+        .ok_or("no main menu — install file menu first")?;
+
+    let target = menu_target();
+    let view_menu = NSMenu::new(mtm);
+    view_menu.setTitle(&NSString::from_str("View"));
+
+    for (title, key, action) in [
+        ("Editor Only", "1", sel!(menuViewEdit:)),
+        ("Split", "2", sel!(menuViewSplit:)),
+        ("Reading", "3", sel!(menuViewRead:)),
+    ] {
+        let item = NSMenuItem::new(mtm);
+        item.setTitle(&NSString::from_str(title));
+        item.setKeyEquivalent(&NSString::from_str(key));
+        unsafe {
+            let _: () = msg_send![&item, setKeyEquivalentModifierMask: MASK_CONTROL_COMMAND];
+            item.setTarget(Some(&***target));
+            item.setAction(Some(action));
+        }
+        view_menu.addItem(&item);
+    }
+
+    let view_item = NSMenuItem::new(mtm);
+    view_item.setTitle(&NSString::from_str("View"));
+    view_item.setSubmenu(Some(&view_menu));
+    main_menu.addItem(&view_item);
     Ok(())
 }
 
