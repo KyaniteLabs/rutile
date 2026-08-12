@@ -295,6 +295,7 @@ pub enum CommandCategory {
     Find,
     View,
     Window,
+    Design,
     Help,
 }
 
@@ -502,6 +503,24 @@ const fn cmd_toggle_focus(_state: &AppState) -> Option<AppMessage> {
     Some(AppMessage::ToggleFocusMode)
 }
 
+// --- C8: tasteroll (chance-styled notes) palette commands ---------------
+
+/// Builds "Roll Design" — always available (uses stored content context).
+#[allow(clippy::unnecessary_wraps)]
+const fn cmd_taste_roll(_state: &AppState) -> Option<AppMessage> {
+    Some(AppMessage::TasteRoll)
+}
+
+/// Builds "Re-roll Design" — available only when a roll is active.
+fn cmd_taste_reroll(state: &AppState) -> Option<AppMessage> {
+    state.taste().is_active().then_some(AppMessage::TasteReroll)
+}
+
+/// Builds "Reset Design" — available only when a roll is active.
+fn cmd_taste_reset(state: &AppState) -> Option<AppMessage> {
+    state.taste().is_active().then_some(AppMessage::TasteReset)
+}
+
 /// The compile-time default command set (see `docs/plan/command-palette-design.md`).
 pub const DEFAULT_CATALOG: &[CommandDescriptor] = &[
     CommandDescriptor {
@@ -580,6 +599,27 @@ pub const DEFAULT_CATALOG: &[CommandDescriptor] = &[
         category: CommandCategory::View,
         shortcut: None,
         message: cmd_toggle_focus,
+    },
+    CommandDescriptor {
+        id: CommandId("note.roll"),
+        title: "Roll Design",
+        category: CommandCategory::Design,
+        shortcut: None,
+        message: cmd_taste_roll,
+    },
+    CommandDescriptor {
+        id: CommandId("note.reroll"),
+        title: "Re-roll Design",
+        category: CommandCategory::Design,
+        shortcut: None,
+        message: cmd_taste_reroll,
+    },
+    CommandDescriptor {
+        id: CommandId("note.reset"),
+        title: "Reset Design",
+        category: CommandCategory::Design,
+        shortcut: None,
+        message: cmd_taste_reset,
     },
 ];
 

@@ -1357,8 +1357,8 @@ fn palette_open_lists_all_default_commands() {
     assert!(!state.palette().is_open());
     state.reduce(AppMessage::OpenCommandPalette);
     assert!(state.palette().is_open());
-    // The default catalog ships 11 dispatchable commands.
-    assert_eq!(state.palette().candidates().len(), 11);
+    // The default catalog ships 14 dispatchable commands.
+    assert_eq!(state.palette().candidates().len(), 14);
 }
 
 #[test]
@@ -1550,4 +1550,169 @@ fn palette_can_toggle_focus() {
     state.reduce(AppMessage::PaletteSubmit);
     assert!(state.focused());
     assert!(!state.palette().is_open());
+}
+
+// --- C8: tasteroll integration tests ---------------------------------------
+
+#[test]
+fn taste_roll_activates_chance_styling() {
+    let mut state = AppState::new();
+    state.set_content_context("# My Spec\n\n## Overview\n\n## Details\n\n## Summary\n");
+    assert!(!state.taste().is_active());
+    state.reduce(AppMessage::TasteRoll);
+    assert!(state.taste().is_active());
+    assert!(state.taste().css().is_some());
+}
+
+#[test]
+fn taste_roll_is_deterministic_for_same_content() {
+    let mut a = AppState::new();
+    let mut b = AppState::new();
+    let text = "# Hello\n\nSome content here.\n";
+    a.set_content_context(text);
+    b.set_content_context(text);
+    a.reduce(AppMessage::TasteRoll);
+    b.reduce(AppMessage::TasteRoll);
+    assert_eq!(a.taste().css(), b.taste().css());
+}
+
+#[test]
+fn taste_reroll_changes_css() {
+    let mut state = AppState::new();
+    state.set_content_context("Just a note.");
+    state.reduce(AppMessage::TasteRoll);
+    let first = state.taste().css().unwrap();
+    state.reduce(AppMessage::TasteReroll);
+    let second = state.taste().css().unwrap();
+    assert_ne!(first, second, "reroll must produce a different design");
+}
+
+#[test]
+fn taste_reroll_on_inactive_is_noop() {
+    let mut state = AppState::new();
+    state.reduce(AppMessage::TasteReroll);
+    assert!(!state.taste().is_active());
+}
+
+#[test]
+fn taste_reset_clears_state() {
+    let mut state = AppState::new();
+    state.set_content_context("Some text");
+    state.reduce(AppMessage::TasteRoll);
+    assert!(state.taste().is_active());
+    state.reduce(AppMessage::TasteReset);
+    assert!(!state.taste().is_active());
+    assert_eq!(state.taste().css(), None);
+}
+
+#[test]
+fn taste_produces_no_side_effects() {
+    let mut state = AppState::new();
+    state.set_content_context("Test");
+    let effects = state.reduce(AppMessage::TasteRoll);
+    assert!(
+        effects.is_empty(),
+        "taste roll must not trigger render/autosave"
+    );
+}
+
+#[test]
+fn taste_lock_then_reroll_preserves_locked_dimension() {
+    let mut state = AppState::new();
+    state.set_content_context("Test note");
+    state.reduce(AppMessage::TasteRoll);
+    state.taste_mut().lock("measure").unwrap();
+    assert!(state.taste().is_locked("measure"));
+    let locked_css = state.taste().css().unwrap();
+
+    state.reduce(AppMessage::TasteReroll);
+    // measure stays locked, other dims changed.
+    assert!(state.taste().is_locked("measure"));
+    assert_ne!(state.taste().css().unwrap(), locked_css);
+}
+
+#[test]
+fn palette_lists_tasteroll_commands() {
+    let state = AppState::new();
+    let registry = state.registry();
+    let ids: Vec<&str> = registry.iter().map(|d| d.id.0).collect();
+    assert!(ids.contains(&"note.roll"));
+    assert!(ids.contains(&"note.reroll"));
+    assert!(ids.contains(&"note.reset"));
+}
+
+#[test]
+fn palette_reroll_greyed_out_when_inactive() {
+    let state = AppState::new();
+    let roll_desc = state
+        .registry()
+        .lookup(&rutile_app::actions::CommandId("note.roll"))
+        .copied()
+        .unwrap();
+    assert!((roll_desc.message)(&state).is_some());
+
+    let reroll_desc = state
+        .registry()
+        .lookup(&rutile_app::actions::CommandId("note.reroll"))
+        .copied()
+        .unwrap();
+    assert!((reroll_desc.message)(&state).is_none());
+}
+
+#[test]
+fn palette_reroll_available_after_roll() {
+    let mut state = AppState::new();
+    state.set_content_context("Test");
+    state.reduce(AppMessage::TasteRoll);
+
+    let reroll_desc = state
+        .registry()
+        .lookup(&rutile_app::actions::CommandId("note.reroll"))
+        .copied()
+        .unwrap();
+    assert!((reroll_desc.message)(&state).is_some());
+}
+
+#[test]
+fn palette_can_trigger_roll_via_submit() {
+    let mut state = AppState::new();
+    state.set_content_context("# Spec\n\n## A\n\n## B\n\n## C\n");
+    state.reduce(AppMessage::OpenCommandPalette);
+    state.reduce(AppMessage::PaletteQueryChanged {
+        query: "roll design".into(),
+    });
+    assert!(!state.palette().candidates().is_empty());
+    let roll_candidate = state
+        .palette()
+        .candidates()
+        .iter()
+        .find(|c| c.id.0 == "note.roll");
+    assert!(roll_candidate.is_some(), "roll design should be in palette");
+
+    state.reduce(AppMessage::PaletteSubmit);
+    assert!(state.taste().is_active());
+    assert!(!state.palette().is_open());
+}
+
+#[test]
+fn taste_css_is_safe_no_injection_vectors() {
+    let mut state = AppState::new();
+    state.set_content_context("Test");
+    state.reduce(AppMessage::TasteRoll);
+    let css = state.taste().css().unwrap();
+    assert!(css.starts_with(":root{"));
+    assert!(!css.contains("url("));
+    assert!(!css.contains("@import"));
+    assert!(!css.contains("</"));
+    assert!(!css.contains("javascript:"));
+}
+
+#[test]
+fn taste_focus_mode_compose() {
+    let mut state = AppState::new();
+    state.set_content_context("Test");
+    state.reduce(AppMessage::ToggleFocusMode);
+    state.reduce(AppMessage::TasteRoll);
+    assert!(state.focused());
+    assert!(state.taste().is_active());
 }

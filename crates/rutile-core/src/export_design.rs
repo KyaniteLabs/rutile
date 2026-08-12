@@ -67,12 +67,13 @@ impl DesignRail {
 
 /// Coarse note content type. Biases the candidate's starting point; every value
 /// still stays inside [`DesignRail::DEFAULT`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ContentType {
     Journal,
     Spec,
     Letter,
     Recipe,
+    #[default]
     Note,
 }
 
