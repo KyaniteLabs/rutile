@@ -1538,6 +1538,10 @@ impl ProductSession {
     }
 
     fn queue_current(&mut self) {
+        // Sync the tasteroll content context so TasteRoll uses the current
+        // document's seed/type. This is the single chokepoint for all edits.
+        let text = self.core.document().snapshot().to_string();
+        self.core.app_mut().set_content_context(&text);
         self.scheduler.submit(
             RenderRequest::new(
                 self.core.document().revision(),
