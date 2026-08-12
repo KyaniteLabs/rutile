@@ -417,6 +417,125 @@ fn ids_unique(descriptors: &[CommandDescriptor]) -> bool {
     let mut seen = std::collections::HashSet::new();
     descriptors.iter().all(|d| seen.insert(d.id.0))
 }
+// ---------------------------------------------------------------------------
+// Default command catalog (roadmap 06). These map AppMessage-dispatchable
+// actions to palette/menu descriptors. Platform shells may register more.
+// -----------------------------------------------------------------------
+
+/// Builds the [`AppMessage`] for "New Document", always available.
+fn cmd_new(_state: &AppState) -> Option<AppMessage> {
+    Some(AppMessage::NewDocument)
+}
+
+/// Builds "Save", available only when the active document is dirty.
+fn cmd_save(state: &AppState) -> Option<AppMessage> {
+    state.dirty().then_some(AppMessage::SaveRequested)
+}
+
+/// Builds "Clear Recent Documents", available when the list is non-empty.
+fn cmd_clear_recents(state: &AppState) -> Option<AppMessage> {
+    (!state.recents().is_empty()).then_some(AppMessage::ClearRecents)
+}
+
+/// Builds "New Tab", always available.
+fn cmd_new_tab(_state: &AppState) -> Option<AppMessage> {
+    Some(AppMessage::NewTab)
+}
+
+/// Builds "Close Tab" for the active tab, available with more than one tab.
+fn cmd_close_tab(state: &AppState) -> Option<AppMessage> {
+    let docs = state.documents();
+    (docs.len() > 1).then_some(AppMessage::CloseTab {
+        id: docs.active_id(),
+    })
+}
+
+/// Builds "Next/Previous Tab" by rotating the tab strip by `offset` (wrapping).
+/// Available when more than one tab is open.
+fn cmd_rotate_tab(state: &AppState, offset: isize) -> Option<AppMessage> {
+    let docs = state.documents();
+    let order = docs.tab_order();
+    if order.len() < 2 {
+        return None;
+    }
+    let pos = order.iter().position(|&id| id == docs.active_id())?;
+    let next = (pos as isize + offset).rem_euclid(order.len() as isize) as usize;
+    Some(AppMessage::SwitchTab { id: order[next] })
+}
+
+fn cmd_next_tab(state: &AppState) -> Option<AppMessage> {
+    cmd_rotate_tab(state, 1)
+}
+
+fn cmd_prev_tab(state: &AppState) -> Option<AppMessage> {
+    cmd_rotate_tab(state, -1)
+}
+
+/// The compile-time default command set (see `docs/plan/command-palette-design.md`).
+pub const DEFAULT_CATALOG: &[CommandDescriptor] = &[
+    CommandDescriptor {
+        id: CommandId("file.new"),
+        title: "New Document",
+        category: CommandCategory::File,
+        shortcut: Some(Shortcut::cmd("n")),
+        message: cmd_new,
+    },
+    CommandDescriptor {
+        id: CommandId("file.save"),
+        title: "Save",
+        category: CommandCategory::File,
+        shortcut: Some(Shortcut::cmd("s")),
+        message: cmd_save,
+    },
+    CommandDescriptor {
+        id: CommandId("file.clear-recents"),
+        title: "Clear Recent Documents",
+        category: CommandCategory::File,
+        shortcut: None,
+        message: cmd_clear_recents,
+    },
+    CommandDescriptor {
+        id: CommandId("view.next-tab"),
+        title: "Show Next Tab",
+        category: CommandCategory::View,
+        shortcut: None,
+        message: cmd_next_tab,
+    },
+    CommandDescriptor {
+        id: CommandId("view.prev-tab"),
+        title: "Show Previous Tab",
+        category: CommandCategory::View,
+        shortcut: None,
+        message: cmd_prev_tab,
+    },
+    CommandDescriptor {
+        id: CommandId("window.new-tab"),
+        title: "New Tab",
+        category: CommandCategory::Window,
+        shortcut: Some(Shortcut::cmd("t")),
+        message: cmd_new_tab,
+    },
+    CommandDescriptor {
+        id: CommandId("window.close-tab"),
+        title: "Close Tab",
+        category: CommandCategory::Window,
+        shortcut: Some(Shortcut::cmd("w")),
+        message: cmd_close_tab,
+    },
+];
+
+impl ActionRegistry {
+    /// Builds the registry from [`DEFAULT_CATALOG`].
+    pub fn standard() -> Self {
+        Self::from_static(DEFAULT_CATALOG)
+    }
+}
+
+impl Default for ActionRegistry {
+    fn default() -> Self {
+        Self::standard()
+    }
+}
 
 #[cfg(test)]
 mod action_registry_tests {

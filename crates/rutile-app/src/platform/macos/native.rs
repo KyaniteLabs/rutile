@@ -378,6 +378,11 @@ impl ProductRunner {
                     }
                 }
             }
+            MacMenuCommand::OpenCommandPalette => {
+                self.session
+                    .core_mut()
+                    .reduce(AppMessage::OpenCommandPalette);
+            }
         }
     }
 

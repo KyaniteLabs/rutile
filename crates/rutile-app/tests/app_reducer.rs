@@ -1349,3 +1349,75 @@ fn close_tab_removes_and_reseeds() {
     // At least one tab must remain
     assert!(!state.documents().is_empty());
 }
+// --- Roadmap 06: command palette reducer integration ----------------------
+
+#[test]
+fn palette_open_lists_all_default_commands() {
+    let mut state = AppState::new();
+    assert!(!state.palette().is_open());
+    state.reduce(AppMessage::OpenCommandPalette);
+    assert!(state.palette().is_open());
+    // The default catalog ships 7 dispatchable commands.
+    assert_eq!(state.palette().candidates().len(), 7);
+}
+
+#[test]
+fn palette_query_filters_and_submit_dispatches_new_tab() {
+    let mut state = AppState::new();
+    state.reduce(AppMessage::OpenCommandPalette);
+    state.reduce(AppMessage::PaletteQueryChanged {
+        query: "new tab".into(),
+    });
+    // Only "New Tab" matches the phrase.
+    assert_eq!(state.palette().candidates().len(), 1);
+    assert_eq!(state.palette().candidates()[0].id.0, "window.new-tab");
+    assert_eq!(state.documents().len(), 1);
+
+    state.reduce(AppMessage::PaletteSubmit);
+    // NewTab dispatched through the reducer → a second tab exists, palette closed.
+    assert_eq!(state.documents().len(), 2);
+    assert!(!state.palette().is_open());
+}
+
+#[test]
+fn palette_submit_unavailable_command_is_a_clean_noop() {
+    let mut state = AppState::new();
+    state.reduce(AppMessage::OpenCommandPalette);
+    // "Save" is listed (discoverable) even though the document is clean.
+    state.reduce(AppMessage::PaletteQueryChanged {
+        query: "save".into(),
+    });
+    assert_eq!(state.palette().candidates().len(), 1);
+    assert_eq!(state.palette().candidates()[0].id.0, "file.save");
+    let tabs_before = state.documents().len();
+
+    state.reduce(AppMessage::PaletteSubmit);
+    // Save is unavailable → no dispatch; palette closes, state untouched.
+    assert_eq!(state.documents().len(), tabs_before);
+    assert!(!state.palette().is_open());
+}
+
+#[test]
+fn palette_selection_navigation_through_reducer() {
+    let mut state = AppState::new();
+    state.reduce(AppMessage::OpenCommandPalette);
+    assert_eq!(state.palette().selected_index(), Some(0));
+    state.reduce(AppMessage::PaletteSelectNext);
+    assert_eq!(state.palette().selected_index(), Some(1));
+    state.reduce(AppMessage::PaletteSelectPrev);
+    assert_eq!(state.palette().selected_index(), Some(0));
+}
+
+#[test]
+fn palette_close_resets_query_and_candidates() {
+    let mut state = AppState::new();
+    state.reduce(AppMessage::OpenCommandPalette);
+    state.reduce(AppMessage::PaletteQueryChanged {
+        query: "new".into(),
+    });
+    assert!(!state.palette().candidates().is_empty());
+    state.reduce(AppMessage::CloseCommandPalette);
+    assert!(!state.palette().is_open());
+    assert!(state.palette().query().is_empty());
+    assert!(state.palette().candidates().is_empty());
+}

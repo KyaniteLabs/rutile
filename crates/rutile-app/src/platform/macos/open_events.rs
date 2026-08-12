@@ -70,6 +70,8 @@ pub enum MacMenuCommand {
     CloseTab,
     /// Switch to the tab at the sender's tag index.
     SwitchTab,
+    /// Open the command palette (⇧⌘P).
+    OpenCommandPalette,
 }
 
 /// Binds the event-loop proxy used to wake the adapter with open / menu deliveries.
@@ -158,6 +160,10 @@ define_class!(
                 }
                 let _ = forward_menu_command(MacMenuCommand::SwitchTab);
             }
+        }
+        #[unsafe(method(menuCommandPalette:))]
+        fn menu_command_palette(&self, _sender: Option<&AnyObject>) {
+            let _ = forward_menu_command(MacMenuCommand::OpenCommandPalette);
         }
     }
 );
@@ -340,6 +346,16 @@ pub fn install_window_menu() -> Result<(), String> {
         close_tab.setAction(Some(sel!(menuCloseTab:)));
     }
     window_menu.addItem(&close_tab);
+
+    // Command Palette… (⇧⌘P — capital key equiv adds Shift per AppKit convention).
+    let palette = NSMenuItem::new(mtm);
+    palette.setTitle(&NSString::from_str("Command Palette…"));
+    palette.setKeyEquivalent(&NSString::from_str("P"));
+    unsafe {
+        palette.setTarget(Some(&***target));
+        palette.setAction(Some(sel!(menuCommandPalette:)));
+    }
+    window_menu.addItem(&palette);
 
     // Separator
     window_menu.addItem(&NSMenuItem::separatorItem(mtm));
