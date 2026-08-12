@@ -17,6 +17,7 @@ use crate::actions::{
     ReplaceApplied, SessionRestore,
 };
 use crate::document_manager::{DocumentManager, DocumentSlot};
+use crate::tasteroll::TasteState;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum PreviewState {
@@ -209,6 +210,13 @@ pub enum AppMessage {
     // --- Roadmap 10: focus mode --------------------------------------------
     /// Toggles distraction-free focus mode (hides shell chrome).
     ToggleFocusMode,
+    // --- C8: tasteroll (chance-styled notes) -------------------------------
+    /// Rolls the design dice using the stored content seed + inferred type.
+    TasteRoll,
+    /// Re-rolls the current design, preserving locked dimensions.
+    TasteReroll,
+    /// Clears the chance-styling roll entirely.
+    TasteReset,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -360,6 +368,10 @@ pub struct AppState {
     mode: DocumentMode,
     // Roadmap 10: distraction-free focus flag (orthogonal to mode).
     focused: bool,
+    // C8: tasteroll chance-styling state.
+    content_seed: u64,
+    content_type: rutile_core::ContentType,
+    taste: TasteState,
 }
 
 #[allow(clippy::missing_fields_in_debug)] // Intentional summary: full DocumentManager dump is too verbose.
@@ -378,6 +390,7 @@ impl std::fmt::Debug for AppState {
             .field("registry_len", &self.registry.len())
             .field("mode", &self.mode)
             .field("focused", &self.focused)
+            .field("taste_active", &self.taste.is_active())
             .finish()
     }
 }
@@ -465,6 +478,28 @@ impl AppState {
     #[must_use]
     pub const fn focused(&self) -> bool {
         self.focused
+    }
+
+    /// Borrows the C8 tasteroll chance-styling state.
+    #[must_use]
+    pub const fn taste(&self) -> &TasteState {
+        &self.taste
+    }
+
+    /// Mutably borrows the C8 tasteroll state (for native lock/unlock calls).
+    pub fn taste_mut(&mut self) -> &mut TasteState {
+        &mut self.taste
+    }
+
+    /// Updates the content context the tasteroll reducer uses to seed rolls.
+    ///
+    /// The platform shell calls this on document open and after each edit
+    /// (before dispatching [`AppMessage::TasteRoll`]) so the reducer can
+    /// create a [`ChanceRoll`](rutile_core::ChanceRoll) without owning the
+    /// document text.
+    pub fn set_content_context(&mut self, text: &str) {
+        self.content_seed = crate::tasteroll::content_seed(text);
+        self.content_type = crate::tasteroll::infer_content_type(text);
     }
 
     /// Pushes a new notice and returns a clone for immediate presentation.
@@ -872,6 +907,18 @@ impl AppState {
             }
             AppMessage::ToggleFocusMode => {
                 self.focused = !self.focused;
+                vec![]
+            }
+            AppMessage::TasteRoll => {
+                self.taste.roll(self.content_seed, self.content_type);
+                vec![]
+            }
+            AppMessage::TasteReroll => {
+                self.taste.reroll();
+                vec![]
+            }
+            AppMessage::TasteReset => {
+                self.taste.reset();
                 vec![]
             }
         }
