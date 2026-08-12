@@ -668,7 +668,27 @@ fn validate_signature(
 }
 
 fn load_trusted_verifier_public_key(path: &Path) -> Result<[u8; 32], ReadinessError> {
-    let raw = std::fs::read(path).map_err(|_| ReadinessError::TrustedKeyMissing)?;
+    // Open with O_NOFOLLOW so a symlink at the pinned key path cannot
+    // substitute the root of trust (TOCTOU hardening, mirrors all other
+    // key-loading paths: release_authority, readiness_keystone, etc.).
+    use std::fs::OpenOptions;
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(|_| ReadinessError::TrustedKeyMissing)?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| ReadinessError::TrustedKeyMissing)?;
+    if !metadata.is_file() {
+        return Err(ReadinessError::TrustedKeyInvalid);
+    }
+    let mut raw = Vec::with_capacity(128);
+    file.take(128)
+        .read_to_end(&mut raw)
+        .map_err(|_| ReadinessError::TrustedKeyMissing)?;
     // Accept at most one trailing newline, consistent with release-key convention.
     let trimmed = raw.strip_suffix(b"\n").unwrap_or(&raw);
     let hex_str = std::str::from_utf8(trimmed).map_err(|_| ReadinessError::TrustedKeyInvalid)?;
