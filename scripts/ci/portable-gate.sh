@@ -43,7 +43,8 @@ job="portable"
 evidence_root="${TARGET_DIR}/evidence"
 fuzz_max_total_time="60"
 fuzz_toolchain="nightly-2026-07-01"
-fuzz_targets=(preview_event render_markdown source_blocks html_to_markdown export_page autosave_session file_save_state)
+# Auto-discover fuzz targets from fuzz/fuzz_targets/*.rs (sorted for determinism).
+mapfile -t fuzz_targets < <(find "$(dirname "$0")/../../fuzz/fuzz_targets" -name '*.rs' -exec basename {} .rs \; | sort)
 
 usage() {
   cat >&2 <<EOF
