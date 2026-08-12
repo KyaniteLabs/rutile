@@ -15,6 +15,7 @@ pub mod brand;
 pub mod command_palette;
 pub mod document_manager;
 pub mod local_search;
+pub mod outline;
 pub mod platform;
 pub mod preferences;
 pub mod preview_host;
