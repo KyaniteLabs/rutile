@@ -236,6 +236,9 @@ impl DocumentManager {
     pub fn close_tab(&mut self, id: DocumentId) -> Result<CloseTabResult, TabError> {
         let removed = self.slots.remove(&id).ok_or(TabError::UnknownDocument)?;
 
+        // Capture the closed tab's position BEFORE removing it from tab_order
+        // so we can select the neighbor that shifts into its slot.
+        let orig_pos = self.tab_order.iter().position(|&t| t == id);
         self.tab_order.retain(|&t| t != id);
 
         if self.slots.is_empty() {
@@ -251,8 +254,11 @@ impl DocumentManager {
         }
 
         if self.active_id == id {
-            // Pick the neighbor that took the closed tab's position.
-            let pos = self.tab_order.iter().position(|&t| t == id).unwrap_or(0);
+            // Pick the neighbor at the closed tab's original position.
+            // After removal, the tab at `orig_pos` is the one that shifted
+            // left into the closed tab's slot (the right neighbor). Clamp
+            // to the last valid index if the closed tab was at the tail.
+            let pos = orig_pos.unwrap_or(0);
             let new_pos = pos.min(self.tab_order.len().saturating_sub(1));
             self.active_id = self.tab_order[new_pos];
         }

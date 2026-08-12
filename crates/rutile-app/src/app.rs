@@ -855,6 +855,9 @@ impl AppState {
                 }
             }
             AppMessage::SwitchTab { id } => {
+                // Stale tab id is silently ignored — the reducer is the single
+                // writer and tab ids are monotonic, so this indicates a stale
+                // message, not a logic error the user can act on.
                 let _ = self.documents.switch_tab(id);
                 vec![]
             }

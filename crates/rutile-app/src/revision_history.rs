@@ -77,11 +77,13 @@ impl RevisionHistory {
     }
 
     /// Returns all entries, most-recent-first.
-    #[must_use]
-    pub fn entries(&self) -> &[HistoryEntry] {
-        // VecDeque::as_slices gives [front, back]; for a contiguous view we
-        // return a slice of the front part (sufficient for read-only access
-        // since we only push_front and pop_back).
+    ///
+    /// Requires `&mut self` because `VecDeque::make_contiguous` rearranges
+    /// the internal buffer to produce a single contiguous slice. After
+    /// sustained `push_front` + `pop_back` the head wraps past index 0 and
+    /// `as_slices().0` would return only the front segment.
+    pub fn entries(&mut self) -> &[HistoryEntry] {
+        self.entries.make_contiguous();
         self.entries.as_slices().0
     }
 
