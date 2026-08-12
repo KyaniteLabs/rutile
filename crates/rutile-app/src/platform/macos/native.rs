@@ -44,8 +44,8 @@ use super::{
     AppKitMainThread, AxUiState, EditorVisualReceipt, IcedEditorAdapter, MacError,
     MacExternalOutcome, MacMenuCommand, MacSaveAction, MacScrollDispatch, MacUserEvent,
     PreviewIpcFatal, PreviewIpcIngress, ProductSession, bind_open_proxy, forward_open_urls,
-    install_file_menu_with_actions, install_window_menu, preview_ipc_channel, split_panes,
-    take_pending_switch, update_recent_documents, update_tabs,
+    install_file_menu_with_actions, install_view_menu, install_window_menu, preview_ipc_channel,
+    split_panes, take_pending_switch, update_recent_documents, update_tabs,
 };
 use crate::actions::SessionRestore;
 use crate::app::{AppEffect, AppMessage, CloseDecision, CloseOutcome, UserNotice};
@@ -383,6 +383,21 @@ impl ProductRunner {
                     .core_mut()
                     .reduce(AppMessage::OpenCommandPalette);
             }
+            MacMenuCommand::ViewModeEdit => {
+                self.session.core_mut().reduce(AppMessage::SetDocumentMode {
+                    mode: crate::app::DocumentMode::Edit,
+                });
+            }
+            MacMenuCommand::ViewModeSplit => {
+                self.session.core_mut().reduce(AppMessage::SetDocumentMode {
+                    mode: crate::app::DocumentMode::Split,
+                });
+            }
+            MacMenuCommand::ViewModeRead => {
+                self.session.core_mut().reduce(AppMessage::SetDocumentMode {
+                    mode: crate::app::DocumentMode::View,
+                });
+            }
         }
     }
 
@@ -627,6 +642,9 @@ impl ProductRunner {
                 self.menu_installed = true;
                 if let Err(error) = install_window_menu() {
                     eprintln!("rutile: window menu install failed: {error}");
+                }
+                if let Err(error) = install_view_menu() {
+                    eprintln!("rutile: view menu install failed: {error}");
                 }
             }
             Err(error) => eprintln!("rutile: file menu install failed: {error}"),

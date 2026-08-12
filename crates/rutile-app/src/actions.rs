@@ -37,7 +37,7 @@ use rutile_core::{
 use rutile_types::Revision;
 use thiserror::Error;
 
-use crate::app::{AppEffect, AppMessage, AppState};
+use crate::app::{AppEffect, AppMessage, AppState, DocumentMode};
 
 /// The live find/replace session held (optionally) by
 /// [`AppState`](crate::app::AppState).
@@ -470,6 +470,22 @@ fn cmd_next_tab(state: &AppState) -> Option<AppMessage> {
 fn cmd_prev_tab(state: &AppState) -> Option<AppMessage> {
     cmd_rotate_tab(state, -1)
 }
+/// Builds a SetDocumentMode command for `mode` (roadmap 04); always available.
+fn cmd_set_mode(_state: &AppState, mode: DocumentMode) -> Option<AppMessage> {
+    Some(AppMessage::SetDocumentMode { mode })
+}
+
+fn cmd_view_edit(state: &AppState) -> Option<AppMessage> {
+    cmd_set_mode(state, DocumentMode::Edit)
+}
+
+fn cmd_view_split(state: &AppState) -> Option<AppMessage> {
+    cmd_set_mode(state, DocumentMode::Split)
+}
+
+fn cmd_view_read(state: &AppState) -> Option<AppMessage> {
+    cmd_set_mode(state, DocumentMode::View)
+}
 
 /// The compile-time default command set (see `docs/plan/command-palette-design.md`).
 pub const DEFAULT_CATALOG: &[CommandDescriptor] = &[
@@ -521,6 +537,27 @@ pub const DEFAULT_CATALOG: &[CommandDescriptor] = &[
         category: CommandCategory::Window,
         shortcut: Some(Shortcut::cmd("w")),
         message: cmd_close_tab,
+    },
+    CommandDescriptor {
+        id: CommandId("view.edit-mode"),
+        title: "Editor Only",
+        category: CommandCategory::View,
+        shortcut: None,
+        message: cmd_view_edit,
+    },
+    CommandDescriptor {
+        id: CommandId("view.split-mode"),
+        title: "Split View",
+        category: CommandCategory::View,
+        shortcut: None,
+        message: cmd_view_split,
+    },
+    CommandDescriptor {
+        id: CommandId("view.read-mode"),
+        title: "Reading View",
+        category: CommandCategory::View,
+        shortcut: None,
+        message: cmd_view_read,
     },
 ];
 

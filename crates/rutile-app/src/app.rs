@@ -39,6 +39,20 @@ pub enum PreviewState {
         error: RenderError,
     },
 }
+/// The shell-level document view mode (roadmap 04).
+///
+/// Declares which surface the platform shell shows. It is a presentation
+/// affordance only — it does not gate edits or duplicate render logic.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum DocumentMode {
+    /// Source editor only.
+    Edit,
+    /// Editor + preview side by side (the baseline).
+    #[default]
+    Split,
+    /// Rendered preview only (reader mode).
+    View,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CloseDecision {
@@ -187,6 +201,11 @@ pub enum AppMessage {
     PaletteSelectPrev,
     /// Dispatches the selected command and closes the palette.
     PaletteSubmit,
+    // --- Roadmap 04: reader-first view mode ---------------------------------
+    /// Sets the shell-level document view mode (Edit / Split / View).
+    SetDocumentMode {
+        mode: DocumentMode,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -329,6 +348,8 @@ pub struct AppState {
     // Roadmap 06: command registry + palette interaction state.
     registry: ActionRegistry,
     palette: CommandPalette,
+    // Roadmap 04: shell-level view mode.
+    mode: DocumentMode,
 }
 
 impl std::fmt::Debug for AppState {
@@ -344,6 +365,7 @@ impl std::fmt::Debug for AppState {
             .field("recents", &self.recents)
             .field("palette_open", &self.palette.is_open())
             .field("registry_len", &self.registry.len())
+            .field("mode", &self.mode)
             .finish()
     }
 }
@@ -409,6 +431,10 @@ impl AppState {
     /// Borrows the command palette interaction state (roadmap 06).
     pub fn palette(&self) -> &CommandPalette {
         &self.palette
+    }
+    /// The shell-level view mode (roadmap 04).
+    pub fn mode(&self) -> DocumentMode {
+        self.mode
     }
 
     /// Pushes a new notice and returns a clone for immediate presentation.
@@ -808,6 +834,10 @@ impl AppState {
                     Some(msg) => self.reduce(msg),
                     None => vec![],
                 }
+            }
+            AppMessage::SetDocumentMode { mode } => {
+                self.mode = mode;
+                vec![]
             }
         }
     }
