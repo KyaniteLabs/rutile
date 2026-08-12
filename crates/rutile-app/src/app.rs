@@ -283,6 +283,7 @@ impl Default for RecentDocuments {
 
 impl RecentDocuments {
     /// Creates an empty list bounded by `cap` (clamped to `MAX_RECENT_FILES`).
+    #[must_use]
     pub fn new(cap: usize) -> Self {
         Self {
             paths: Vec::new(),
@@ -309,21 +310,25 @@ impl RecentDocuments {
     }
 
     /// Returns the MRU-ordered paths.
+    #[must_use]
     pub fn paths(&self) -> &[PathBuf] {
         &self.paths
     }
 
     /// Number of entries.
-    pub fn len(&self) -> usize {
+    #[must_use]
+    pub const fn len(&self) -> usize {
         self.paths.len()
     }
 
     /// Whether the list is empty.
-    pub fn is_empty(&self) -> bool {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
         self.paths.is_empty()
     }
 
     /// Serializes to the `Vec<String>` wire format used by `SessionStateV1`.
+    #[must_use]
     pub fn to_strings(&self) -> Vec<String> {
         self.paths
             .iter()
@@ -357,6 +362,7 @@ pub struct AppState {
     focused: bool,
 }
 
+#[allow(clippy::missing_fields_in_debug)] // Intentional summary: full DocumentManager dump is too verbose.
 impl std::fmt::Debug for AppState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let slot = self.documents.active_slot();
@@ -377,30 +383,37 @@ impl std::fmt::Debug for AppState {
 }
 
 impl AppState {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[must_use]
     pub fn revision(&self) -> Revision {
         self.documents.active_slot().revision
     }
 
+    #[must_use]
     pub fn dirty(&self) -> bool {
         self.documents.active_slot().dirty
     }
 
+    #[must_use]
     pub fn preview(&self) -> &PreviewState {
         &self.documents.active_slot().preview
     }
 
+    #[must_use]
     pub fn path(&self) -> Option<&Path> {
         self.documents.active_slot().path.as_deref()
     }
 
+    #[must_use]
     pub fn saved_disk(&self) -> Option<&DiskVersion> {
         self.documents.active_slot().saved_disk.as_ref()
     }
 
+    #[must_use]
     pub fn external_conflict(&self) -> Option<&DiskVersion> {
         self.documents.active_slot().external_conflict.as_ref()
     }
@@ -411,39 +424,46 @@ impl AppState {
     }
 
     /// Borrows the active user notices.
+    #[must_use]
     pub fn notices(&self) -> &[UserNotice] {
         &self.notices
     }
 
     /// Borrows the MRU-ordered recent-documents list (roadmap 07).
-    pub fn recents(&self) -> &RecentDocuments {
+    #[must_use]
+    pub const fn recents(&self) -> &RecentDocuments {
         &self.recents
     }
 
     /// Borrows the multi-document tab manager (roadmap 08).
-    pub fn documents(&self) -> &DocumentManager {
+    #[must_use]
+    pub const fn documents(&self) -> &DocumentManager {
         &self.documents
     }
     /// Borrows the command registry (roadmap 06).
-    pub fn registry(&self) -> &ActionRegistry {
+    #[must_use]
+    pub const fn registry(&self) -> &ActionRegistry {
         &self.registry
     }
 
     /// Mutably borrows the command registry (for runtime platform commands).
-    pub fn registry_mut(&mut self) -> &mut ActionRegistry {
+    pub const fn registry_mut(&mut self) -> &mut ActionRegistry {
         &mut self.registry
     }
 
     /// Borrows the command palette interaction state (roadmap 06).
-    pub fn palette(&self) -> &CommandPalette {
+    #[must_use]
+    pub const fn palette(&self) -> &CommandPalette {
         &self.palette
     }
     /// The shell-level view mode (roadmap 04).
-    pub fn mode(&self) -> DocumentMode {
+    #[must_use]
+    pub const fn mode(&self) -> DocumentMode {
         self.mode
     }
     /// Whether distraction-free focus mode is active (roadmap 10).
-    pub fn focused(&self) -> bool {
+    #[must_use]
+    pub const fn focused(&self) -> bool {
         self.focused
     }
 
@@ -787,9 +807,10 @@ impl AppState {
                 self.recents.remove(&path);
                 vec![]
             }
-            AppMessage::NewTab => match self.documents.new_tab() {
-                Ok(_) => vec![],
-                Err(_) => {
+            AppMessage::NewTab => {
+                if self.documents.new_tab().is_ok() {
+                    vec![]
+                } else {
                     let notice = self.push_notice(
                         NoticeSeverity::Warning,
                         "Too many open documents to create a new tab.".to_owned(),
@@ -797,7 +818,7 @@ impl AppState {
                     );
                     vec![AppEffect::PresentNotice { notice }]
                 }
-            },
+            }
             AppMessage::SwitchTab { id } => {
                 let _ = self.documents.switch_tab(id);
                 vec![]
@@ -952,6 +973,7 @@ impl AppState {
     }
 
     /// Borrows the active find session, if any.
+    #[must_use]
     pub fn find_session(&self) -> Option<&FindSession> {
         self.documents.active_slot().find.as_ref()
     }
@@ -1168,6 +1190,7 @@ impl AppState {
 
     /// Live word/character/reading-time counts for `document`'s current text,
     /// for the native status bar.
+    #[must_use]
     pub fn counts(&self, document: &Document) -> Counts {
         rutile_core::counts(&document.snapshot().to_string())
     }
@@ -1183,6 +1206,7 @@ impl AppState {
     }
 
     /// Borrows the bound autosave store, if any.
+    #[must_use]
     pub fn autosave_store(&self) -> Option<&AutosaveStore> {
         self.documents.active_slot().autosave.as_ref()
     }
@@ -1250,6 +1274,7 @@ impl AppState {
 
     /// Captures session-restore state from the current document path plus the
     /// platform-supplied selection, viewport, and window frame.
+    #[must_use]
     pub fn capture_session_state(
         &self,
         saved_at_unix_ms: u64,
@@ -1321,7 +1346,7 @@ impl AppState {
         let text = document.snapshot().to_string();
         let found =
             rutile_core::find_next(&text, &session.query, from_byte, direction, session.wrap);
-        session.current = found.clone();
+        session.current.clone_from(&found);
         found
     }
 
@@ -1378,7 +1403,7 @@ impl AppState {
     }
 }
 
-fn event_revision(event: &PreviewEventV1) -> Revision {
+const fn event_revision(event: &PreviewEventV1) -> Revision {
     match event {
         PreviewEventV1::BridgeReady { revision }
         | PreviewEventV1::Painted { revision, .. }

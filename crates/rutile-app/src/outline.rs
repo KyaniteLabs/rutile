@@ -63,22 +63,26 @@ impl Outline {
     }
 
     /// The ordered heading entries.
+    #[must_use]
     pub fn entries(&self) -> &[OutlineEntry] {
         &self.entries
     }
 
     /// Number of headings.
-    pub fn len(&self) -> usize {
+    #[must_use]
+    pub const fn len(&self) -> usize {
         self.entries.len()
     }
 
     /// Whether there are no headings.
-    pub fn is_empty(&self) -> bool {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
     /// The deepest heading whose source offset precedes `byte_offset` — i.e.
     /// the section the viewport is currently inside (O6).
+    #[must_use]
     pub fn heading_at(&self, byte_offset: usize) -> Option<&OutlineEntry> {
         self.entries
             .iter()
@@ -87,11 +91,13 @@ impl Outline {
     }
 
     /// The first heading strictly after `byte_offset` (↓ in the sidebar).
+    #[must_use]
     pub fn next_after(&self, byte_offset: usize) -> Option<&OutlineEntry> {
         self.entries.iter().find(|e| e.source_offset > byte_offset)
     }
 
     /// The last heading strictly before `byte_offset` (↑ in the sidebar).
+    #[must_use]
     pub fn prev_before(&self, byte_offset: usize) -> Option<&OutlineEntry> {
         self.entries
             .iter()

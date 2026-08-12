@@ -37,6 +37,7 @@ impl DocumentSessionCore {
     }
 
     /// Builds a core from an already-loaded document bound to a path/disk pair.
+    #[must_use]
     pub fn from_opened(document: Document, path: PathBuf, disk: DiskVersion) -> Self {
         let mut app = AppState::new();
         let _ = app.reduce(AppMessage::DocumentOpened {
@@ -53,7 +54,8 @@ impl DocumentSessionCore {
 
     /// Builds a core from an already-constructed document and app state
     /// (used when the platform has already driven the open reducer).
-    pub fn from_parts(app: AppState, document: Document) -> Self {
+    #[must_use]
+    pub const fn from_parts(app: AppState, document: Document) -> Self {
         Self {
             app,
             document,
@@ -61,19 +63,21 @@ impl DocumentSessionCore {
         }
     }
 
-    pub fn app(&self) -> &AppState {
+    #[must_use]
+    pub const fn app(&self) -> &AppState {
         &self.app
     }
 
-    pub fn app_mut(&mut self) -> &mut AppState {
+    pub const fn app_mut(&mut self) -> &mut AppState {
         &mut self.app
     }
 
-    pub fn document(&self) -> &Document {
+    #[must_use]
+    pub const fn document(&self) -> &Document {
         &self.document
     }
 
-    pub fn document_mut(&mut self) -> &mut Document {
+    pub const fn document_mut(&mut self) -> &mut Document {
         &mut self.document
     }
 
@@ -81,42 +85,50 @@ impl DocumentSessionCore {
         self.document = document;
     }
 
+    #[must_use]
     pub fn revision(&self) -> Revision {
         self.document.revision()
     }
 
+    #[must_use]
     pub fn dirty(&self) -> bool {
         self.app.dirty()
     }
 
+    #[must_use]
     pub fn path(&self) -> Option<&Path> {
         self.app.path()
     }
 
+    #[must_use]
     pub fn snapshot(&self) -> DocumentSnapshot {
         self.document.snapshot()
     }
 
+    #[must_use]
     pub fn preview(&self) -> &PreviewState {
         self.app.preview()
     }
 
+    #[must_use]
     pub fn notices(&self) -> &[UserNotice] {
         self.app.notices()
     }
 
-    pub fn open_generation(&self) -> u64 {
+    #[must_use]
+    pub const fn open_generation(&self) -> u64 {
         self.open_generation
     }
 
     /// Allocates the next open generation for a shared open request.
-    pub fn begin_open(&mut self) -> u64 {
+    pub const fn begin_open(&mut self) -> u64 {
         self.open_generation = self.open_generation.saturating_add(1);
         self.open_generation
     }
 
     /// Returns true when `generation` matches the latest open request.
-    pub fn is_current_open(&self, generation: u64) -> bool {
+    #[must_use]
+    pub const fn is_current_open(&self, generation: u64) -> bool {
         generation == self.open_generation
     }
 
@@ -138,17 +150,18 @@ impl DocumentSessionCore {
     }
 
     /// Split-borrow helper: mutable app + mutable document.
-    pub fn app_and_document_mut(&mut self) -> (&mut AppState, &mut Document) {
+    pub const fn app_and_document_mut(&mut self) -> (&mut AppState, &mut Document) {
         (&mut self.app, &mut self.document)
     }
 
     /// Split-borrow helper: mutable app + immutable document.
-    pub fn app_mut_and_document(&mut self) -> (&mut AppState, &Document) {
+    pub const fn app_mut_and_document(&mut self) -> (&mut AppState, &Document) {
         (&mut self.app, &self.document)
     }
 
     /// Split-borrow helper: immutable app + immutable document.
-    pub fn app_and_document(&self) -> (&AppState, &Document) {
+    #[must_use]
+    pub const fn app_and_document(&self) -> (&AppState, &Document) {
         (&self.app, &self.document)
     }
 }
@@ -181,7 +194,7 @@ mod tests {
         assert!(core.app().path().is_none());
         let path = PathBuf::from("/tmp/core-open.md");
         let generation = core.begin_open();
-        let effects = core.reduce(AppMessage::OpenDocument { path: path.clone() });
+        let effects = core.reduce(AppMessage::OpenDocument { path });
         assert!(
             effects
                 .iter()

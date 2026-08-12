@@ -2,7 +2,7 @@
 //!
 //! Defines [`DocumentSlot`] (per-document state) and [`DocumentManager`]
 //! (the collection + active-tab + ordering). This module establishes the
-//! locked contract types that the full AppState migration will consume.
+//! locked contract types that the full `AppState` migration will consume.
 //!
 //! # Design
 //!
@@ -65,6 +65,7 @@ impl Default for DocumentSlot {
 
 impl DocumentSlot {
     /// Creates a slot for a freshly opened document at `revision` and `path`.
+    #[must_use]
     pub fn opened(revision: Revision, path: PathBuf) -> Self {
         Self {
             revision,
@@ -99,8 +100,8 @@ pub enum TabError {
 /// Multi-document tab manager (roadmap 08).
 ///
 /// Holds a collection of [`DocumentSlot`]s keyed by [`DocumentId`], an
-/// ordered tab strip, and the currently active tab. The full AppState
-/// migration will replace AppState's per-document fields with a
+/// ordered tab strip, and the currently active tab. The full `AppState`
+/// migration will replace `AppState`'s per-document fields with a
 /// `DocumentManager`.
 pub struct DocumentManager {
     slots: BTreeMap<DocumentId, DocumentSlot>,
@@ -117,6 +118,7 @@ impl Default for DocumentManager {
 
 impl DocumentManager {
     /// Creates a manager with a single ROOT tab (migration entry point).
+    #[must_use]
     pub fn new() -> Self {
         let mut slots = BTreeMap::new();
         slots.insert(DocumentId::ROOT, DocumentSlot::default());
@@ -129,11 +131,13 @@ impl DocumentManager {
     }
 
     /// The active document's id.
-    pub fn active_id(&self) -> DocumentId {
+    #[must_use]
+    pub const fn active_id(&self) -> DocumentId {
         self.active_id
     }
 
     /// Borrows the active document's slot.
+    #[must_use]
     pub fn active_slot(&self) -> &DocumentSlot {
         &self.slots[&self.active_id]
     }
@@ -146,6 +150,7 @@ impl DocumentManager {
     }
 
     /// Borrows a specific document's slot.
+    #[must_use]
     pub fn slot(&self, id: DocumentId) -> Option<&DocumentSlot> {
         self.slots.get(&id)
     }
@@ -156,17 +161,20 @@ impl DocumentManager {
     }
 
     /// Returns the ordered tab ids (left-to-right tab strip order).
+    #[must_use]
     pub fn tab_order(&self) -> &[DocumentId] {
         &self.tab_order
     }
 
     /// Number of open tabs.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.slots.len()
     }
 
     /// Whether there are no tabs (always false after `new()`, possible after
     /// closing all tabs).
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.slots.is_empty()
     }
@@ -266,6 +274,7 @@ impl DocumentManager {
     }
 
     /// Finds an open tab by canonical path (for duplicate detection).
+    #[must_use]
     pub fn find_by_path(&self, path: &Path) -> Option<DocumentId> {
         self.slots
             .iter()

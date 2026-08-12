@@ -60,6 +60,7 @@ impl Default for RevisionHistory {
 
 impl RevisionHistory {
     /// Creates an empty history.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             entries: VecDeque::with_capacity(MAX_HISTORY_ENTRIES),
@@ -76,6 +77,7 @@ impl RevisionHistory {
     }
 
     /// Returns all entries, most-recent-first.
+    #[must_use]
     pub fn entries(&self) -> &[HistoryEntry] {
         // VecDeque::as_slices gives [front, back]; for a contiguous view we
         // return a slice of the front part (sufficient for read-only access
@@ -84,11 +86,13 @@ impl RevisionHistory {
     }
 
     /// Number of entries.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
     /// Whether the history is empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -99,11 +103,13 @@ impl RevisionHistory {
     }
 
     /// Returns the most recent entry, if any.
+    #[must_use]
     pub fn latest(&self) -> Option<&HistoryEntry> {
         self.entries.front()
     }
 
     /// Finds the entry closest to a given revision (for restore operations).
+    #[must_use]
     pub fn find_revision(&self, revision: Revision) -> Option<&HistoryEntry> {
         self.entries.iter().find(|e| e.revision == revision)
     }

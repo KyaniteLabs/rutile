@@ -165,6 +165,7 @@ impl Preferences {
     /// Called after deserialization to enforce invariants regardless of what
     /// was on disk. Out-of-range values are clamped, not rejected, so a
     /// corrupt-but-syntactically-valid record is recovered gracefully.
+    #[must_use]
     pub fn sanitized(self) -> Self {
         Self {
             schema: self.schema,
@@ -193,7 +194,7 @@ impl Preferences {
     /// sanitized record. Rejects unknown schema versions (deny-unknown-field
     /// discipline: forward-incompatible records fail closed).
     pub fn from_json(json: &str) -> Result<Self, PreferencesError> {
-        let prefs: Preferences =
+        let prefs: Self =
             serde_json::from_str(json).map_err(|e| PreferencesError::JsonDecode(e.to_string()))?;
 
         if prefs.schema.version > PREFERENCES_SCHEMA_VERSION {
@@ -207,6 +208,7 @@ impl Preferences {
     }
 
     /// Serializes to JSON for persistence.
+    #[must_use]
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).expect("preferences serialization is infallible")
     }
@@ -218,6 +220,7 @@ impl Preferences {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::float_cmp)] // exact-value assertions on sanitized floats
     use super::*;
 
     // -- Bounds enforcement --------------------------------------------------

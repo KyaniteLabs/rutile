@@ -1,6 +1,6 @@
 //! Platform-agnostic paste and crash-recovery classifiers.
 //!
-//! These are pure decision functions with no IO, no AppKit, and no
+//! These are pure decision functions with no IO, no `AppKit`, and no
 //! pasteboard/window dependency, so both the macOS and Linux shells can share
 //! the identical behavioural contract and the logic is unit-testable under
 //! `--no-default-features`.
@@ -88,6 +88,7 @@ pub enum RecoveryNotice {
 ///   `CosmeticLog`).
 ///
 /// Returns `None` when everything is clean or first-run.
+#[must_use]
 pub fn classify_recovery(
     create_dir_or_bind_err: Option<&str>,
     recover_result: Result<Option<&str>, &str>,
@@ -119,7 +120,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     /// Convert closure that rejects oversized or malformed HTML (mirrors the
-    /// real `html_to_markdown` InputTooLarge / parse-error rejections).
+    /// real `html_to_markdown` `InputTooLarge` / parse-error rejections).
     fn test_convert(html: &str) -> Result<String, ()> {
         if html.len() > 100 || html.contains("<table") {
             Err(())

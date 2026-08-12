@@ -72,7 +72,8 @@ pub struct FindSession {
 
 impl FindSession {
     /// Opens a session with no located match yet.
-    pub fn new(query: FindQuery, direction: FindDirection, wrap: bool) -> Self {
+    #[must_use]
+    pub const fn new(query: FindQuery, direction: FindDirection, wrap: bool) -> Self {
         Self {
             query,
             direction,
@@ -257,6 +258,7 @@ pub struct Shortcut {
 
 impl Shortcut {
     /// Shortcut with only the platform command modifier (⌘ on macOS).
+    #[must_use]
     pub const fn cmd(key: &'static str) -> Self {
         Self {
             key,
@@ -270,6 +272,7 @@ impl Shortcut {
     }
 
     /// Shortcut with command + shift.
+    #[must_use]
     pub const fn cmd_shift(key: &'static str) -> Self {
         Self {
             key,
@@ -352,6 +355,7 @@ impl ActionRegistry {
     /// Builds a registry from a compile-time static catalog.
     ///
     /// In debug builds, panics if the catalog contains duplicate ids.
+    #[must_use]
     pub fn from_static(catalog: &'static [CommandDescriptor]) -> Self {
         debug_assert!(
             ids_unique(catalog),
@@ -373,16 +377,19 @@ impl ActionRegistry {
     }
 
     /// Total number of commands (static + dynamic).
-    pub fn len(&self) -> usize {
+    #[must_use]
+    pub const fn len(&self) -> usize {
         self.catalog.len() + self.dynamic.len()
     }
 
     /// Whether the registry has zero commands.
-    pub fn is_empty(&self) -> bool {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// Looks up a descriptor by id across both static and dynamic sets.
+    #[must_use]
     pub fn lookup(&self, id: &CommandId) -> Option<&CommandDescriptor> {
         self.catalog
             .iter()
@@ -404,6 +411,7 @@ impl ActionRegistry {
     }
 
     /// Free-text search over titles (case-insensitive substring).
+    #[must_use]
     pub fn search(&self, query: &str) -> Vec<&CommandDescriptor> {
         let q = query.to_ascii_lowercase();
         self.iter()
@@ -423,7 +431,8 @@ fn ids_unique(descriptors: &[CommandDescriptor]) -> bool {
 // -----------------------------------------------------------------------
 
 /// Builds the [`AppMessage`] for "New Document", always available.
-fn cmd_new(_state: &AppState) -> Option<AppMessage> {
+#[allow(clippy::unnecessary_wraps)] // Option is mandated by CommandDescriptor::message
+const fn cmd_new(_state: &AppState) -> Option<AppMessage> {
     Some(AppMessage::NewDocument)
 }
 
@@ -438,7 +447,8 @@ fn cmd_clear_recents(state: &AppState) -> Option<AppMessage> {
 }
 
 /// Builds "New Tab", always available.
-fn cmd_new_tab(_state: &AppState) -> Option<AppMessage> {
+#[allow(clippy::unnecessary_wraps)]
+const fn cmd_new_tab(_state: &AppState) -> Option<AppMessage> {
     Some(AppMessage::NewTab)
 }
 
@@ -470,23 +480,25 @@ fn cmd_next_tab(state: &AppState) -> Option<AppMessage> {
 fn cmd_prev_tab(state: &AppState) -> Option<AppMessage> {
     cmd_rotate_tab(state, -1)
 }
-/// Builds a SetDocumentMode command for `mode` (roadmap 04); always available.
-fn cmd_set_mode(_state: &AppState, mode: DocumentMode) -> Option<AppMessage> {
+/// Builds a `SetDocumentMode` command for `mode` (roadmap 04); always available.
+#[allow(clippy::unnecessary_wraps)]
+const fn cmd_set_mode(_state: &AppState, mode: DocumentMode) -> Option<AppMessage> {
     Some(AppMessage::SetDocumentMode { mode })
 }
 
-fn cmd_view_edit(state: &AppState) -> Option<AppMessage> {
+const fn cmd_view_edit(state: &AppState) -> Option<AppMessage> {
     cmd_set_mode(state, DocumentMode::Edit)
 }
 
-fn cmd_view_split(state: &AppState) -> Option<AppMessage> {
+const fn cmd_view_split(state: &AppState) -> Option<AppMessage> {
     cmd_set_mode(state, DocumentMode::Split)
 }
 
-fn cmd_view_read(state: &AppState) -> Option<AppMessage> {
+const fn cmd_view_read(state: &AppState) -> Option<AppMessage> {
     cmd_set_mode(state, DocumentMode::View)
 }
-fn cmd_toggle_focus(_state: &AppState) -> Option<AppMessage> {
+#[allow(clippy::unnecessary_wraps)]
+const fn cmd_toggle_focus(_state: &AppState) -> Option<AppMessage> {
     Some(AppMessage::ToggleFocusMode)
 }
 
@@ -573,6 +585,7 @@ pub const DEFAULT_CATALOG: &[CommandDescriptor] = &[
 
 impl ActionRegistry {
     /// Builds the registry from [`DEFAULT_CATALOG`].
+    #[must_use]
     pub fn standard() -> Self {
         Self::from_static(DEFAULT_CATALOG)
     }
@@ -589,6 +602,7 @@ mod action_registry_tests {
     use super::*;
     use crate::app::AppState;
 
+    #[allow(clippy::unnecessary_wraps)]
     fn always_save(_state: &AppState) -> Option<AppMessage> {
         Some(AppMessage::SaveRequested)
     }
@@ -597,6 +611,7 @@ mod action_registry_tests {
         None
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     fn always_new(_state: &AppState) -> Option<AppMessage> {
         Some(AppMessage::NewDocument)
     }
