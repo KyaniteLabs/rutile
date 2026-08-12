@@ -233,8 +233,10 @@ impl ProductRunner {
                 load_session_err.as_deref(),
             );
             pending_recovery_notice = match notice {
-                Some(crate::platform::paste::RecoveryNotice::DataLoss(m) |
-crate::platform::paste::RecoveryNotice::Recoverable(m)) => Some(m),
+                Some(
+                    crate::platform::paste::RecoveryNotice::DataLoss(m)
+                    | crate::platform::paste::RecoveryNotice::Recoverable(m),
+                ) => Some(m),
                 Some(crate::platform::paste::RecoveryNotice::CosmeticLog(m)) => {
                     eprintln!("rutile: session-state cosmetic warning: {m}");
                     None
@@ -416,8 +418,10 @@ crate::platform::paste::RecoveryNotice::Recoverable(m)) => Some(m),
             self.surface_error("Resolve the external file conflict before saving");
             return;
         }
-        if matches!(self.session.ensure_no_external_conflict_before_save(), Err(MacError::ExternalConflict))
-        {
+        if matches!(
+            self.session.ensure_no_external_conflict_before_save(),
+            Err(MacError::ExternalConflict)
+        ) {
             self.surface_error("The file changed on disk; resolve the conflict before saving");
             return;
         }
@@ -431,10 +435,10 @@ crate::platform::paste::RecoveryNotice::Recoverable(m)) => Some(m),
     }
 
     fn run_save_as_md(&mut self, _event_loop: &ActiveEventLoop) {
-        let default = self
-            .session
-            .path()
-            .and_then(Path::file_name).map_or_else(|| "Untitled.md".to_owned(), |name| name.to_string_lossy().into_owned());
+        let default = self.session.path().and_then(Path::file_name).map_or_else(
+            || "Untitled.md".to_owned(),
+            |name| name.to_string_lossy().into_owned(),
+        );
         match choose_save_path(&default) {
             Ok(Some(path)) => match self.session.request_save_as(path) {
                 Ok(()) => self.sync_window_title(),
@@ -514,7 +518,11 @@ crate::platform::paste::RecoveryNotice::Recoverable(m)) => Some(m),
             .map(|id| {
                 docs.slot(*id)
                     .and_then(|s| s.path.as_ref())
-                    .and_then(|p| p.file_name()).map_or_else(|| "Untitled".to_owned(), |n| n.to_string_lossy().into_owned())
+                    .and_then(|p| p.file_name())
+                    .map_or_else(
+                        || "Untitled".to_owned(),
+                        |n| n.to_string_lossy().into_owned(),
+                    )
             })
             .collect();
 
@@ -975,10 +983,10 @@ crate::platform::paste::RecoveryNotice::Recoverable(m)) => Some(m),
     /// Save-as-HTML through a native `NSSavePanel`, using the validated
     /// self-contained export page.
     fn run_save_html(&mut self) {
-        let default = self
-            .session
-            .path()
-            .and_then(Path::file_stem).map_or_else(|| "Untitled.html".to_owned(), |stem| format!("{}.html", stem.to_string_lossy()));
+        let default = self.session.path().and_then(Path::file_stem).map_or_else(
+            || "Untitled.html".to_owned(),
+            |stem| format!("{}.html", stem.to_string_lossy()),
+        );
         match choose_save_path(&default) {
             Ok(Some(path)) => match self.session.save_html_as(&path) {
                 Ok(()) => self.surface_error(format!("Exported HTML to {}", path.display())),

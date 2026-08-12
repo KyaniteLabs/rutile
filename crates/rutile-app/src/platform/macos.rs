@@ -1623,5 +1623,9 @@ pub use open_events::{
 fn percent_decode_path(segment: &str) -> String {
     url::Url::parse(&format!("file://{segment}"))
         .ok()
-        .and_then(|url| url.to_file_path().ok()).map_or_else(|| segment.to_owned(), |path| path.to_string_lossy().into_owned())
+        .and_then(|url| url.to_file_path().ok())
+        .map_or_else(
+            || segment.to_owned(),
+            |path| path.to_string_lossy().into_owned(),
+        )
 }
