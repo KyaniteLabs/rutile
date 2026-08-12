@@ -22,6 +22,9 @@ pub struct IcedAdapterStats {
 struct LineByteIndex {
     starts: Vec<usize>,
     len: usize,
+    /// Full text mirror, needed to convert Iced's character-column to a byte
+    /// offset (they differ for any line containing multibyte UTF-8).
+    text: Arc<str>,
 }
 
 impl LineByteIndex {
@@ -35,18 +38,39 @@ impl LineByteIndex {
         Self {
             starts,
             len: text.len(),
+            text: Arc::from(text),
         }
     }
 
+    /// Converts an Iced `(line, column)` to a byte offset.
+    ///
+    /// Iced's `column` is a **character** offset (Unicode scalar value count),
+    /// not a byte offset. We walk `char_indices` on the line's text to find
+    /// the correct byte position, preventing panics from mid-codepoint slicing.
     fn byte_at(&self, line: usize, column: usize) -> Result<usize, EditorError> {
         let start = *self
             .starts
             .get(line)
             .ok_or_else(|| EditorError::Platform("Iced cursor line is outside mirror".into()))?;
-        start
-            .checked_add(column)
-            .filter(|byte| *byte <= self.len)
-            .ok_or_else(|| EditorError::Platform("Iced cursor byte is outside mirror".into()))
+        let line_end = self.starts.get(line + 1).copied().unwrap_or(self.len);
+        let line_text = &self.text[start..line_end];
+        match line_text.char_indices().nth(column) {
+            Some((byte_off, _)) => start
+                .checked_add(byte_off)
+                .filter(|byte| *byte <= self.len)
+                .ok_or_else(|| EditorError::Platform("Iced cursor byte is outside mirror".into())),
+            None => {
+                // Column at or past the last character — cursor is at end of line.
+                let char_count = line_text.chars().count();
+                if column == char_count {
+                    Ok(line_end.min(self.len))
+                } else {
+                    Err(EditorError::Platform(
+                        "Iced cursor column is outside mirror".into(),
+                    ))
+                }
+            }
+        }
     }
 
     fn position_at(&self, byte: usize) -> Result<text_editor::Position, EditorError> {
