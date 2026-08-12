@@ -366,10 +366,18 @@ impl ProductRunner {
             }
             MacMenuCommand::CloseTab => {
                 let active = self.session.app_state().documents().active_id();
-                self.session
-                    .core_mut()
-                    .reduce(AppMessage::CloseTab { id: active });
-                self.sync_tabs();
+                if self.session.app_state().dirty() {
+                    // Dirty tab: present save dialog instead of discarding.
+                    self.pending_close = true;
+                    let _ = self.session.request_close(CloseDecision::Save {
+                        untitled_path: None,
+                    });
+                } else {
+                    self.session
+                        .core_mut()
+                        .reduce(AppMessage::CloseTab { id: active });
+                    self.sync_tabs();
+                }
             }
             MacMenuCommand::SwitchTab => {
                 if let Some(index) = take_pending_switch() {

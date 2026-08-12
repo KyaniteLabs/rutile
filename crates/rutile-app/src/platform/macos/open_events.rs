@@ -364,6 +364,9 @@ pub fn install_window_menu() -> Result<(), String> {
     close_tab.setTitle(&NSString::from_str("Close Tab"));
     close_tab.setKeyEquivalent(&NSString::from_str("w"));
     unsafe {
+        // SAFETY: close_tab is a freshly-allocated NSMenuItem; setting its
+        // key-equivalent modifier mask to ⌃⌘ prevents shadowing File ▸ Close (⌘W).
+        let _: () = msg_send![&close_tab, setKeyEquivalentModifierMask: MASK_CONTROL_COMMAND];
         close_tab.setTarget(Some(&***target));
         close_tab.setAction(Some(sel!(menuCloseTab:)));
     }
