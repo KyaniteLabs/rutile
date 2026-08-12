@@ -320,7 +320,27 @@ pub fn decode_gui_command(bytes: &[u8]) -> Result<GuiCommandV1, ProtocolError> {
     if command.version() != 1 {
         return Err(ProtocolError::UnsupportedVersion);
     }
-    Ok(command.into())
+    let command: GuiCommandV1 = command.into();
+    // Validate byte offsets against MAX_DOCUMENT_BYTES and start <= end.
+    // The scroll channel already bounds offsets; the GUI control channel
+    // previously accepted usize::MAX.
+    match &command {
+        GuiCommandV1::Edit { start, end, .. }
+        | GuiCommandV1::BeginComposition { start, end, .. } => {
+            if start > end || *end > MAX_DOCUMENT_BYTES {
+                return Err(ProtocolError::InvalidOffset);
+            }
+        }
+        GuiCommandV1::SetSourceViewport {
+            top_visible_byte, ..
+        } => {
+            if *top_visible_byte > MAX_DOCUMENT_BYTES {
+                return Err(ProtocolError::InvalidOffset);
+            }
+        }
+        _ => {}
+    }
+    Ok(command)
 }
 
 pub fn encode_gui_command(command: &GuiCommandV1) -> Result<Vec<u8>, ProtocolError> {
@@ -1043,6 +1063,12 @@ const fn validate_header(v: u8, revision: Revision, loaded: Revision) -> Result<
     Ok(())
 }
 
+/// Lightweight version-only peek for forward-compatible version classification.
+#[derive(Deserialize)]
+struct VersionPeek {
+    v: u8,
+}
+
 fn decode_ndjson<T: DeserializeOwned>(bytes: &[u8], maximum: usize) -> Result<T, ProtocolError> {
     if bytes.len() > maximum {
         return Err(ProtocolError::TooLarge { maximum });
@@ -1052,6 +1078,15 @@ fn decode_ndjson<T: DeserializeOwned>(bytes: &[u8], maximum: usize) -> Result<T,
     };
     if record.is_empty() || record.contains(&b'\n') || record.contains(&b'\r') {
         return Err(ProtocolError::InvalidFraming);
+    }
+    // Version peek: parse just the version field before the strict
+    // deny_unknown_fields struct so a future-version record with new
+    // fields classifies as UnsupportedVersion, not InvalidJson.
+    // Mirrors the VersionEnvelope pattern in core::session_contract.
+    if let Ok(peek) = serde_json::from_slice::<VersionPeek>(record) {
+        if peek.v != 1 {
+            return Err(ProtocolError::UnsupportedVersion);
+        }
     }
     Ok(serde_json::from_slice(record)?)
 }
