@@ -198,12 +198,13 @@ fn redact_paths(message: &str) -> String {
     out
 }
 
-/// Flushes a buffered token, reducing any `/`-containing path to its basename.
+/// Flushes a buffered token, reducing any path-like substring to its basename.
+/// Handles both Unix (`/`) and Windows (`\`) path separators.
 fn flush_token(out: &mut String, token: &mut String) {
     if token.is_empty() {
         return;
     }
-    if let Some(pos) = token.rfind('/') {
+    if let Some(pos) = token.rfind(['/', '\\']) {
         out.push_str(&token[pos + 1..]);
     } else {
         out.push_str(token);

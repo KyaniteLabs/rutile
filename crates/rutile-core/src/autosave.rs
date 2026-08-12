@@ -96,6 +96,14 @@ impl std::fmt::Debug for RecoveredDocument {
 impl Clone for RecoveredDocument {
     fn clone(&self) -> Self {
         let text = self.document.snapshot().to_string();
+        // SAFETY: the text was already verified to fit within
+        // MAX_DOCUMENT_BYTES during recovery (verify_snapshot reads with
+        // the same cap and constructs the Document). The debug_assert
+        // catches any future divergence in the size-cap constant.
+        debug_assert!(
+            text.len() <= MAX_DOCUMENT_BYTES,
+            "recovered snapshot exceeds size cap"
+        );
         Self {
             entry: self.entry.clone(),
             document: Document::new(&text).expect("recovered snapshot must be within size bounds"),
