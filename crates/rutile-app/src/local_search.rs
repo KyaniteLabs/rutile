@@ -268,13 +268,20 @@ fn nearest_heading(text: &str, heading_starts: &[usize], offset: usize) -> Optio
 }
 
 /// Creates a short snippet around a match.
+///
+/// All byte offsets are clamped to UTF-8 char boundaries to prevent panics
+/// on multibyte content.
 fn make_snippet(text: &str, pos: usize, len: usize) -> String {
     let start = pos.saturating_sub(MAX_SNIPPET_BYTES / 3);
     let end = (pos + len + MAX_SNIPPET_BYTES / 3).min(text.len());
-    let raw = &text[start..end];
+    // Clamp to char boundaries — get() returns None if start/end split a codepoint.
+    let raw = text.get(start..end).unwrap_or("");
     let mut snippet = raw.replace('\n', " ");
     if snippet.len() > MAX_SNIPPET_BYTES {
-        snippet.truncate(MAX_SNIPPET_BYTES);
+        // truncate on a char boundary
+        if let Some((idx, _)) = snippet.char_indices().nth(MAX_SNIPPET_BYTES) {
+            snippet.truncate(idx);
+        }
     }
     snippet.trim().to_owned()
 }

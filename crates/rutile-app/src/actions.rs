@@ -431,10 +431,12 @@ fn ids_unique(descriptors: &[CommandDescriptor]) -> bool {
 // actions to palette/menu descriptors. Platform shells may register more.
 // -----------------------------------------------------------------------
 
-/// Builds the [`AppMessage`] for "New Document", always available.
-#[allow(clippy::unnecessary_wraps)] // Option is mandated by CommandDescriptor::message
-const fn cmd_new(_state: &AppState) -> Option<AppMessage> {
-    Some(AppMessage::NewDocument)
+/// Builds the [`AppMessage`] for "New Document".
+///
+/// Greyed out when the active document is dirty — prevents silently
+/// discarding unsaved changes via palette dispatch.
+fn cmd_new(state: &AppState) -> Option<AppMessage> {
+    (!state.dirty()).then_some(AppMessage::NewDocument)
 }
 
 /// Builds "Save", available only when the active document is dirty.
