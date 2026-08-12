@@ -486,6 +486,9 @@ fn cmd_view_split(state: &AppState) -> Option<AppMessage> {
 fn cmd_view_read(state: &AppState) -> Option<AppMessage> {
     cmd_set_mode(state, DocumentMode::View)
 }
+fn cmd_toggle_focus(_state: &AppState) -> Option<AppMessage> {
+    Some(AppMessage::ToggleFocusMode)
+}
 
 /// The compile-time default command set (see `docs/plan/command-palette-design.md`).
 pub const DEFAULT_CATALOG: &[CommandDescriptor] = &[
@@ -558,6 +561,13 @@ pub const DEFAULT_CATALOG: &[CommandDescriptor] = &[
         category: CommandCategory::View,
         shortcut: None,
         message: cmd_view_read,
+    },
+    CommandDescriptor {
+        id: CommandId("view.toggle-focus"),
+        title: "Toggle Focus Mode",
+        category: CommandCategory::View,
+        shortcut: None,
+        message: cmd_toggle_focus,
     },
 ];
 
