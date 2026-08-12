@@ -1,6 +1,7 @@
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
+use crate::command_palette::CommandPalette;
 use rutile_core::{
     AutosaveEntryV1, AutosaveError, AutosaveRecordOutcome, AutosaveStore, ChangeSet, Counts,
     DiskVersion, Document, Edit, EditError, EditPlan, EditTransaction, ExportError, ExportRequest,
@@ -12,8 +13,8 @@ use rutile_protocol::PreviewEventV1;
 use rutile_types::{DocumentId, InteractionId, Revision, SafeLinkTarget};
 
 use crate::actions::{
-    ActionError, ExportOutput, FindSession, FormatApplied, InsertApplied, ReplaceApplied,
-    SessionRestore,
+    ActionError, ActionRegistry, ExportOutput, FindSession, FormatApplied, InsertApplied,
+    ReplaceApplied, SessionRestore,
 };
 use crate::document_manager::{DocumentManager, DocumentSlot};
 
@@ -171,6 +172,21 @@ pub enum AppMessage {
     CloseTab {
         id: DocumentId,
     },
+    // --- Roadmap 06: command palette ---------------------------------------
+    /// Opens the command palette (clears any previous query).
+    OpenCommandPalette,
+    /// Closes the command palette.
+    CloseCommandPalette,
+    /// Updates the palette query and recomputes ranked candidates.
+    PaletteQueryChanged {
+        query: String,
+    },
+    /// Moves the palette selection down one row.
+    PaletteSelectNext,
+    /// Moves the palette selection up one row.
+    PaletteSelectPrev,
+    /// Dispatches the selected command and closes the palette.
+    PaletteSubmit,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -310,6 +326,9 @@ pub struct AppState {
     notices: Vec<UserNotice>,
     next_notice_id: usize,
     recents: RecentDocuments,
+    // Roadmap 06: command registry + palette interaction state.
+    registry: ActionRegistry,
+    palette: CommandPalette,
 }
 
 impl std::fmt::Debug for AppState {
@@ -323,6 +342,8 @@ impl std::fmt::Debug for AppState {
             .field("path", &slot.path)
             .field("notices", &self.notices)
             .field("recents", &self.recents)
+            .field("palette_open", &self.palette.is_open())
+            .field("registry_len", &self.registry.len())
             .finish()
     }
 }
@@ -374,6 +395,20 @@ impl AppState {
     /// Borrows the multi-document tab manager (roadmap 08).
     pub fn documents(&self) -> &DocumentManager {
         &self.documents
+    }
+    /// Borrows the command registry (roadmap 06).
+    pub fn registry(&self) -> &ActionRegistry {
+        &self.registry
+    }
+
+    /// Mutably borrows the command registry (for runtime platform commands).
+    pub fn registry_mut(&mut self) -> &mut ActionRegistry {
+        &mut self.registry
+    }
+
+    /// Borrows the command palette interaction state (roadmap 06).
+    pub fn palette(&self) -> &CommandPalette {
+        &self.palette
     }
 
     /// Pushes a new notice and returns a clone for immediate presentation.
@@ -734,6 +769,45 @@ impl AppState {
             AppMessage::CloseTab { id } => {
                 let _ = self.documents.close_tab(id);
                 vec![]
+            }
+            AppMessage::OpenCommandPalette => {
+                self.palette.open();
+                self.palette.set_query("", &self.registry);
+                vec![]
+            }
+            AppMessage::CloseCommandPalette => {
+                self.palette.close();
+                vec![]
+            }
+            AppMessage::PaletteQueryChanged { query } => {
+                self.palette.set_query(&query, &self.registry);
+                vec![]
+            }
+            AppMessage::PaletteSelectNext => {
+                self.palette.move_selection(1);
+                vec![]
+            }
+            AppMessage::PaletteSelectPrev => {
+                self.palette.move_selection(-1);
+                vec![]
+            }
+            AppMessage::PaletteSubmit => {
+                // Resolve the selected command's dispatch message against the
+                // current state, close the palette, then forward the message
+                // through the reducer so the transition is exercised exactly
+                // once by the single writer.
+                let dispatch: Option<AppMessage> = {
+                    let id = self.palette.selected_candidate().map(|c| c.id);
+                    id.and_then(|id| {
+                        let desc = self.registry.lookup(&id).copied()?;
+                        (desc.message)(self)
+                    })
+                };
+                self.palette.close();
+                match dispatch {
+                    Some(msg) => self.reduce(msg),
+                    None => vec![],
+                }
             }
         }
     }
