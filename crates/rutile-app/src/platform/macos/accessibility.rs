@@ -501,7 +501,8 @@ mod appkit {
         // SAFETY: every Objective-C object (here an NSView) is an `id`
         // (`AnyObject`); `NSView` and `AnyObject` are pointer types with an
         // identical object-pointer layout, so the reference cast is sound.
-        let element: &AnyObject = unsafe { &*std::ptr::from_ref::<NSView>(ns_view).cast::<AnyObject>() };
+        let element: &AnyObject =
+            unsafe { &*std::ptr::from_ref::<NSView>(ns_view).cast::<AnyObject>() };
         // SAFETY: `element` is a live NSView; the announcement notification
         // name and the userInfo `NSDictionary` are the documented argument
         // types for this AppKit function.

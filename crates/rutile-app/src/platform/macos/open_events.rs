@@ -263,7 +263,9 @@ pub fn update_recent_documents(paths: Vec<String>) {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
-    *recent_paths().lock().unwrap_or_else(std::sync::PoisonError::into_inner) = paths.clone();
+    *recent_paths()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = paths.clone();
 
     let app = NSApplication::sharedApplication(mtm);
     let Some(main_menu) = app.mainMenu() else {
@@ -307,7 +309,8 @@ pub fn update_recent_documents(paths: Vec<String>) {
     for (index, path) in paths.iter().enumerate() {
         let item = NSMenuItem::new(mtm);
         let display = std::path::Path::new(path)
-            .file_name().map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
+            .file_name()
+            .map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
         item.setTitle(&NSString::from_str(&display));
         item.setTag(index as isize);
         unsafe {
@@ -442,7 +445,9 @@ pub fn update_tabs(tab_id_values: Vec<u64>, tab_labels: Vec<String>, active_inde
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
-    *tab_ids().lock().unwrap_or_else(std::sync::PoisonError::into_inner) = tab_id_values;
+    *tab_ids()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = tab_id_values;
 
     let app = NSApplication::sharedApplication(mtm);
     let Some(main_menu) = app.mainMenu() else {
