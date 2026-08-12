@@ -401,6 +401,16 @@ impl AppState {
         Self::default()
     }
 
+    /// Syncs the active slot's revision to match the actual Document after
+    /// a recovery that reconstructed the Document via `Document::new` (which
+    /// resets revision to 0). Without this, edits after recovery would be
+    /// rejected as stale because the slot retains the old revision.
+    pub fn sync_active_revision(&mut self, revision: Revision) {
+        let slot = self.documents.active_slot_mut();
+        slot.revision = revision;
+        slot.preview = PreviewState::Waiting { revision };
+    }
+
     #[must_use]
     pub fn revision(&self) -> Revision {
         self.documents.active_slot().revision

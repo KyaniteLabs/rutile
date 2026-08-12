@@ -1269,6 +1269,10 @@ impl ProductSession {
         }
         self.core
             .set_document(Document::new(&text).map_err(|error| MacError::Core(error.to_string()))?);
+        // Sync the AppState slot to the fresh document's revision (0) so
+        // subsequent edits aren't rejected as stale by the reducer guard.
+        let fresh_revision = self.core.document().revision();
+        self.core.app_mut().sync_active_revision(fresh_revision);
         Ok(())
     }
 
