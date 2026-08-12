@@ -1012,7 +1012,7 @@ fn validate_metric_metadata(record: &MetricRecordV1) -> Result<(), ProtocolError
         || record.ram_bytes == 0
         || record.monitor_scale_milli == 0
         || record.monitor_refresh_millihz == 0
-        || !is_lower_hex(&record.git_commit, 40)
+        || !(is_lower_hex(&record.git_commit, 40) || is_lower_hex(&record.git_commit, 64))
         || !is_lower_hex(&record.candidate_executable_sha256, 64)
         || !is_lower_hex(&record.runner_lock_sha256, 64)
         || !is_lower_hex(&record.fixture_sha256, 64)

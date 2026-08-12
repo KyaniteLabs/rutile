@@ -64,6 +64,20 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "design_tokens"
+path = "fuzz_targets/design_tokens.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "chance_style"
+path = "fuzz_targets/chance_style.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]
 members = []
 
