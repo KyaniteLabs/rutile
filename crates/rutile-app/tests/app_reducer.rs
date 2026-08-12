@@ -1357,8 +1357,8 @@ fn palette_open_lists_all_default_commands() {
     assert!(!state.palette().is_open());
     state.reduce(AppMessage::OpenCommandPalette);
     assert!(state.palette().is_open());
-    // The default catalog ships 10 dispatchable commands.
-    assert_eq!(state.palette().candidates().len(), 10);
+    // The default catalog ships 11 dispatchable commands.
+    assert_eq!(state.palette().candidates().len(), 11);
 }
 
 #[test]
@@ -1483,5 +1483,71 @@ fn palette_can_switch_to_reading_view() {
     assert_eq!(state.palette().candidates()[0].id.0, "view.read-mode");
     state.reduce(AppMessage::PaletteSubmit);
     assert_eq!(state.mode(), rutile_app::app::DocumentMode::View);
+    assert!(!state.palette().is_open());
+}
+// --- Roadmap 10: focus mode ------------------------------------------------
+
+#[test]
+fn focus_defaults_off() {
+    let state = AppState::new();
+    assert!(!state.focused());
+}
+
+#[test]
+fn toggle_focus_flips_state() {
+    let mut state = AppState::new();
+    state.reduce(AppMessage::ToggleFocusMode);
+    assert!(state.focused());
+    state.reduce(AppMessage::ToggleFocusMode);
+    assert!(!state.focused());
+}
+
+#[test]
+fn focus_toggle_emits_no_effects() {
+    let mut state = AppState::new();
+    let effects = state.reduce(AppMessage::ToggleFocusMode);
+    assert!(
+        effects.is_empty(),
+        "focus toggle must not trigger render/autosave"
+    );
+}
+
+#[test]
+fn focus_is_orthogonal_to_view_mode() {
+    let mut state = AppState::new();
+    // Enter reading view, then focus — both flags coexist.
+    state.reduce(AppMessage::SetDocumentMode {
+        mode: rutile_app::app::DocumentMode::View,
+    });
+    state.reduce(AppMessage::ToggleFocusMode);
+    assert_eq!(state.mode(), rutile_app::app::DocumentMode::View);
+    assert!(state.focused());
+    // Switching mode does not clear focus.
+    state.reduce(AppMessage::SetDocumentMode {
+        mode: rutile_app::app::DocumentMode::Edit,
+    });
+    assert!(state.focused());
+    assert_eq!(state.mode(), rutile_app::app::DocumentMode::Edit);
+}
+
+#[test]
+fn focus_survives_tab_switch() {
+    let mut state = AppState::new();
+    state.reduce(AppMessage::ToggleFocusMode);
+    state.reduce(AppMessage::NewTab);
+    assert!(state.focused());
+}
+
+#[test]
+fn palette_can_toggle_focus() {
+    let mut state = AppState::new();
+    state.reduce(AppMessage::OpenCommandPalette);
+    state.reduce(AppMessage::PaletteQueryChanged {
+        query: "focus".into(),
+    });
+    assert_eq!(state.palette().candidates().len(), 1);
+    assert_eq!(state.palette().candidates()[0].id.0, "view.toggle-focus");
+    state.reduce(AppMessage::PaletteSubmit);
+    assert!(state.focused());
     assert!(!state.palette().is_open());
 }

@@ -206,6 +206,9 @@ pub enum AppMessage {
     SetDocumentMode {
         mode: DocumentMode,
     },
+    // --- Roadmap 10: focus mode --------------------------------------------
+    /// Toggles distraction-free focus mode (hides shell chrome).
+    ToggleFocusMode,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -350,6 +353,8 @@ pub struct AppState {
     palette: CommandPalette,
     // Roadmap 04: shell-level view mode.
     mode: DocumentMode,
+    // Roadmap 10: distraction-free focus flag (orthogonal to mode).
+    focused: bool,
 }
 
 impl std::fmt::Debug for AppState {
@@ -366,6 +371,7 @@ impl std::fmt::Debug for AppState {
             .field("palette_open", &self.palette.is_open())
             .field("registry_len", &self.registry.len())
             .field("mode", &self.mode)
+            .field("focused", &self.focused)
             .finish()
     }
 }
@@ -435,6 +441,10 @@ impl AppState {
     /// The shell-level view mode (roadmap 04).
     pub fn mode(&self) -> DocumentMode {
         self.mode
+    }
+    /// Whether distraction-free focus mode is active (roadmap 10).
+    pub fn focused(&self) -> bool {
+        self.focused
     }
 
     /// Pushes a new notice and returns a clone for immediate presentation.
@@ -837,6 +847,10 @@ impl AppState {
             }
             AppMessage::SetDocumentMode { mode } => {
                 self.mode = mode;
+                vec![]
+            }
+            AppMessage::ToggleFocusMode => {
+                self.focused = !self.focused;
                 vec![]
             }
         }
