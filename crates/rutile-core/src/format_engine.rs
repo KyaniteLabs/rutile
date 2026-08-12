@@ -641,7 +641,11 @@ fn parse_prefix(line: &str) -> Prefix {
 
     if let Some(len) = ordered_len(rest) {
         let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
-        let number: u64 = rest[..digits].parse().unwrap_or(0);
+        // Cap parsed digits at 18 to prevent u64 overflow on absurd markers
+        // (20+ digit numbers exceed u64::MAX). The cap is generous — real
+        // ordered lists never exceed single digits.
+        let parse_end = digits.min(18);
+        let number: u64 = rest[..parse_end].parse().unwrap_or(0);
         let delim = rest.as_bytes()[digits] as char;
         return Prefix::Ordered {
             number,
