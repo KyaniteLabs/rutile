@@ -1553,6 +1553,11 @@ impl ProductSession {
         // document's seed/type. This is the single chokepoint for all edits.
         let text = self.core.document().snapshot().to_string();
         self.core.app_mut().set_content_context(&text);
+        // L14: sync tasteroll CSS to the preview host so it's injected into
+        // every preview HTML response.
+        if let Ok(mut host) = self.preview_host.lock() {
+            host.set_tasteroll_css(self.core.app().taste().css());
+        }
         self.scheduler.submit(
             RenderRequest::new(
                 self.core.document().revision(),
