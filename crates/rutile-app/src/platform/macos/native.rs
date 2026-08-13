@@ -54,6 +54,7 @@ use crate::preview_host::{
     HostError, NavigationKind, PreviewControlSink, PreviewHost, SchemeRequest, SchemeResponse,
     ScrollDelivery,
 };
+use crate::tab_strip::{TabStripCommand, TabStripRow, project_tabs};
 use rutile_types::{InteractionId, Revision};
 
 const WINDOW_WIDTH: u32 = 1_000;
@@ -147,6 +148,7 @@ struct ProductRunner {
     // Wave 2M shell-integration state.
     find_bar: Option<FindBarView>,
     format_commands: Arc<Mutex<VecDeque<FormatCommand>>>,
+    tab_commands: Arc<Mutex<VecDeque<TabStripCommand>>>,
     last_autosave: Instant,
     pending_recovery: Option<RecoveredDocument>,
     pending_restore: Option<SessionRestore>,
@@ -179,6 +181,8 @@ impl ProductRunner {
         source_pane.set_event_queue(Arc::clone(&editor_events));
         let format_commands = Arc::new(Mutex::new(VecDeque::new()));
         source_pane.set_format_sink(Arc::clone(&format_commands));
+        let tab_commands = Arc::new(Mutex::new(VecDeque::new()));
+        source_pane.set_tab_sink(Arc::clone(&tab_commands));
         source_pane.update_counts(session.counts());
 
         // Crash-recovery + session-restore setup (never in smoke, which owns a
@@ -285,6 +289,7 @@ impl ProductRunner {
             compositor_resume_cycles: 0,
             find_bar: None,
             format_commands,
+            tab_commands,
             last_autosave: Instant::now(),
             pending_recovery,
             pending_restore,
@@ -587,20 +592,11 @@ impl ProductRunner {
         let active = docs.active_id();
         let active_index = tab_order.iter().position(|&id| id == active).unwrap_or(0);
 
-        let id_values: Vec<u64> = tab_order.iter().map(|id| id.get()).collect();
-        let labels: Vec<String> = tab_order
-            .iter()
-            .map(|id| {
-                docs.slot(*id)
-                    .and_then(|s| s.path.as_ref())
-                    .and_then(|p| p.file_name())
-                    .map_or_else(
-                        || "Untitled".to_owned(),
-                        |n| n.to_string_lossy().into_owned(),
-                    )
-            })
-            .collect();
-
+        let rows = project_tabs(docs);
+        let id_values: Vec<u64> = rows.iter().map(|row| row.id.get()).collect();
+        let labels: Vec<String> = rows.iter().map(TabStripRow::display_label).collect();
+        self.source_pane
+            .set_tabs(rows, self.session.app_state().focused());
         update_tabs(id_values, labels, active_index);
     }
 
@@ -744,6 +740,7 @@ impl ProductRunner {
                 if let Err(error) = install_view_menu() {
                     eprintln!("rutile: view menu install failed: {error}");
                 }
+                self.sync_tabs();
             }
             Err(error) => eprintln!("rutile: file menu install failed: {error}"),
         }
@@ -1017,6 +1014,33 @@ impl ProductRunner {
                 self.after_shared_edit(event_loop, &applied.changes, applied.selection_after);
             }
             Err(error) => self.surface_error(error.to_string()),
+        }
+    }
+
+    fn drain_tab_commands(&mut self, event_loop: &ActiveEventLoop) {
+        loop {
+            let command = self
+                .tab_commands
+                .lock()
+                .ok()
+                .and_then(|mut queue| queue.pop_front());
+            match command {
+                Some(TabStripCommand::Switch(id)) => {
+                    self.session.core_mut().reduce(AppMessage::SwitchTab { id });
+                    if let Err(error) = self.refresh_after_document_swap(event_loop) {
+                        self.fail(event_loop, error.to_string());
+                    }
+                    self.sync_tabs();
+                }
+                Some(TabStripCommand::Close(id)) => {
+                    if self.session.app_state().documents().len() <= 1 {
+                        continue;
+                    }
+                    let effects = self.session.core_mut().reduce(AppMessage::CloseTab { id });
+                    self.apply_tab_close_effects(event_loop, effects);
+                }
+                None => break,
+            }
         }
     }
 
@@ -2360,6 +2384,7 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
         // Toolbar button presses surface as queued format commands, not editor
         // edits, so drain them after every processed event.
         self.drain_format_commands(event_loop);
+        self.drain_tab_commands(event_loop);
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
@@ -2556,12 +2581,17 @@ struct SourceState {
     reading_seconds: u64,
     find_bar: Option<FindBarView>,
     format_sink: Option<Arc<Mutex<VecDeque<FormatCommand>>>>,
+    tab_sink: Option<Arc<Mutex<VecDeque<TabStripCommand>>>>,
+    tabs: Vec<TabStripRow>,
+    focused: bool,
 }
 
 #[derive(Clone, Debug)]
 enum SourceMessage {
     Edit(text_editor::Action),
     Format(FormatCommand),
+    SelectTab(rutile_types::DocumentId),
+    CloseTab(rutile_types::DocumentId),
 }
 
 /// Text-only, borderless toolbar button per DESIGN-SYSTEM ("text-only,
@@ -2641,6 +2671,9 @@ impl Program for SourceProgram {
                 reading_seconds: 0,
                 find_bar: None,
                 format_sink: None,
+                tab_sink: None,
+                tabs: Vec::new(),
+                focused: false,
             },
             Task::none(),
         )
@@ -2660,6 +2693,20 @@ impl Program for SourceProgram {
                     queue.push_back(command);
                 }
             }
+            SourceMessage::SelectTab(id) => {
+                if let Some(sink) = &state.tab_sink
+                    && let Ok(mut queue) = sink.lock()
+                {
+                    queue.push_back(TabStripCommand::Switch(id));
+                }
+            }
+            SourceMessage::CloseTab(id) => {
+                if let Some(sink) = &state.tab_sink
+                    && let Ok(mut queue) = sink.lock()
+                {
+                    queue.push_back(TabStripCommand::Close(id));
+                }
+            }
         }
         Task::none()
     }
@@ -2671,6 +2718,31 @@ impl Program for SourceProgram {
     ) -> core::Element<'a, Self::Message, Self::Theme, Self::Renderer> {
         let mut rows: Vec<core::Element<'a, Self::Message, Self::Theme, Self::Renderer>> =
             Vec::new();
+
+        if !state.focused && !state.tabs.is_empty() {
+            let mut buttons: Vec<core::Element<'a, Self::Message, Self::Theme, Self::Renderer>> =
+                Vec::new();
+            for row in &state.tabs {
+                let title = row.display_label();
+                buttons.push(
+                    iced_widget::button(iced_widget::text(title).size(CHROME_FONT_SIZE))
+                        .padding([2, 8])
+                        .style(chrome_button_style)
+                        .on_press(SourceMessage::SelectTab(row.id))
+                        .into(),
+                );
+                if row.close_enabled {
+                    buttons.push(
+                        iced_widget::button(iced_widget::text("×").size(CHROME_FONT_SIZE))
+                            .padding([2, 6])
+                            .style(chrome_button_style)
+                            .on_press(SourceMessage::CloseTab(row.id))
+                            .into(),
+                    );
+                }
+            }
+            rows.push(iced_widget::row(buttons).spacing(2).padding([2, 0]).into());
+        }
 
         if state.toolbar_visible {
             let mut buttons: Vec<core::Element<'a, Self::Message, Self::Theme, Self::Renderer>> =
@@ -2827,6 +2899,16 @@ impl IcedSourcePane {
 
     fn set_format_sink(&mut self, sink: Arc<Mutex<VecDeque<FormatCommand>>>) {
         self.state.format_sink = Some(sink);
+    }
+
+    fn set_tab_sink(&mut self, sink: Arc<Mutex<VecDeque<TabStripCommand>>>) {
+        self.state.tab_sink = Some(sink);
+    }
+
+    fn set_tabs(&mut self, tabs: Vec<TabStripRow>, focused: bool) {
+        self.state.tabs = tabs;
+        self.state.focused = focused;
+        self.request_redraw();
     }
 
     fn toggle_toolbar(&mut self) -> bool {
@@ -3076,6 +3158,20 @@ impl IcedSourcePane {
                         && let Ok(mut queue) = sink.lock()
                     {
                         queue.push_back(command);
+                    }
+                }
+                SourceMessage::SelectTab(id) => {
+                    if let Some(sink) = &self.state.tab_sink
+                        && let Ok(mut queue) = sink.lock()
+                    {
+                        queue.push_back(TabStripCommand::Switch(id));
+                    }
+                }
+                SourceMessage::CloseTab(id) => {
+                    if let Some(sink) = &self.state.tab_sink
+                        && let Ok(mut queue) = sink.lock()
+                    {
+                        queue.push_back(TabStripCommand::Close(id));
                     }
                 }
             }
