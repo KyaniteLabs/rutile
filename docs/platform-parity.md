@@ -1,9 +1,12 @@
 # Platform Parity — Intentional Asymmetries (M5, L8)
 
 > **Audit refs**: M5 (menu structure divergence), L8 (keyboard shortcut divergence).
-> macOS is the primary shipping platform. Linux-GTK (`linux_gtk.rs`) is CI-only
-> (`cfg(target_os="linux")`), exercised by the portable gate. The asymmetries
-> below are intentional design decisions, not bugs.
+> macOS is the primary shipping platform. Linux-GTK (`linux_gtk.rs`) is a real
+> native shell compiled only on Linux (`cfg(target_os="linux")`), exercised by
+> the lifecycle gate. Menu/shortcut differences below are either intentional
+> convention or an unimplemented chrome gap.
+>
+> Sequenced close-the-gap plan: [`docs/plan/linux-parity.md`](plan/linux-parity.md).
 
 ## Menu structure
 

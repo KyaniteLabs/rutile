@@ -1,9 +1,9 @@
 # Rutile Current-State Handoff
 
 > **Status: Current.** Reconciled 2026-08-13 against Forgejo `origin/main`
-> `ceed4cd1f1302295f79591893e229be9bb1dd0bf`. This file is the live
-> operational snapshot. Historical release and readiness receipts stay in
-> their dated handoffs.
+> `ffe720689ec1d9e430674fb7fed6103a80af8e87` (docs #119). GitHub mirror
+> `KyaniteLabs/rutile` `main` matches that SHA. Historical release and
+> readiness receipts stay in their dated handoffs.
 
 ## BLUF
 
@@ -25,7 +25,8 @@ shared tab data plane but no GTK tab chrome.
 |---|---|
 | Remote (authority) | `git.kyanitelabs.tech:simon/feathermark.git` (Forgejo `origin`) |
 | Branch | `main` |
-| Tip | `ceed4cd` — merge of PR #118 |
+| Tip | `ffe7206` — merge of PR #119 (docs). Product tip before that: #118 `ceed4cd` |
+| GitHub mirror | `KyaniteLabs/rutile` `main` = same SHA (verified 2026-08-13) |
 | Workspace / crate version | 0.2.2 |
 | Rust | 1.88.0, edition 2024 |
 | Frozen files | `crates/rutile-core/src/render.rs`, `security.rs`, `crates/rutile-types/src/safe_link.rs` |
@@ -59,8 +60,13 @@ After this reconciliation they should match.
 **Linux GTK**
 
 - Same reducer and `adopt_opened_document` / autosave inherit.
-- No Window tab menu and no GTK tab strip. `linux-gtk` cannot be compiled
-  on macOS (`compile_error`). That chrome is still an honest gap.
+- Real shell: GtkSourceView, Format menu, Find, Ctrl+S, HTML export, 50-cycle
+  Xvfb gate. `open_via_shared_command` exists.
+- Chrome holes: no tab strip/Window tabs, no palette, no View modes, no
+  Open/Save/Recents menus. Production `main.rs` discards the CLI path
+  (`let _ = path`).
+- `linux-gtk` cannot be compiled on macOS (`compile_error`). Do not land GTK
+  chrome from a Mac. Plan: `docs/plan/linux-parity.md`.
 
 **Evidence / xtask**
 
@@ -93,7 +99,7 @@ Audit closeout remains PRs #88–#106 (`docs/audit/2026-08-12-full-codebase-audi
 
 | Item | Why it is still open |
 |---|---|
-| Linux tab chrome | `linux-gtk` is Linux-only; not landed untested from this Mac |
+| Linux tab chrome | Sequenced in `docs/plan/linux-parity.md`; needs a Linux host |
 | D8 multi-tab session restore | Session still restores `last_file` only |
 | Parked-tab journal identity | Shared autosave journal; recovery is still highest-sequence, not one snapshot per tab |
 | GUI-stack unification | iced crates.io max 0.14.0 (objc2 0.5.x); wry 0.56.1 still objc2 0.6.x |
