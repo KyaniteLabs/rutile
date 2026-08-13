@@ -1,6 +1,7 @@
 # Publishing Presets and Print Workflow (Roadmap 09) — Design Decisions
 
-Status: **locked (contract implemented; HTML splice + native panel deferred)**.
+Status: **implemented (contract + export splice, PR #110).** Native print
+panel is still deferred.
 Parent issue: `.scratch/rutile-macos-roadmap/issues/09-publishing-presets-and-print-workflow.md`.
 Blocked by 02 (DONE), 03 (DONE).
 
@@ -65,9 +66,8 @@ Preset construction cannot fail (it clamps). Export failures propagate the
 existing `ExportError` through `AppMessage::SurfaceNotice`, exactly as save-as-
 HTML does today. No new error channel.
 
-### PP9 — HTML splice + native print panel deferred
+### PP9 — HTML splice shipped (PR #110); native print panel deferred
 
-The headless contract (preset data, print stylesheet, filename, built-ins,
-sanitization) is implemented and tested here. The integrator splice (inject +
-re-validate) and the native "Export…" panel are additive platform work, tracked
-separately — the contract is the source of truth either consumes.
+`AppState::export_html` injects `print_style_block()` before `</head>` and
+re-validates with `ExportPage::from_html`. A dedicated native print panel
+is still deferred.

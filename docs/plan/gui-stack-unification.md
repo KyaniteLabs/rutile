@@ -1,7 +1,9 @@
 # GUI-Stack Dependency Unification — retirement ticket for deny.toml `bans.skip`
 
-Status: **open** (tracked debt). Owner: supply-chain / platform.
-Raised by: ralplan `rutile-criticalpath-20260811` (node S), approved consensus plan.
+Status: **blocked (2026-08-13 spike).** Owner: supply-chain / platform.
+Raised by: ralplan `rutile-criticalpath-20260811` (node S). Honest artifact:
+[`docs/evidence/gui-stack-unification-2026-08-13.md`](../evidence/gui-stack-unification-2026-08-13.md)
+(PR #114). `deny.toml` `bans.skip` stays until a crates.io pin pair exists.
 
 ## Problem
 

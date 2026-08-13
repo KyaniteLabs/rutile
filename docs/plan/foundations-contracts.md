@@ -1,8 +1,9 @@
 # Foundations Contracts (node 03) — ActionRegistry + Preferences design spec
 
-Status: **design (to be locked before roadmap waves implement)**. ralplan
-`rutile-criticalpath-20260811`. Grounded in the current Elm-like reducer
-(`AppMessage`→`AppState::reduce`→`Vec<AppEffect>`, `crates/rutile-app/src/app.rs`).
+Status: **locked and implemented** (`ActionRegistry`, `DocumentId`,
+preferences). ralplan `rutile-criticalpath-20260811`. Grounded in the
+Elm-like reducer (`AppMessage`→`AppState::reduce`→`Vec<AppEffect>`,
+`crates/rutile-app/src/app.rs`).
 
 ## `DocumentId` — LOCKED (implemented)
 

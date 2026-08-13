@@ -228,3 +228,8 @@ with zero outstanding audit items.
 ### Final gate state:
 
 fmt ✓ · clippy (pedantic+nursery, zero warnings) ✓ · test (1107 tests, exit 0) ✓ · deny ✓ · audit ✓ · `cargo build --locked` ✓ (main `20c6d25`)
+
+## Later the same day (not audit findings)
+
+Table-stakes follow-ups #108–#118 are on `main` `ceed4cd`. See
+`docs/handoff/2026-08-13-tablestakes.md`. This audit snapshot is not rewritten.

@@ -1,7 +1,7 @@
 # Personal macOS Handoff Gate (Roadmap 15)
 
-Status: **defined — handoff contract documented; full attestation depends on
-roadmap 14 native probes**. Parent issue:
+Status: **defined — local unsigned build path is documented; full
+attestation still depends on roadmap 14 physical GUI probes.** Parent issue:
 `.scratch/rutile-macos-roadmap/issues/15-personal-macos-handoff-gate.md`.
 Blocked by 01 (DONE), 14 (defined; native probes pending).
 

@@ -1,6 +1,8 @@
 # Rutile / Rutile 0.2.0 — Release Handoff
 
-> **Status: Current release receipt.** This is an immutable release snapshot; live repository state is summarized in `docs/handoff/current-state.md`.
+> **Status: Historical 0.2.0 release receipt (immutable).** Live repository
+> state is `docs/handoff/current-state.md`. Do not treat these artifacts as
+> current production packages.
 
 > **Post-release audit annotation — 2026-07-12:** Keep the artifacts below as historical evidence only. The Linux packages were built with `test-control`, and both platform binaries embed absolute builder paths. Do not redistribute them; replace them with feature-clean, path-remapped, leak-audited builds.
 

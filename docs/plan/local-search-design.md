@@ -1,6 +1,7 @@
 # Local Search and Related Links (Roadmap 12) — Design Decisions
 
-Status: **design (locked signatures pending implementation)**. Parent issue:
+Status: **locked (in-memory contract implemented in `local_search.rs`;
+native search UI deferred).** Parent issue:
 `.scratch/rutile-macos-roadmap/issues/12-local-search-and-related-links.md`.
 Blocked by 03 (LOCKED), 08 (DONE).
 
