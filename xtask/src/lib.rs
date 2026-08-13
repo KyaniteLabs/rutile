@@ -20,6 +20,7 @@ pub mod native_smoke;
 pub mod package;
 pub mod package_smoke;
 pub mod provenance;
+pub mod quality_probes;
 pub mod readiness;
 pub mod readiness_keystone;
 pub mod release_authority;
@@ -138,6 +139,11 @@ pub mod cli {
         Readiness {
             #[command(subcommand)]
             command: ReadinessCommand,
+        },
+        /// Unsigned quality-probe catalog. Distinct from readiness attestation.
+        QualityProbes {
+            #[command(subcommand)]
+            command: QualityProbesCommand,
         },
     }
 
@@ -413,6 +419,16 @@ pub mod cli {
     }
 
     #[derive(Subcommand)]
+    pub enum QualityProbesCommand {
+        /// Emit an unsigned quality-probe bundle. Without a GUI, `attested` is
+        /// false and the process exits 0 when the catalog is well-formed.
+        Emit {
+            #[arg(long)]
+            out: PathBuf,
+        },
+    }
+
+    #[derive(Subcommand)]
     pub enum ReadinessCommand {
         /// Verify an externally-signed readiness attestation against the pinned
         /// independent trusted-verifier key and committed runner lock. Verifies
@@ -468,7 +484,8 @@ mod cli_parse_tests {
     use clap::Parser;
 
     use super::cli::{
-        Cli, Command, EvidenceCommand, PackageCommand, PackageSmokeKind, ReadinessCommand,
+        Cli, Command, EvidenceCommand, PackageCommand, PackageSmokeKind, QualityProbesCommand,
+        ReadinessCommand,
     };
 
     fn parse(args: &[&str]) -> Command {
@@ -531,6 +548,26 @@ mod cli_parse_tests {
             }
             ReadinessCommand::Verify { .. } => panic!("expected Publish variant"),
         }
+    }
+
+    #[test]
+    fn quality_probes_emit_parses_out() {
+        let Command::QualityProbes { command } =
+            parse(&["xtask", "quality-probes", "emit", "--out", "q.json"])
+        else {
+            panic!("expected QualityProbes command");
+        };
+        match command {
+            QualityProbesCommand::Emit { out } => {
+                assert_eq!(out, std::path::Path::new("q.json"));
+            }
+        }
+    }
+
+    #[test]
+    fn quality_probes_emit_rejects_missing_out() {
+        let message = fail(&["xtask", "quality-probes", "emit"]);
+        assert!(message.contains("--out"), "{message}");
     }
 
     #[test]

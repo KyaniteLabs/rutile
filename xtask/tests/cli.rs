@@ -193,6 +193,60 @@ fn evidence_validate_fails_closed_on_accessibility_source_mismatch() {
     );
 }
 
+#[test]
+fn quality_probes_emit_writes_unsigned_unattested_bundle() {
+    let root = tempdir().unwrap();
+    let out = root.path().join("quality-probes.json");
+    let output = xtask()
+        .args(["quality-probes", "emit", "--out"])
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "well-formed catalog must exit 0 without GUI: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("attested=false"), "{stdout}");
+    let value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+    assert_eq!(value["schema"], "rutile.quality-probe-bundle.v1");
+    assert_eq!(value["attested"], false);
+    assert_eq!(value["probes"].as_array().unwrap().len(), 14);
+    assert!(value.get("publication_authorized").is_none());
+    for probe in value["probes"].as_array().unwrap() {
+        assert_eq!(probe["state"], "unattested");
+        assert!(probe.get("passed").is_none());
+    }
+}
+
+#[test]
+fn quality_gate_doc_lists_every_emitted_probe_id() {
+    let doc = fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../docs/evidence/quality-evidence-gate.md"),
+    )
+    .unwrap();
+    let root = tempdir().unwrap();
+    let out = root.path().join("quality-probes.json");
+    assert!(
+        xtask()
+            .args(["quality-probes", "emit", "--out"])
+            .arg(&out)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+    assert!(doc.contains(value["schema"].as_str().unwrap()));
+    for probe in value["probes"].as_array().unwrap() {
+        let id = probe["id"].as_str().unwrap();
+        assert!(doc.contains(id), "quality-evidence-gate.md must list {id}");
+    }
+}
+
 fn metric_record() -> Vec<u8> {
     let mut bytes = serde_json::to_vec(&serde_json::json!({
         "schema":"rutile.metric.v1","v":1,"scenario":"paced-latency",
