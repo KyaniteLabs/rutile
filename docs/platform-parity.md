@@ -17,7 +17,7 @@ Native AppKit `NSMenu` hierarchy installed on the main menu bar:
 | Menu   | Items                                                          |
 |--------|----------------------------------------------------------------|
 | File   | Open… ⌘O, Open Recent ▸, Save ⌘S, Save As… ⇧⌘S, Close ⌘W     |
-| View   | Editor ⌃⌘1, Split ⌃⌘2, Reading ⃰⌘3                            |
+| View   | Editor ⌃⌘1, Split ⌃⌘2, Reading ⌃⌘3                            |
 | Window | New Tab ⌘T, Close Tab ⌃⌘W, Command Palette… ⇧⌘P, Tabs ▸      |
 
 **No Format menu**: formatting on macOS is driven by the command palette
@@ -35,11 +35,11 @@ GTK `GtkMenuBar` hierarchy:
 | Format | Bold Ctrl+B, Italic Ctrl+I, Link Ctrl+K, Inline Code Ctrl+E, Code Block Ctrl+Shift+C, Cycle Heading Ctrl+Shift+H, Quote Ctrl+Shift+Q, Bullet List Ctrl+Shift+U, Numbered List Ctrl+Shift+O, Checklist Ctrl+Shift+L, Smart New Line Enter |
 | View   | Formatting Toolbar (toggle)                                                   |
 
-**No Open/Save/Save As/Close menu items**: Linux-GTK is a CI-only build.
-File I/O is tested through the session/autosave contracts and the
-functional test windows (save, reopen, scroll, inspect), not through
-menu-driven flows. Adding these menus would require wiring native file
-dialogs through GTK, which is out of scope for a CI-only target.
+**No Open/Save/Save As/Close menu items**: Linux-GTK is a real product
+shell, but File chrome lagged while table-stakes landed on macOS.
+Ctrl+S and HTML export exist today. File Open / Save / Save As / Close
+and the discarded CLI path are the first Linux-host PRs in
+[`docs/plan/linux-parity.md`](plan/linux-parity.md).
 
 **No New Tab / Command Palette / View Modes**: the shared reducer owns
 tabs, palette, and view mode. macOS paints them (Iced strip, `NSPanel`,
@@ -47,8 +47,8 @@ View menu). Linux-GTK still has no Window tab menu, no GTK strip, and no
 palette panel. That is an unimplemented Linux chrome gap, not a second
 tab model.
 
-**No Open Recent submenu**: the recent-documents list is managed by
-`NSDocumentController` on macOS. GTK has no equivalent in the CI build.
+**No Open Recent submenu**: macOS uses `NSDocumentController`. Linux recents
+are **P2** in the parity plan (`RecentDocuments` already exists in core).
 
 ## Keyboard shortcuts
 

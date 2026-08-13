@@ -46,6 +46,7 @@ The authoritative current-state documents are:
 
 - [`docs/handoff/current-state.md`](docs/handoff/current-state.md) — live repository, release, platform, and debt status.
 - [`docs/handoff/2026-08-13-tablestakes.md`](docs/handoff/2026-08-13-tablestakes.md) — table-stakes closeout (PRs #108–#118).
+- [`docs/plan/linux-parity.md`](docs/plan/linux-parity.md) — Linux daily-driver chrome sequence (P0 File/CLI, P1 tabs, P2 view/palette).
 - [`docs/architecture.md`](docs/architecture.md) — implemented architecture and ownership boundaries.
 - [`docs/handoff/local-beta-0.2.0.md`](docs/handoff/local-beta-0.2.0.md) — immutable 0.2.0 release receipts and artifact hashes.
 - [`docs/evidence/local-beta-0.2.0/`](docs/evidence/local-beta-0.2.0/) — checked-in verification evidence.

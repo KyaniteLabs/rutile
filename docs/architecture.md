@@ -1,6 +1,6 @@
 # Rutile Architecture
 
-> **Status: Current.** Verified against `main` `ceed4cd` on 2026-08-13. Product and technical naming are unified as Rutile (crates, the `rutile` binary, the `rutile://` scheme, and bundle identifiers). Workspace version is **0.2.2**.
+> **Status: Current.** Verified against `main` `f569859` on 2026-08-13 (product tip still #118 `ceed4cd`; #119–#120 are docs). Product and technical naming are unified as Rutile (crates, the `rutile` binary, the `rutile://` scheme, and bundle identifiers). Workspace version is **0.2.2**.
 
 ## BLUF
 
@@ -67,8 +67,8 @@ The render scheduler coalesces work and discards stale completions. Platform she
 - GTK3 owns the application/window lifecycle.
 - GtkSourceView owns source editing and Markdown syntax staining.
 - Wry embeds WebKitGTK in the GTK layout.
-- The production CLI currently does not pass a positional document path into the GTK application.
-- Tab *data* is shared; there is no GTK tab strip or Window tab menu yet.
+- The production CLI currently discards a positional document path (`let _ = path` in `main.rs`).
+- Tab *data* is shared; there is no GTK tab strip, File Open menu, palette, or View modes yet. Sequence: [`plan/linux-parity.md`](plan/linux-parity.md) (P0 File/CLI → P1 strip → P2 view/palette). Land only on a Linux host.
 - The checked-in lifecycle gate proves 50 X11/Xvfb ready/close cycles; native Wayland remains evidence debt.
 
 ## Preview and security boundary

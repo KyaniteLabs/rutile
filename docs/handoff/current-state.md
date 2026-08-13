@@ -1,9 +1,10 @@
 # Rutile Current-State Handoff
 
 > **Status: Current.** Reconciled 2026-08-13 against Forgejo `origin/main`
-> `ffe720689ec1d9e430674fb7fed6103a80af8e87` (docs #119). GitHub mirror
-> `KyaniteLabs/rutile` `main` matches that SHA. Historical release and
-> readiness receipts stay in their dated handoffs.
+> `f569859db41c3096c600485d98ef0f2eb0b239bd` (docs #120). GitHub mirror
+> `KyaniteLabs/rutile` `main` matches that SHA (live API + origin/main
+> ls-tree, not `merged:true`). Historical release and readiness receipts
+> stay in their dated handoffs.
 
 ## BLUF
 
@@ -17,7 +18,8 @@ harness, per-tab autosave inherit, File Open into a tab, and active-tab ink.
 This is **not** a public release. `publication_authorized` remains false.
 Native VoiceOver / idle-soak probes remain `attested: false`. GUI-stack
 unification is blocked (no crates.io iced+wry objc2 pair). Linux has the
-shared tab data plane but no GTK tab chrome.
+shared tab data plane but no GTK tab chrome. Sequence:
+`docs/plan/linux-parity.md`.
 
 ## Repository
 
@@ -25,8 +27,8 @@ shared tab data plane but no GTK tab chrome.
 |---|---|
 | Remote (authority) | `git.kyanitelabs.tech:simon/feathermark.git` (Forgejo `origin`) |
 | Branch | `main` |
-| Tip | `ffe7206` — merge of PR #119 (docs). Product tip before that: #118 `ceed4cd` |
-| GitHub mirror | `KyaniteLabs/rutile` `main` = same SHA (verified 2026-08-13) |
+| Tip | `f569859` — merge of PR #120 (Linux parity plan). Product tip: #118 `ceed4cd` |
+| GitHub mirror | `KyaniteLabs/rutile` `main` = same SHA (re-verified after #120) |
 | Workspace / crate version | 0.2.2 |
 | Rust | 1.88.0, edition 2024 |
 | Frozen files | `crates/rutile-core/src/render.rs`, `security.rs`, `crates/rutile-types/src/safe_link.rs` |
@@ -91,6 +93,8 @@ After this reconciliation they should match.
 | #116 | Inherit autosave store onto every tab |
 | #117 | File Open parks/swaps (D4) |
 | #118 | Active tab painted in full ink |
+| #119 | Living docs reconciled to #108–#118 (S+ README, AGENTS crate names) |
+| #120 | `docs/plan/linux-parity.md` + AGENTS Linux-host rule |
 
 Audit closeout remains PRs #88–#106 (`docs/audit/2026-08-12-full-codebase-audit.md`,
 `docs/handoff/2026-08-13-splus-complete.md`).
@@ -133,9 +137,11 @@ cargo run --bin rutile --features macos-shell
 |---|---|
 | This snapshot | `docs/handoff/current-state.md` |
 | Table-stakes closeout | `docs/handoff/2026-08-13-tablestakes.md` |
+| Linux daily-driver plan | `docs/plan/linux-parity.md` |
 | Audit closeout (historical same-day) | `docs/handoff/2026-08-13-splus-complete.md` |
 | Architecture | `docs/architecture.md` |
 | Platform asymmetries | `docs/platform-parity.md` |
+| CI / release contract | `docs/evidence/ci-release-policy.md` |
 | Quality probes | `docs/evidence/quality-evidence-gate.md` |
 | GUI-stack spike | `docs/evidence/gui-stack-unification-2026-08-13.md` |
 | 0.2.0 release receipt (immutable) | `docs/handoff/local-beta-0.2.0.md` |
