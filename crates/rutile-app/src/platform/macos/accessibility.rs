@@ -57,7 +57,7 @@ use crate::brand::{PRODUCT_NAME, SOURCE_EDITOR_LABEL, status_title};
 /// owned by `NSWindow`; the group is the content view). They are exercised by
 /// the test suite and the `AppKit` role mapping, and are allowed dead in the
 /// non-test library build where no pure node carries them.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum AxRole {
     /// `AXWindow` — the top-level window.
     #[allow(dead_code)]
@@ -94,7 +94,7 @@ impl AxRole {
 /// `AxUiState::editor_text`, clamped by the caller. Advisory only — see the
 /// module-level residual (INV-3): without real `NSTextStorage`, `VoiceOver` may
 /// not honor per-character caret movement driven from the AT side.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct AxSelection {
     /// Inclusive start byte offset into the editor text.
     pub location: usize,
@@ -118,7 +118,7 @@ impl AxSelection {
 /// AX label semantics (`Find`/`Replace`) so the pure model does not depend on
 /// the native runner. `native.rs` maps `FindField::Query → AxFindField::Find`
 /// and `FindField::Replace → AxFindField::Replace` when building the snapshot.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub enum AxFindField {
     /// The "Find" / query field (mirrors `native::FindField::Query`).
     #[default]
@@ -145,7 +145,7 @@ pub struct AxFindBar {
 }
 
 /// Spoken-announcement priority, mapped from the reducer's `NoticeSeverity`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum AxAnnouncementPriority {
     /// Polite/low priority (background information).
     Low,
@@ -170,7 +170,7 @@ impl AxAnnouncementPriority {
 /// A spoken announcement to post via
 /// `NSAccessibilityAnnouncementRequestedNotification`. Not a tree child — it
 /// is passed through the state as a side-channel consumed by the `AppKit` wiring.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct AxAnnouncement {
     /// The reducer-owned notice id, used by `native.rs` as a shell-local dedup
     /// cursor (mirrors the `window_title` dedup). Stored here so the wiring
@@ -190,7 +190,7 @@ pub struct AxAnnouncement {
 /// `title` → `AXTitle`, `label` → `AXDescription`/`AXLabel`,
 /// `value` → `AXValue`, `focused` → `AXFocused`, `selection` →
 /// `AXSelectedTextRange`.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct AxNode {
     pub role: AxRole,
     /// The announced title (maps to `accessibilityTitle`). Used for buttons.
@@ -276,7 +276,7 @@ pub struct AxUiState {
 
 /// Pure accessibility description of the Rutile window. Built from a UI
 /// snapshot and consumed both by the headless tests and by the `AppKit` wiring.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct MacAccessibilityState {
     /// The window title `VoiceOver` should announce (`PRODUCT_NAME`, or
     /// `"{PRODUCT_NAME} — {status}"` when a status/notice is active). The

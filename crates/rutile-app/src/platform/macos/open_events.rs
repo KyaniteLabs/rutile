@@ -153,6 +153,8 @@ define_class!(
         #[unsafe(method(menuOpenRecent:))]
         fn menu_open_recent(&self, sender: Option<&AnyObject>) {
             if let Some(sender) = sender {
+                // SAFETY: AppKit passes a valid NSMenuItem as `sender`; reading
+                // its `tag` property via `msg_send!` is sound.
                 let tag: isize = unsafe { msg_send![sender, tag] };
                 let index = tag as usize;
                 if let Some(path) = recent_paths().lock().ok().and_then(|p| p.get(index).cloned()) {
@@ -177,6 +179,8 @@ define_class!(
         #[unsafe(method(menuSwitchTab:))]
         fn menu_switch_tab(&self, sender: Option<&AnyObject>) {
             if let Some(sender) = sender {
+                // SAFETY: AppKit passes a valid NSMenuItem as `sender`; reading
+                // its `tag` property via `msg_send!` is sound.
                 let tag: isize = unsafe { msg_send![sender, tag] };
                 if let Ok(mut g) = pending_switch().lock() {
                     *g = Some(tag as usize);
@@ -204,7 +208,13 @@ define_class!(
 );
 
 fn menu_target() -> &'static Retained<MenuTarget> {
-    MENU_TARGET.get_or_init(|| unsafe { msg_send![MenuTarget::alloc(), init] })
+    MENU_TARGET.get_or_init(|| {
+        // SAFETY: `MenuTarget::alloc()` returns a valid, uninitialized object
+        // from the NSObject allocator. `init` on a freshly-allocated NSObject
+        // subclass is sound and returns the same pointer; the `Retained` is
+        // held in a `OnceLock` for the app lifetime.
+        unsafe { msg_send![MenuTarget::alloc(), init] }
+    })
 }
 
 /// Installs a File menu with Open / Save / Save As / Close actions that wake the
@@ -222,6 +232,9 @@ pub fn install_file_menu_with_actions() -> Result<(), String> {
     let open_item = NSMenuItem::new(mtm);
     open_item.setTitle(&NSString::from_str("Open…"));
     open_item.setKeyEquivalent(&NSString::from_str("o"));
+    // SAFETY: `open_item` is a freshly allocated NSMenuItem; `target` is a
+    // live `Retained<MenuTarget>` held in a `OnceLock`. `setTarget:` and
+    // `setAction:` with a well-formed selector are sound on any NSMenuItem.
     unsafe {
         open_item.setTarget(Some(&***target));
         open_item.setAction(Some(sel!(menuOpen:)));
@@ -252,6 +265,7 @@ pub fn install_file_menu_with_actions() -> Result<(), String> {
         let item = NSMenuItem::new(mtm);
         item.setTitle(&NSString::from_str(title));
         item.setKeyEquivalent(&NSString::from_str(key));
+        // SAFETY: same menu wiring pattern as the Open item above.
         unsafe {
             item.setTarget(Some(&***target));
             item.setAction(Some(action));
@@ -327,6 +341,7 @@ pub fn update_recent_documents(paths: Vec<String>) {
             .map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
         item.setTitle(&NSString::from_str(&display));
         item.setTag(index as isize);
+        // SAFETY: same menu wiring pattern as the Open item.
         unsafe {
             item.setTarget(Some(&***target));
             item.setAction(Some(sel!(menuOpenRecent:)));
@@ -338,6 +353,7 @@ pub fn update_recent_documents(paths: Vec<String>) {
     let clear_item = NSMenuItem::new(mtm);
     clear_item.setTitle(&NSString::from_str("Clear Menu"));
     clear_item.setKeyEquivalent(&NSString::from_str(""));
+    // SAFETY: same menu wiring pattern as the Open item.
     unsafe {
         clear_item.setTarget(Some(&***target));
         clear_item.setAction(Some(sel!(menuClearRecents:)));
@@ -367,6 +383,7 @@ pub fn install_window_menu() -> Result<(), String> {
     let new_tab = NSMenuItem::new(mtm);
     new_tab.setTitle(&NSString::from_str("New Tab"));
     new_tab.setKeyEquivalent(&NSString::from_str("t"));
+    // SAFETY: same menu wiring pattern as File menu items.
     unsafe {
         new_tab.setTarget(Some(&***target));
         new_tab.setAction(Some(sel!(menuNewTab:)));
@@ -390,6 +407,7 @@ pub fn install_window_menu() -> Result<(), String> {
     let palette = NSMenuItem::new(mtm);
     palette.setTitle(&NSString::from_str("Command Palette…"));
     palette.setKeyEquivalent(&NSString::from_str("P"));
+    // SAFETY: same menu wiring pattern as File menu items.
     unsafe {
         palette.setTarget(Some(&***target));
         palette.setAction(Some(sel!(menuCommandPalette:)));
@@ -441,6 +459,8 @@ pub fn install_view_menu() -> Result<(), String> {
         let item = NSMenuItem::new(mtm);
         item.setTitle(&NSString::from_str(title));
         item.setKeyEquivalent(&NSString::from_str(key));
+        // SAFETY: freshly allocated NSMenuItem; the modifier mask and
+        // target/action setters follow the same pattern as Close Tab.
         unsafe {
             let _: () = msg_send![&item, setKeyEquivalentModifierMask: MASK_CONTROL_COMMAND];
             item.setTarget(Some(&***target));
@@ -515,6 +535,9 @@ pub fn update_tabs(tab_id_values: Vec<u64>, tab_labels: Vec<String>, active_inde
         item.setTitle(&NSString::from_str(label));
         item.setTag(index as isize);
         let state: isize = isize::from(index == active_index);
+        // SAFETY: freshly allocated NSMenuItem; `setState:` sets the
+        // on/off/mixed indicator (standard AppKit API). Same target/action
+        // pattern as all other menu items.
         unsafe {
             let _: () = msg_send![&item, setState: state];
             item.setTarget(Some(&***target));

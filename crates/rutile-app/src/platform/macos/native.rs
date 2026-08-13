@@ -114,6 +114,10 @@ struct ProductRunner {
     web_context: Option<WebContext>,
     window: Option<Arc<Window>>,
     last_announced_notice_id: Option<usize>,
+    /// Content hash of the last published AX tree (M14). Skips redundant
+    /// `publish_to_window` calls when the accessibility state is unchanged
+    /// between frames.
+    last_ax_hash: Option<u64>,
     window_title: Option<String>,
     session: ProductSession,
     preview_host: Arc<Mutex<PreviewHost>>,
@@ -247,6 +251,7 @@ impl ProductRunner {
 
         Ok(Self {
             webview: None,
+            last_ax_hash: None,
             web_context: Some(WebContext::new(None)),
             window: None,
             last_announced_notice_id: None,
@@ -587,39 +592,59 @@ impl ProductRunner {
             announcement,
         };
         let state = super::MacAccessibilityState::from_ui(&ui);
+        // M14: compute a content hash to skip redundant AppKit calls when the
+        // accessibility tree has not changed since the last successful publish.
+        // The common case is idle reading: the editor text, toolbar, find bar,
+        // and announcements are all unchanged, yet the redraw path still calls
+        // publish_accessibility every frame.
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        state.hash(&mut hasher);
+        let ax_hash = hasher.finish();
+        let hash_unchanged = self.last_ax_hash == Some(ax_hash);
         let published = match self.window.as_deref() {
             // No window yet (early frames before WindowEvent::Resumed). Leave
             // the announcement cursor untouched so the first notice is
             // announced once the window is live.
             None => false,
             Some(window) => {
-                // SAFETY / defensive: every failure path returns Err and is
-                // discarded below.
-                #[cfg(target_os = "macos")]
-                {
-                    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-                    let raw = match window.window_handle() {
-                        Ok(handle) => handle,
-                        Err(_) => return,
-                    };
-                    let RawWindowHandle::AppKit(appkit) = raw.as_raw() else {
-                        return;
-                    };
-                    super::accessibility::publish_to_window(&appkit, &state).is_ok()
-                }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    let _ = window;
+                // M14: skip the expensive AppKit element rebuild when the
+                // accessibility state is unchanged since the last frame.
+                if hash_unchanged {
                     false
+                } else {
+                    // SAFETY / defensive: every failure path returns Err and is
+                    // discarded below.
+                    #[cfg(target_os = "macos")]
+                    {
+                        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                        let raw = match window.window_handle() {
+                            Ok(handle) => handle,
+                            Err(_) => return,
+                        };
+                        let RawWindowHandle::AppKit(appkit) = raw.as_raw() else {
+                            return;
+                        };
+                        super::accessibility::publish_to_window(&appkit, &state).is_ok()
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        let _ = window;
+                        false
+                    }
                 }
             }
         };
         let _ = state;
-        // Advance the dedup cursor only after a successful publish so a wiring
-        // failure retries on the next frame. `pending_notice_id` is a Copy
-        // `Option<usize>`, so it does not alias the window borrow above.
-        if published && let Some(notice_id) = pending_notice_id {
-            self.last_announced_notice_id = Some(notice_id);
+        // Advance the dedup cursor and AX hash only after a successful publish
+        // so a wiring failure retries on the next frame. `pending_notice_id`
+        // is a Copy `Option<usize>`, so it does not alias the window borrow
+        // above.
+        if published {
+            self.last_ax_hash = Some(ax_hash);
+            if let Some(notice_id) = pending_notice_id {
+                self.last_announced_notice_id = Some(notice_id);
+            }
         }
     }
 
