@@ -5,18 +5,21 @@
 //! independent document authorities: adapters perform effects, the core owns
 //! [`AppState`] and [`Document`].
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use rutile_core::{DiskVersion, Document, DocumentSnapshot};
 
-use crate::app::{AppEffect, AppMessage, AppState, PreviewState};
+use crate::app::{AppEffect, AppMessage, AppState, CloseDecision, PreviewState};
 use crate::app::{NoticeSeverity, UserNotice};
-use rutile_types::Revision;
+use rutile_types::{DocumentId, Revision};
 
 /// Sole `AppState` / `Document` authority for one open document.
 pub struct DocumentSessionCore {
     app: AppState,
     document: Document,
+    /// Parked ropes for inactive tabs. Path/dirty/revision stay on `DocumentSlot`.
+    parked: HashMap<DocumentId, Document>,
     /// Generation of the latest open request. Completions with a mismatched
     /// generation are ignored so stale async opens cannot roll state backward.
     open_generation: u64,
@@ -32,6 +35,7 @@ impl DocumentSessionCore {
         Ok(Self {
             app,
             document,
+            parked: HashMap::new(),
             open_generation: 0,
         })
     }
@@ -48,6 +52,7 @@ impl DocumentSessionCore {
         Self {
             app,
             document,
+            parked: HashMap::new(),
             open_generation: 0,
         }
     }
@@ -55,10 +60,11 @@ impl DocumentSessionCore {
     /// Builds a core from an already-constructed document and app state
     /// (used when the platform has already driven the open reducer).
     #[must_use]
-    pub const fn from_parts(app: AppState, document: Document) -> Self {
+    pub fn from_parts(app: AppState, document: Document) -> Self {
         Self {
             app,
             document,
+            parked: HashMap::new(),
             open_generation: 0,
         }
     }
@@ -132,8 +138,76 @@ impl DocumentSessionCore {
         generation == self.open_generation
     }
 
+    fn empty_document() -> Document {
+        Document::new("").expect("empty document is always within MAX_DOCUMENT_BYTES")
+    }
+
+    fn park_active(&mut self) {
+        let id = self.app.documents().active_id();
+        let current = std::mem::replace(&mut self.document, Self::empty_document());
+        self.parked.insert(id, current);
+    }
+
+    fn load_active(&mut self) {
+        let id = self.app.documents().active_id();
+        self.document = self.parked.remove(&id).unwrap_or_else(Self::empty_document);
+    }
+
     pub fn reduce(&mut self, message: AppMessage) -> Vec<AppEffect> {
-        self.app.reduce(message)
+        match message {
+            AppMessage::NewTab => {
+                self.park_active();
+                let effects = self.app.reduce(AppMessage::NewTab);
+                self.load_active();
+                effects
+            }
+            AppMessage::SwitchTab { id } => {
+                if id == self.app.documents().active_id() {
+                    return vec![];
+                }
+                self.park_active();
+                let effects = self.app.reduce(AppMessage::SwitchTab { id });
+                self.load_active();
+                effects
+            }
+            AppMessage::CloseTab { id } => {
+                if self.app.documents().len() <= 1 {
+                    return vec![];
+                }
+                let was_active = id == self.app.documents().active_id();
+                let effects = self.app.reduce(AppMessage::CloseTab { id });
+                if effects
+                    .iter()
+                    .any(|effect| matches!(effect, AppEffect::RequestTabCloseDecision { .. }))
+                {
+                    return effects;
+                }
+                self.parked.remove(&id);
+                if was_active {
+                    self.load_active();
+                }
+                effects
+            }
+            AppMessage::TabCloseDecided {
+                id,
+                decision: CloseDecision::Discard,
+            } => {
+                if self.app.documents().len() <= 1 {
+                    return vec![];
+                }
+                let was_active = id == self.app.documents().active_id();
+                let effects = self.app.reduce(AppMessage::TabCloseDecided {
+                    id,
+                    decision: CloseDecision::Discard,
+                });
+                self.parked.remove(&id);
+                if was_active {
+                    self.load_active();
+                }
+                effects
+            }
+            other => self.app.reduce(other),
+        }
     }
 
     pub fn surface_notice(
@@ -203,5 +277,30 @@ mod tests {
                 .any(|e| matches!(e, AppEffect::PerformOpen { .. }))
         );
         assert_eq!(core.open_generation(), generation);
+    }
+
+    #[test]
+    fn new_tab_and_switch_restore_distinct_ropes() {
+        let mut core = DocumentSessionCore::new_in_memory("alpha").unwrap();
+        let first = core.app().documents().active_id();
+        let _ = core.reduce(AppMessage::NewTab);
+        assert_eq!(core.document().snapshot().to_string(), "");
+        core.set_document(Document::new("beta").unwrap());
+        let second = core.app().documents().active_id();
+        assert_ne!(first, second);
+        let _ = core.reduce(AppMessage::SwitchTab { id: first });
+        assert_eq!(core.document().snapshot().to_string(), "alpha");
+        let _ = core.reduce(AppMessage::SwitchTab { id: second });
+        assert_eq!(core.document().snapshot().to_string(), "beta");
+    }
+
+    #[test]
+    fn last_tab_close_is_a_noop() {
+        let mut core = DocumentSessionCore::new_in_memory("only").unwrap();
+        let id = core.app().documents().active_id();
+        let effects = core.reduce(AppMessage::CloseTab { id });
+        assert!(effects.is_empty());
+        assert_eq!(core.document().snapshot().to_string(), "only");
+        assert_eq!(core.app().documents().len(), 1);
     }
 }

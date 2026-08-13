@@ -189,6 +189,11 @@ pub enum AppMessage {
     CloseTab {
         id: DocumentId,
     },
+    /// Completes a tab-scoped dirty-close prompt (D7). Never quits the app.
+    TabCloseDecided {
+        id: DocumentId,
+        decision: CloseDecision,
+    },
     // --- Roadmap 06: command palette ---------------------------------------
     /// Opens the command palette (clears any previous query).
     OpenCommandPalette,
@@ -269,6 +274,10 @@ pub enum AppEffect {
     /// Full authoritative editor/preview mirror resync after an incremental failure.
     PerformMirrorResync,
     RequestCloseDecision,
+    /// Prompt Save / Don't Save / Cancel for one tab. Never quits the window.
+    RequestTabCloseDecision {
+        id: DocumentId,
+    },
     QuitApplication,
 }
 
@@ -909,9 +918,36 @@ impl AppState {
                 vec![]
             }
             AppMessage::CloseTab { id } => {
+                if self.documents.len() <= 1 {
+                    return vec![];
+                }
+                if self.documents.slot(id).is_some_and(|slot| slot.dirty) {
+                    return vec![AppEffect::RequestTabCloseDecision { id }];
+                }
                 let _ = self.documents.close_tab(id);
                 vec![]
             }
+            AppMessage::TabCloseDecided { id, decision } => match decision {
+                CloseDecision::Cancel => vec![],
+                CloseDecision::Discard => {
+                    if self.documents.len() <= 1 {
+                        return vec![];
+                    }
+                    let _ = self.documents.close_tab(id);
+                    vec![]
+                }
+                CloseDecision::Save { untitled_path } => {
+                    let path = self
+                        .documents
+                        .slot(id)
+                        .and_then(|slot| slot.path.clone())
+                        .or(untitled_path);
+                    match path {
+                        Some(path) => vec![AppEffect::PerformSave { path }],
+                        None => vec![AppEffect::RequestTabCloseDecision { id }],
+                    }
+                }
+            },
             AppMessage::OpenCommandPalette => {
                 self.palette.open();
                 self.palette.set_query("", &self.registry);

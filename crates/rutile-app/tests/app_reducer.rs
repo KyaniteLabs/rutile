@@ -1,5 +1,7 @@
 use rutile_app::actions::ActionError;
-use rutile_app::app::{AppEffect, AppMessage, AppState, NoticeSeverity, PreviewState};
+use rutile_app::app::{
+    AppEffect, AppMessage, AppState, CloseDecision, NoticeSeverity, PreviewState,
+};
 use rutile_core::{
     AutosaveRecordOutcome, AutosaveStore, ChangeSet, Document, EditError, EditPlanError,
     ExternalResolution, FileService, FindDirection, FindQuery, FormatCommand, LocalFileService,
@@ -1457,6 +1459,31 @@ fn close_tab_removes_and_reseeds() {
     });
     // At least one tab must remain
     assert!(!state.documents().is_empty());
+}
+
+#[test]
+fn dirty_close_tab_requests_decision_and_does_not_quit() {
+    let mut state = AppState::new();
+    state.reduce(AppMessage::NewTab);
+    let id = state.documents().active_id();
+    state.reduce(AppMessage::DocumentEdited {
+        revision: Revision::new(1),
+    });
+    let effects = state.reduce(AppMessage::CloseTab { id });
+    assert_eq!(effects, vec![AppEffect::RequestTabCloseDecision { id }]);
+    assert_eq!(state.documents().len(), 2);
+    let cancel = state.reduce(AppMessage::TabCloseDecided {
+        id,
+        decision: CloseDecision::Cancel,
+    });
+    assert!(cancel.is_empty());
+    assert_eq!(state.documents().len(), 2);
+    let discard = state.reduce(AppMessage::TabCloseDecided {
+        id,
+        decision: CloseDecision::Discard,
+    });
+    assert!(discard.is_empty());
+    assert_eq!(state.documents().len(), 1);
 }
 // --- Roadmap 06: command palette reducer integration ----------------------
 
