@@ -179,6 +179,20 @@ impl DocumentManager {
         self.slots.is_empty()
     }
 
+    /// Clones the window autosave store onto every open slot.
+    ///
+    /// The store is a directory handle. Every tab must hold a clone so New Tab
+    /// and closing the originally-bound slot cannot unbind crash recovery.
+    pub fn bind_autosave_store(&mut self, store: &AutosaveStore) {
+        for slot in self.slots.values_mut() {
+            slot.autosave = Some(store.clone());
+        }
+    }
+
+    fn inherit_autosave(&self) -> Option<AutosaveStore> {
+        self.slots.values().find_map(|slot| slot.autosave.clone())
+    }
+
     /// Creates a new untitled tab and makes it active. Returns its id.
     /// Fails closed if at the resource cap.
     pub fn new_tab(&mut self) -> Result<DocumentId, TabError> {
@@ -189,7 +203,11 @@ impl DocumentManager {
         }
         let id = DocumentId::new(self.next_id);
         self.next_id += 1;
-        self.slots.insert(id, DocumentSlot::default());
+        let slot = DocumentSlot {
+            autosave: self.inherit_autosave(),
+            ..DocumentSlot::default()
+        };
+        self.slots.insert(id, slot);
         self.tab_order.push(id);
         self.active_id = id;
         Ok(id)
@@ -214,7 +232,9 @@ impl DocumentManager {
         }
         let id = DocumentId::new(self.next_id);
         self.next_id += 1;
-        self.slots.insert(id, DocumentSlot::opened(revision, path));
+        let mut slot = DocumentSlot::opened(revision, path);
+        slot.autosave = self.inherit_autosave();
+        self.slots.insert(id, slot);
         self.tab_order.push(id);
         self.active_id = id;
         Ok(id)
@@ -243,7 +263,10 @@ impl DocumentManager {
 
         if self.slots.is_empty() {
             // Re-seed with a fresh ROOT tab (the app always has at least one).
-            let fresh = DocumentSlot::default();
+            let fresh = DocumentSlot {
+                autosave: removed.autosave.clone(),
+                ..DocumentSlot::default()
+            };
             self.slots.insert(DocumentId::ROOT, fresh);
             self.tab_order.push(DocumentId::ROOT);
             self.active_id = DocumentId::ROOT;
@@ -418,6 +441,39 @@ mod tests {
         }
         assert_eq!(mgr.len(), MAX_OPEN_DOCUMENTS);
         assert!(mgr.new_tab().is_err());
+    }
+
+    #[test]
+    fn new_tab_and_open_inherit_autosave_store() {
+        let mut mgr = DocumentManager::new();
+        mgr.bind_autosave_store(&AutosaveStore::new("/tmp/rutile-autosave-inherit"));
+        assert!(mgr.active_slot().autosave.is_some());
+        let untitled = mgr.new_tab().unwrap();
+        assert!(mgr.slot(untitled).unwrap().autosave.is_some());
+        let named = mgr
+            .open_document(Revision::new(1), PathBuf::from("/tmp/named.md"))
+            .unwrap();
+        assert!(mgr.slot(named).unwrap().autosave.is_some());
+        mgr.switch_tab(DocumentId::ROOT).unwrap();
+        assert!(mgr.active_slot().autosave.is_some());
+    }
+
+    #[test]
+    fn bind_autosave_store_covers_already_open_tabs() {
+        let mut mgr = DocumentManager::new();
+        let second = mgr.new_tab().unwrap();
+        mgr.bind_autosave_store(&AutosaveStore::new("/tmp/rutile-autosave-all"));
+        assert!(mgr.slot(DocumentId::ROOT).unwrap().autosave.is_some());
+        assert!(mgr.slot(second).unwrap().autosave.is_some());
+    }
+
+    #[test]
+    fn closing_the_originally_bound_tab_keeps_autosave_on_neighbors() {
+        let mut mgr = DocumentManager::new();
+        mgr.bind_autosave_store(&AutosaveStore::new("/tmp/rutile-autosave-close"));
+        let second = mgr.new_tab().unwrap();
+        mgr.close_tab(DocumentId::ROOT).unwrap();
+        assert!(mgr.slot(second).unwrap().autosave.is_some());
     }
 
     #[test]

@@ -295,6 +295,21 @@ mod tests {
     }
 
     #[test]
+    fn new_tab_still_autosaves() {
+        let dir =
+            std::env::temp_dir().join(format!("rutile-session-autosave-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let mut core = DocumentSessionCore::new_in_memory("first").unwrap();
+        core.app_mut()
+            .bind_autosave(rutile_core::AutosaveStore::new(&dir))
+            .unwrap();
+        let _ = core.reduce(AppMessage::NewTab);
+        core.set_document(Document::new("second").unwrap());
+        let (app, document) = core.app_mut_and_document();
+        assert!(app.autosave_tick(document, 1).unwrap().is_some());
+    }
+
+    #[test]
     fn last_tab_close_is_a_noop() {
         let mut core = DocumentSessionCore::new_in_memory("only").unwrap();
         let id = core.app().documents().active_id();

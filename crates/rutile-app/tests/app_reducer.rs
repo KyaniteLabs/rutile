@@ -1016,6 +1016,18 @@ fn close_requested_cancel_is_noop() {
 }
 
 #[test]
+fn new_tab_keeps_autosave_store_bound() {
+    let dir = ScratchDir::new("autosave-new-tab");
+    let mut state = AppState::new();
+    state
+        .bind_autosave(AutosaveStore::new(dir.0.clone()))
+        .unwrap();
+    state.reduce(AppMessage::NewTab);
+    let document = Document::new("second tab").unwrap();
+    assert!(state.autosave_tick(&document, 1).unwrap().is_some());
+}
+
+#[test]
 fn autosave_tick_when_dirty_and_store_bound_performs_autosave() {
     let dir = ScratchDir::new("autosave-tick");
     let mut state = AppState::new();

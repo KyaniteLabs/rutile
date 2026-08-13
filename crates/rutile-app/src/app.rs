@@ -1331,8 +1331,9 @@ impl AppState {
     /// Binds the autosave/session store this state owns. Sequence allocation
     /// is internal to the store, so recovery-then-continue keeps monotonically
     /// increasing sequences without caller bookkeeping.
+    #[allow(clippy::needless_pass_by_value)] // Public bind still takes the store by value.
     pub fn bind_autosave(&mut self, store: AutosaveStore) -> Result<(), AutosaveError> {
-        self.slot_mut().autosave = Some(store);
+        self.documents.bind_autosave_store(&store);
         Ok(())
     }
 
