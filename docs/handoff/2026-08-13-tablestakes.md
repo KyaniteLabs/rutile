@@ -42,7 +42,8 @@ crates/rutile-types/src/safe_link.rs
 
 ## Next work (if asked)
 
-1. Linux tab chrome on a Linux host (`linux-gtk` compile_error on macOS).
+1. Linux daily-driver parity on a Linux host — `docs/plan/linux-parity.md`
+   (P0 File/CLI, then P1 GTK strip, then P2 view/palette/recents).
 2. Physical GUI quality-probe night (`QUALITY_PROBE_IDS`).
 3. Re-check iced crates.io when ≥0.15 publishes.
 4. D8 `open_tabs` session restore.

@@ -58,7 +58,10 @@ cargo build --release --locked -p rutile-app --no-default-features --features li
 bash scripts/rutile-linux-gate.sh
 ```
 
-`linux-gtk` does not compile on macOS.
+`linux-gtk` does not compile on macOS. **Do not implement, compile, or claim
+Linux GTK chrome (menus, tab strip, palette panel, CLI open) from a macOS
+host.** Shared reducer/session work is fine anywhere. Native Linux PRs land
+on a Linux machine per `docs/plan/linux-parity.md`.
 
 ## Conventions
 
