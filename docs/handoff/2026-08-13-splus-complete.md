@@ -1,7 +1,12 @@
 # Handoff: S+ Remediation Complete — 2026-08-13
 
-> **Main HEAD**: `20c6d25` · **Branch**: `main` only · **Gate**: all green
-> **Status**: ALL 33 audit findings resolved. Codebase at S+-tier quality. Zero outstanding work.
+> **Status: Historical same-day audit closeout.** All 33 audit findings were
+> resolved in PRs #88–#106 at `20c6d25`. Later the same day, table-stakes
+> follow-ups landed through #118 (`ceed4cd`). Use
+> [`current-state.md`](current-state.md) and
+> [`2026-08-13-tablestakes.md`](2026-08-13-tablestakes.md) for live HEAD.
+> Do not treat “zero outstanding work” below as current — it meant *audit*
+> items, not product follow-ups.
 
 ## What was done
 
@@ -149,24 +154,26 @@ cargo run --bin rutile --features macos-shell
 The `session-state cosmetic warning` on startup is expected — stale schema tag in the
 local state file. Harmless.
 
-## Long-term follow-ups (NOT from audit, documented as future work)
+## Long-term follow-ups (NOT from audit)
 
-| Item | Risk | Notes |
-|------|------|-------|
-| Native-probe attestation (14 probes) | Requires physical macOS GUI | VoiceOver traversal, idle-soak, keyboard coverage |
-| Visual tab strip bar | High — modifies `platform/macos/native.rs` (3500+ lines) | |
-| Command-palette NSPanel UI | Medium | Contract is locked, menu-accessible |
-| Publishing HTML splice into export | Low | Publishing presets defined, not wired to export |
-| GUI stack unification | Medium | Retires `deny.toml` bans.skip 43 entries |
-| `AdapterCommitId` → newtype | Low | Done — last remaining `u64` alias converted. `EditTransaction.id` stays `u64` (shared with programmatic txs) |
+Status as of `ceed4cd` (see `2026-08-13-tablestakes.md`):
 
-## Untracked files in working tree (not part of any PR)
+| Item | Status |
+|------|--------|
+| Native-probe attestation (14 probes) | Harness shipped (#115); physical GUI still `attested: false` |
+| Visual tab strip | Shipped (#113, #118) |
+| Command-palette NSPanel | Shipped (#111) |
+| Publishing HTML splice | Shipped (#110) |
+| GUI stack unification | Blocked — evidence #114 |
+| `AdapterCommitId` newtype | Shipped (#108) |
+
+Still open: Linux tab chrome, D8 multi-tab restore, VoiceOver/idle-soak
+attestation, publication.
+
+## Untracked files (operator scratch)
 
 - `.claude/` — tooling config
 - `.scratch/rutile-macos-roadmap/` — scratch notes
-- `AGENTS.md` — agent instructions
-- `docs/evidence/ci-release-policy.md` — CI policy evidence
-- `docs/platform-parity.md` — platform asymmetry documentation (PR #100)
 
 ## Forgejo remote
 

@@ -1,6 +1,7 @@
 # Local Revision History (Roadmap 11) — Design Decisions
 
-Status: **design (locked signatures pending implementation)**. Parent issue:
+Status: **locked (contract implemented in `revision_history.rs`; native
+history UI deferred).** Parent issue:
 `.scratch/rutile-macos-roadmap/issues/11-local-revision-history.md`.
 Blocked by 03 (LOCKED), 08 (DONE).
 

@@ -38,10 +38,11 @@ functional test windows (save, reopen, scroll, inspect), not through
 menu-driven flows. Adding these menus would require wiring native file
 dialogs through GTK, which is out of scope for a CI-only target.
 
-**No New Tab / Command Palette / View Modes**: multi-document, command
-palette, and view-mode switching are macOS-shell features backed by
-AppKit-specific plumbing (tab bar, `NSPanel`, iced view-mode reducer).
-Linux-GTK does not replicate these.
+**No New Tab / Command Palette / View Modes**: the shared reducer owns
+tabs, palette, and view mode. macOS paints them (Iced strip, `NSPanel`,
+View menu). Linux-GTK still has no Window tab menu, no GTK strip, and no
+palette panel. That is an unimplemented Linux chrome gap, not a second
+tab model.
 
 **No Open Recent submenu**: the recent-documents list is managed by
 `NSDocumentController` on macOS. GTK has no equivalent in the CI build.
@@ -81,7 +82,6 @@ labels will always differ by platform convention.
 | Linux    | Opens the first file, warns about ignored extras.          |
 
 The macOS rejection is stricter because `NSOpenPanel` supports
-multi-select and the app is single-document-centric (one active tab per
-window). The Linux behavior is more permissive for CI testing. Both are
-correct for their context; aligning requires a product decision about
-multi-file UX.
+multi-select and one drop still maps to one open (D4 then parks or
+switches). The Linux behavior is more permissive for CI testing. Both
+are documented; aligning requires a product decision about multi-file UX.

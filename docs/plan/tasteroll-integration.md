@@ -1,9 +1,9 @@
 # Tasteroll Integration — C8 Back-Port Plan
 
-> **Status: Plan (2026-07-13).** Maps the TasteCheck `tasteroll` skill (v1.4.1+) to
-> Rutile's C8 (Chance-Styled Notes) from SPEC §8. Supersedes the original C8
-> description in `docs/superpowers/specs/2026-07-10-rutile-next-SPEC.md`, which
-> remains as a historical snapshot.
+> **Status: Implemented (C8 + L14 CSS injection, PR #104).** Maps the
+> TasteCheck `tasteroll` skill to Rutile chance-styled notes. The original C8
+> description in `docs/superpowers/specs/2026-07-10-rutile-next-SPEC.md` remains
+> a historical snapshot.
 
 ## Context
 

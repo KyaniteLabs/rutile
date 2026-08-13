@@ -1,5 +1,9 @@
 # Wayfinder Map — Rutile remediation → next release (internal/preview)
 
+> **Status: Historical tracker.** Charted against `main` `59a0c29`. Live
+> product state is `docs/handoff/current-state.md`. Do not execute this map
+> as if it were current HEAD.
+
 > **Tracker:** local-markdown (the Forgejo token in the credential helper lacks
 > `read:issue`, so issues/labels can't be created; repo is **private**, so a
 > Forgejo pre-release is internal-only). This map + its tickets live in-repo and

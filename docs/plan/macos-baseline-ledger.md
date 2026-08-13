@@ -1,9 +1,8 @@
 # Rutile 0.2 macOS Baseline Ledger
 
-Status: **locked** (node 01, ralplan `rutile-criticalpath-20260811`). Feature-by-feature
-truth of the current macOS product at `main` (0.2.2), classified present / partial /
-absent / unverified, with source/test pointers. The "daily-driver gaps" are the open
-roadmap issues (`.scratch/rutile-macos-roadmap/issues/`), all `Status: open`.
+Status: **updated 2026-08-13** against `main` `ceed4cd`. Feature-by-feature
+truth of the current macOS product (0.2.2). Scratch roadmap issues under
+`.scratch/` may still say `open`; this ledger is the checked-in truth.
 
 ## Present (shipped, tested)
 
@@ -16,27 +15,29 @@ roadmap issues (`.scratch/rutile-macos-roadmap/issues/`), all `Status: open`.
 | Find / replace | `rutile-app/src/actions.rs` — `FindSession`, `ReplaceApplied`; contract headlessly testable. |
 | Formatting | `rutile-core/src/format_contract.rs`, `format_engine.rs` — code/link/quote/list toggles, bounded URL rejection. |
 | Self-contained HTML export | `rutile-core/src/export.rs`, `export_contract.rs` — `ExportOutput`, `inspect()` + `export_validator` fuzz gate. |
-| Session restore + recent files | `session_contract.rs` `SessionStateV1` — `last_file`, `recent_files`, window/scroll/selection. **Single-document.** |
+| Session restore + recent files | `session_contract.rs` `SessionStateV1` — `last_file`, `recent_files`, window/scroll/selection. Restore is still last-file (D8 not shipped). |
+| Multi-document tabs | `document_manager.rs`, `session_core.rs`, `tab_strip.rs` — park/swap, D7 close, Iced strip, D4 File Open, inherited autosave. |
+| Command palette | `command_palette.rs` + macOS `NSPanel` (PR #111). |
+| Publishing print splice | `AppState::export_html` + `PublishingPreset::print_style_block()` (PR #110). |
 | Accessibility | `rutile-app/src/platform/macos/accessibility.rs`, `linux_gtk.rs` — VoiceOver/AT-SPI roles, find-entry a11y (G006). |
 | Diagnostics | diagnostic ring buffer (per the audit test plan); SurfaceNotice deferred-recovery flow. |
 | Performance gates | `rutile-core/benches/` — `decode_session_state` budget, large-fixture render bounds. |
 | Supply-chain gate | `deny.toml`, `fuzz/deny.toml`, `.cargo/audit.toml` — `cargo deny check` + `cargo audit` exit 0 (node S). |
 
-## Partial / single-document bounded
+## Partial
 
-- **Document model**: one open document at a time. Multi-document/tabs is roadmap 08
-  (absent). `DocumentId` contract added (node 03) but unused until 08.
-- **Native product lifecycle**: macOS shell ships (Iced/AppKit/WKWebView); Linux GTK is
-  `cfg(target_os="linux")` CI-only (not run on this macOS host). Native evidence is
-  platform-bound.
+- **Session restore**: last file only; not every open tab (D8).
+- **Autosave recovery**: shared journal, highest-sequence snapshot.
+- **Linux**: GTK shell is Linux-only and has no tab chrome.
+- **Outline / local search / revision history**: contracts exist; no native sidebar.
+- **Quality probes**: catalog + emit harness shipped; physical GUI attestation pending.
 
-## Absent (the daily-driver roadmap — all `Status: open`)
+## Absent / blocked
 
-03 shared-action/prefs foundations (contracts designed, see `foundations-contracts.md`),
-04 reader-first view, 05 outline navigator, 06 command palette + action registry, 07
-recent-docs/quick-open, 08 multi-document/tabs, 09 publishing presets/print, 10 focus
-mode, 12 local search + related-links/backlinks, 13 local-AI editing boundary, 14
-usability/quality evidence gate, 15 personal handoff gate.
+- Linux visual tab strip (needs a Linux host).
+- Local AI editing (roadmap 13, deferred).
+- GUI-stack unification (no crates.io pin).
+- Publication / notarization / independent readiness verifier.
 
 ## Unverified / external-evidence-bound
 
@@ -46,7 +47,6 @@ out of scope (`publication_authorized:false`).
 
 ## Implication for sequencing
 
-Every "present" row is single-document and gate-green. The critical path is therefore
-**foundations (03 contracts) → 07 → 08 → {11,12,13}**, with the 0.3 chain
-(T → C7 → C8) converging at 03. No "present" capability blocks the roadmap; the gaps are
-greenfield features, not regressions.
+macOS daily-driver chrome (palette, tabs, print splice) is on `main`. Next
+product-visible slice is Linux tab chrome, then D8 restore and a physical
+quality-probe night.

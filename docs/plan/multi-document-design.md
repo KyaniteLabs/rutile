@@ -1,6 +1,9 @@
 # Multi-Document Manager and Tabs (Roadmap 08) — Design Decisions
 
-Status: **design (locked signatures pending implementation)**. Parent issue: `.scratch/rutile-macos-roadmap/issues/08-multi-document-manager-and-tabs.md`. Blocked by 03 (LOCKED), 07 (DONE).
+Status: **implemented on macOS (PRs #112–#113, #116–#118).** Linux has the
+shared data plane only — no GTK strip. D8 window restore of every open path
+is still last-file-only. Parent issue:
+`.scratch/rutile-macos-roadmap/issues/08-multi-document-manager-and-tabs.md`.
 
 ## Question
 

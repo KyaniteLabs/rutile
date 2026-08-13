@@ -1,6 +1,6 @@
 # Command Palette and Action Registry (Roadmap 06) — Design Decisions
 
-Status: **locked (contract implemented; native panel UI deferred)**. Parent
+Status: **implemented (contract + macOS NSPanel, PR #111).** Parent
 issue: `.scratch/rutile-macos-roadmap/issues/06-command-palette-and-action-registry.md`.
 Blocked by 03 (DONE — `ActionRegistry` locked in `crates/rutile-app/src/actions.rs`).
 
@@ -86,10 +86,8 @@ change ranking (which is locale-agnostic on ids/word-boundaries).
 `AppState::reduce`. No command constructs raw HTML/URLs or bypasses the
 security core (`render.rs`, `security.rs`, `safe_link.rs`).
 
-### P9 — Native panel UI deferred
+### P9 — Native panel UI (shipped, PR #111)
 
-The headless contract (catalog, palette state machine, ranking, dispatch) is
-implemented and tested here. The visual `NSPanel` (search field + table view +
-keyboard navigation) is additive platform work, like the visual tab bar. The
-menu shortcut `⇧⌘P` → `OpenCommandPalette` is wired so the message path is
-exercisable; the panel surface is a follow-up.
+macOS presents a nonactivating `NSPanel` from `palette_snapshot()`. Rows
+match `candidates()`; unavailable commands stay listed and greyed. Esc
+closes and returns focus to the editor. Linux has no panel.

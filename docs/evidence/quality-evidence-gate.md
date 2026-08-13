@@ -1,7 +1,7 @@
 # macOS Usability and Quality Evidence Gate (Roadmap 14)
 
-Status: **defined — gate contract + automatable evidence green; native-probe
-attestation pending physical GUI session**. Parent issue:
+Status: **harness shipped (PR #115); native-probe attestation pending a
+physical GUI session**. Parent issue:
 `.scratch/rutile-macos-roadmap/issues/14-macos-usability-and-quality-evidence-gate.md`.
 
 ## Purpose

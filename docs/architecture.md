@@ -1,6 +1,6 @@
-# Rutile 0.2.0 Architecture
+# Rutile Architecture
 
-> **Status: Current.** Verified against `main` on 2026-07-12. Product and technical naming are unified as Rutile (crates, the `rutile` binary, the `rutile://` scheme, and bundle identifiers).
+> **Status: Current.** Verified against `main` `ceed4cd` on 2026-08-13. Product and technical naming are unified as Rutile (crates, the `rutile` binary, the `rutile://` scheme, and bundle identifiers). Workspace version is **0.2.2**.
 
 ## BLUF
 
@@ -47,18 +47,19 @@ Key bounds are 20 MiB per document, 64 MiB retained undo data, eight autosave sn
 
 ### `rutile-app`
 
-Owns the shared `AppState` reducer, render scheduler, preview host, user-facing brand contract, shared actions, and platform adapters. `AppState` coordinates path/dirty/revision/preview/conflict state; platform sessions own the live `Document`, native editor adapter, filesystem operations, dialogs, clipboard, and window lifecycle.
+Owns the shared `AppState` reducer, `DocumentSessionCore`, render scheduler, preview host, user-facing brand contract, shared actions, and platform adapters. `DocumentSlot` holds per-tab path/dirty/revision/preview/conflict/autosave. `DocumentSessionCore` parks inactive `Document` ropes and keeps `document()` as the active view. Platform sessions execute effects (filesystem, dialogs, clipboard, window, editor adapter) and must not re-implement tab ranking or close policy.
 
-The render scheduler coalesces work and discards stale completions. Platform shells replay returned `ChangeSet`s incrementally rather than reinstalling the full document, preserving viewport state.
+The render scheduler coalesces work and discards stale completions. Platform shells replay returned `ChangeSet`s incrementally rather than reinstalling the full document, preserving viewport state. After a tab swap the shell must call `refresh_after_document_swap` (or the Linux equivalent: reinstall the source snapshot and reschedule render).
 
 ## Native shells
 
 ### macOS
 
-- Iced/winit renders and owns the source pane.
+- Iced/winit renders and owns the source pane, including the visual tab strip.
 - Wry embeds a child WKWebView for preview.
+- Command palette is a nonactivating AppKit `NSPanel`.
 - The first positional CLI argument may open a document.
-- Native AppKit save panels and dirty-close flows remain native.
+- Native AppKit save panels and dirty-close flows remain native. Tab close uses D7, not window quit.
 - Autosave/session data lives below the per-user Rutile application-support directory.
 
 ### Linux
@@ -67,6 +68,7 @@ The render scheduler coalesces work and discards stale completions. Platform she
 - GtkSourceView owns source editing and Markdown syntax staining.
 - Wry embeds WebKitGTK in the GTK layout.
 - The production CLI currently does not pass a positional document path into the GTK application.
+- Tab *data* is shared; there is no GTK tab strip or Window tab menu yet.
 - The checked-in lifecycle gate proves 50 X11/Xvfb ready/close cycles; native Wayland remains evidence debt.
 
 ## Preview and security boundary
@@ -96,9 +98,12 @@ Export is a separate self-contained template. It contains inline CSS, no JavaScr
 
 ## Current non-goals and debt
 
-- No multi-document UI, plugins, workspace/project model, cloud sync, or local AI layer.
+- No workspace/project model, plugins, cloud sync, or local AI layer.
+- macOS has in-window tabs; Linux does not yet paint them.
+- Session restore does not yet reopen every tab (D8).
 - No complete OS file-association/default-viewer integration.
 - No Intel macOS, native Wayland, or installed-RPM verification.
 - No Developer ID signing, notarization, package signing, or independent-builder reproduction.
+- iced 0.14 and wry 0.55 still pull two objc2 generations; skip list retained.
 
 See [`handoff/current-state.md`](handoff/current-state.md) for the live operational state and [`handoff/local-beta-0.2.0.md`](handoff/local-beta-0.2.0.md) for immutable release receipts.
