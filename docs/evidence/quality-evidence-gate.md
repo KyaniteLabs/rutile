@@ -56,6 +56,43 @@ lifecycle). These run on this macOS host when a physical GUI session is
 available; they are tracked as the attestation step of roadmap 15, not as
 headless blockers.
 
+The catalog is a **new** identity, not readiness `PROBE_IDS`. Schema
+`rutile.quality-probe-bundle.v1` is not a readiness-attestation schema.
+
+Headless harness (no GUI):
+
+```
+cargo run -p xtask --locked -- quality-probes emit --out /tmp/quality-probes.json
+# same subcommand: xtask quality-probes emit --out /tmp/quality-probes.json
+```
+
+Exit 0 when the catalog is well-formed. Exit non-zero only if the catalog is
+malformed. The JSON is unsigned, `attested: false`, and must not contain
+`publication_authorized` or VoiceOver `passed: true`.
+
+### QUALITY_PROBE_IDS (14)
+
+| # | Domain | ID |
+|---|--------|----|
+| 1 | 5 idle / performance | `quality-idle-rss-budget` |
+| 2 | 5 idle / performance | `quality-idle-cpu-budget` |
+| 3 | 5 idle / performance | `quality-startup-to-interactive` |
+| 4 | 6 VoiceOver | `quality-voiceover-window-role` |
+| 5 | 6 VoiceOver | `quality-voiceover-editor-text` |
+| 6 | 6 VoiceOver | `quality-voiceover-preview-web` |
+| 7 | 6 VoiceOver | `quality-voiceover-chrome-controls` |
+| 8 | 7 keyboard | `quality-keyboard-command-palette` |
+| 9 | 7 keyboard | `quality-keyboard-view-modes` |
+| 10 | 7 keyboard | `quality-keyboard-find-replace` |
+| 11 | 7 keyboard | `quality-keyboard-file-operations` |
+| 12 | 8 lifecycle | `quality-lifecycle-open-save` |
+| 13 | 8 lifecycle | `quality-lifecycle-close-restore` |
+| 14 | 8 lifecycle | `quality-lifecycle-crash-recovery` |
+
+`QUALITY_PROBE_IDS ∩ PROBE_IDS` must stay empty. Ready-for-publication
+readiness probes (`apple-notarization`, `independent-release-authority-approval`,
+…) are a different catalog.
+
 ## Failure reporting
 
 Gate failures surface through the existing `AppMessage::SurfaceNotice` path

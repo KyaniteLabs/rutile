@@ -7,8 +7,8 @@ use xtask::artifact_inspector::{ArtifactInspector, InspectionMode, PolicyPaths};
 use xtask::cli::{
     ArtifactCommand, ArtifactInspectionMode, Cli, Command, ComparatorCommand, EvidenceCommand,
     FixtureCommand, GuiCommand, LinuxPackageFormats, LocalPackageCommand, MetricsCommand,
-    PackageCommand, ProvenanceCommand, ReadinessCommand, ReleaseCommand, RunnerCommand,
-    ScaffoldCommand,
+    PackageCommand, ProvenanceCommand, QualityProbesCommand, ReadinessCommand, ReleaseCommand,
+    RunnerCommand, ScaffoldCommand,
 };
 use xtask::comparator::{ScaffoldCreate, create_scaffold, verify_scaffold};
 use xtask::evidence_bind::{EvidenceBindRequest, bind as bind_evidence};
@@ -514,6 +514,18 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     hex::encode(receipt.runner_lock_sha256),
                     receipt.verifier_key_fingerprint,
                     out_display,
+                );
+            }
+        },
+        Command::QualityProbes { command } => match command {
+            QualityProbesCommand::Emit { out } => {
+                let bundle = xtask::quality_probes::write_unattested(&out)?;
+                println!(
+                    "quality-probes-emit attested={} probes={} schema={} out={}",
+                    bundle.attested,
+                    bundle.probes.len(),
+                    bundle.schema,
+                    out.display()
                 );
             }
         },
