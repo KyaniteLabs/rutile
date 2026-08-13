@@ -2600,9 +2600,24 @@ fn chrome_button_style(
     _theme: &core::theme::Theme,
     status: iced_widget::button::Status,
 ) -> iced_widget::button::Style {
+    chrome_tab_style(status, false)
+}
+
+fn chrome_active_tab_style(
+    _theme: &core::theme::Theme,
+    status: iced_widget::button::Status,
+) -> iced_widget::button::Style {
+    chrome_tab_style(status, true)
+}
+
+fn chrome_tab_style(
+    status: iced_widget::button::Status,
+    active: bool,
+) -> iced_widget::button::Style {
     use iced_widget::button::Status;
     let text_color = match status {
         Status::Hovered | Status::Pressed => ACCENT_GOLD,
+        _ if active => INK,
         _ => MUTED_INK,
     };
     iced_widget::button::Style {
@@ -2724,10 +2739,15 @@ impl Program for SourceProgram {
                 Vec::new();
             for row in &state.tabs {
                 let title = row.display_label();
+                let style = if row.active {
+                    chrome_active_tab_style
+                } else {
+                    chrome_button_style
+                };
                 buttons.push(
                     iced_widget::button(iced_widget::text(title).size(CHROME_FONT_SIZE))
                         .padding([2, 8])
-                        .style(chrome_button_style)
+                        .style(style)
                         .on_press(SourceMessage::SelectTab(row.id))
                         .into(),
                 );
