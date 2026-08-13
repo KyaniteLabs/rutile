@@ -622,7 +622,12 @@ fn replace_all_replaces_every_match() {
 fn export_html_is_self_contained_and_scriptless() {
     let session = ProductSession::new_in_memory("# Title\n\nBody **bold**.\n").unwrap();
     let output = session.export_html().unwrap();
-    assert_eq!(output.suggested_file_name, "untitled.html");
+    assert_eq!(output.suggested_file_name, "untitled-a4.html");
+    assert!(
+        output
+            .html
+            .contains(&rutile_app::publishing::PublishingPreset::print_ready().print_style_block())
+    );
 
     let lowered = output.html.to_ascii_lowercase();
     assert!(lowered.contains("<!doctype html"));

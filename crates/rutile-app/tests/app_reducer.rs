@@ -650,7 +650,13 @@ fn export_html_is_inert_and_suggests_a_name() {
     assert!(export.html.starts_with("<!doctype html>"));
     assert!(!export.html.contains("<script"));
     assert!(export.html.contains("Body text."));
-    assert_eq!(export.suggested_file_name, "untitled.html");
+    assert_eq!(export.suggested_file_name, "untitled-a4.html");
+    assert!(
+        export
+            .html
+            .contains(&rutile_app::publishing::PublishingPreset::print_ready().print_style_block()),
+        "export must splice the print-ready preset, not only the base EXPORT_CSS print rules"
+    );
 }
 
 #[test]

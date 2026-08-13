@@ -4,10 +4,11 @@ use std::path::{Path, PathBuf};
 use crate::command_palette::CommandPalette;
 use rutile_core::{
     AutosaveEntryV1, AutosaveError, AutosaveRecordOutcome, AutosaveStore, ChangeSet, Counts,
-    DiskVersion, Document, Edit, EditError, EditPlan, EditTransaction, ExportError, ExportRequest,
-    ExternalResolution, FindDirection, FindQuery, FormatCommand, RecoveredDocument, RenderError,
-    ReplaceSpec, SESSION_SCHEMA_V1, Selection, SessionSelectionV1, SessionStateV1, SessionWindowV1,
-    TransactionKind, apply_format, render_export_page, smart_enter,
+    DiskVersion, Document, Edit, EditError, EditPlan, EditTransaction, ExportError, ExportPage,
+    ExportRequest, ExportViolation, ExternalResolution, FindDirection, FindQuery, FormatCommand,
+    RecoveredDocument, RenderError, ReplaceSpec, SESSION_SCHEMA_V1, Selection, SessionSelectionV1,
+    SessionStateV1, SessionWindowV1, TransactionKind, apply_format, render_export_page,
+    smart_enter,
 };
 use rutile_protocol::PreviewEventV1;
 use rutile_types::{DocumentId, InteractionId, Revision, SafeLinkTarget};
@@ -17,6 +18,7 @@ use crate::actions::{
     ReplaceApplied, SessionRestore,
 };
 use crate::document_manager::{DocumentManager, DocumentSlot};
+use crate::publishing::PublishingPreset;
 use crate::tasteroll::TasteState;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -1240,13 +1242,11 @@ impl AppState {
         let request = ExportRequest::new(document.revision(), title)?;
         let source = document.snapshot().to_string();
         let page = render_export_page(&source, &request)?;
-        let suggested_file_name = match stem {
-            Some(name) => format!("{name}.html"),
-            None => "untitled.html".to_owned(),
-        };
+        let preset = PublishingPreset::print_ready();
+        let html = splice_print_preset(page.as_html(), &preset)?;
         Ok(ExportOutput {
-            html: page.into_html(),
-            suggested_file_name,
+            html,
+            suggested_file_name: preset.suggested_filename(stem.as_deref().unwrap_or("")),
         })
     }
 
@@ -1465,6 +1465,18 @@ impl AppState {
         });
         Ok((selection_after, changes, effects))
     }
+}
+
+/// Injects the publishing print stylesheet before `</head>` and re-validates.
+fn splice_print_preset(html: &str, preset: &PublishingPreset) -> Result<String, ExportError> {
+    const HEAD_END: &str = "</head>";
+    let index = html.find(HEAD_END).ok_or(ExportViolation::MissingCsp)?;
+    let block = preset.print_style_block();
+    let mut spliced = String::with_capacity(html.len().saturating_add(block.len()));
+    spliced.push_str(&html[..index]);
+    spliced.push_str(&block);
+    spliced.push_str(&html[index..]);
+    Ok(ExportPage::from_html(spliced)?.into_html())
 }
 
 const fn event_revision(event: &PreviewEventV1) -> Revision {
