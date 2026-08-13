@@ -378,7 +378,13 @@ pub fn iso8601_to_unix(iso: &str) -> Option<i64> {
     let hour = digits2(&b[11..13])?;
     let minute = digits2(&b[14..16])?;
     let second = digits2(&b[17..19])?;
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+    if !(1..=12).contains(&month)
+        || day < 1
+        || day > days_in_month(year, month)
+        || !(0..=23).contains(&hour)
+        || !(0..=59).contains(&minute)
+        || !(0..=59).contains(&second)
+    {
         return None;
     }
     // Civil-from-days (Howard Hinnant), UTC, proleptic Gregorian.
@@ -390,6 +396,19 @@ pub fn iso8601_to_unix(iso: &str) -> Option<i64> {
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let days = era * 146097 + doe - 719468;
     Some(days * 86400 + hour * 3600 + minute * 60 + second)
+}
+
+/// Days in a Gregorian calendar month, accounting for leap years.
+fn days_in_month(year: i64, month: i64) -> i64 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            let leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+            if leap { 29 } else { 28 }
+        }
+        _ => 0,
+    }
 }
 
 #[cfg(test)]
@@ -446,6 +465,20 @@ mod tests {
         assert!(iso8601_to_unix("2026-07-15T00:00:00Z").unwrap() > 1_700_000_000);
         assert!(iso8601_to_unix("not-a-date").is_none());
         assert!(iso8601_to_unix("2026-13-40T00:00:00Z").is_none());
+    }
+
+    #[test]
+    fn iso8601_to_unix_rejects_calendar_invalid_dates() {
+        // L12: Feb 31, Apr 31, and Feb 29 on a non-leap year must be rejected.
+        assert!(iso8601_to_unix("2026-02-31T00:00:00Z").is_none());
+        assert!(iso8601_to_unix("2026-04-31T00:00:00Z").is_none());
+        assert!(iso8601_to_unix("2025-02-29T00:00:00Z").is_none());
+        // Feb 29 on a leap year is valid.
+        assert!(iso8601_to_unix("2024-02-29T00:00:00Z").is_some());
+        // Invalid time components.
+        assert!(iso8601_to_unix("2026-07-15T24:00:00Z").is_none());
+        assert!(iso8601_to_unix("2026-07-15T00:60:00Z").is_none());
+        assert!(iso8601_to_unix("2026-07-15T00:00:60Z").is_none());
     }
 
     // -- L1 MED M1a/M1b: O_NOFOLLOW+fstat symlink rejection (trust hardening) --

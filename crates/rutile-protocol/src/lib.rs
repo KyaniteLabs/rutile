@@ -130,12 +130,15 @@ pub enum ProtocolError {
     InvalidFraming,
     #[error("invalid JSON record: {0}")]
     InvalidJson(#[from] serde_json::Error),
-    #[error("unsupported schema version")]
-    UnsupportedVersion,
-    #[error("stale revision")]
-    StaleRevision,
-    #[error("source offset exceeds the maximum document size")]
-    InvalidOffset,
+    #[error("unsupported schema version {actual}")]
+    UnsupportedVersion { actual: u8 },
+    #[error("stale revision: expected {expected}, got {actual}")]
+    StaleRevision {
+        expected: rutile_types::Revision,
+        actual: rutile_types::Revision,
+    },
+    #[error("source offset {offset} exceeds maximum {maximum}")]
+    InvalidOffset { offset: usize, maximum: usize },
     #[error("unsafe or noncanonical link: {0}")]
     InvalidLink(#[from] rutile_types::SafeLinkError),
     #[error("command is not permitted on the bounded scroll-control channel")]
@@ -178,7 +181,10 @@ pub fn decode_preview_event(
         } => {
             validate_header(v, revision, loaded)?;
             if source_start > MAX_DOCUMENT_BYTES {
-                return Err(ProtocolError::InvalidOffset);
+                return Err(ProtocolError::InvalidOffset {
+                    offset: source_start,
+                    maximum: MAX_DOCUMENT_BYTES,
+                });
             }
             Ok(PreviewEventV1::Scroll {
                 revision,
@@ -222,7 +228,10 @@ pub fn encode_scroll_control(command: &PreviewHostCommand) -> Result<Vec<u8>, Pr
         return Err(ProtocolError::InvalidControl);
     };
     if *source_start > MAX_DOCUMENT_BYTES {
-        return Err(ProtocolError::InvalidOffset);
+        return Err(ProtocolError::InvalidOffset {
+            offset: *source_start,
+            maximum: MAX_DOCUMENT_BYTES,
+        });
     }
     encode_ndjson(
         &ScrollControlWireV1::ScrollTo {
@@ -318,7 +327,9 @@ impl GuiCommandV1 {
 pub fn decode_gui_command(bytes: &[u8]) -> Result<GuiCommandV1, ProtocolError> {
     let command: GuiCommandWireV1 = decode_ndjson(bytes, MAX_GUI_COMMAND_BYTES)?;
     if command.version() != 1 {
-        return Err(ProtocolError::UnsupportedVersion);
+        return Err(ProtocolError::UnsupportedVersion {
+            actual: command.version(),
+        });
     }
     let command: GuiCommandV1 = command.into();
     // Validate byte offsets against MAX_DOCUMENT_BYTES and start <= end.
@@ -328,14 +339,20 @@ pub fn decode_gui_command(bytes: &[u8]) -> Result<GuiCommandV1, ProtocolError> {
         GuiCommandV1::Edit { start, end, .. }
         | GuiCommandV1::BeginComposition { start, end, .. } => {
             if start > end || *end > MAX_DOCUMENT_BYTES {
-                return Err(ProtocolError::InvalidOffset);
+                return Err(ProtocolError::InvalidOffset {
+                    offset: (*start).max(*end),
+                    maximum: MAX_DOCUMENT_BYTES,
+                });
             }
         }
         GuiCommandV1::SetSourceViewport {
             top_visible_byte, ..
         } => {
             if *top_visible_byte > MAX_DOCUMENT_BYTES {
-                return Err(ProtocolError::InvalidOffset);
+                return Err(ProtocolError::InvalidOffset {
+                    offset: *top_visible_byte,
+                    maximum: MAX_DOCUMENT_BYTES,
+                });
             }
         }
         _ => {}
@@ -484,7 +501,9 @@ pub fn encode_gui_event(event: &GuiEventV1) -> Result<Vec<u8>, ProtocolError> {
 pub fn decode_gui_event(bytes: &[u8]) -> Result<GuiEventV1, ProtocolError> {
     let event: GuiEventWireV1 = decode_ndjson(bytes, MAX_GUI_COMMAND_BYTES)?;
     if event.version() != 1 {
-        return Err(ProtocolError::UnsupportedVersion);
+        return Err(ProtocolError::UnsupportedVersion {
+            actual: event.version(),
+        });
     }
     Ok(event.into())
 }
@@ -1007,7 +1026,7 @@ pub struct ProcessRssV1 {
 pub fn decode_metric_record(bytes: &[u8]) -> Result<MetricRecordV1, ProtocolError> {
     let record: MetricRecordV1 = decode_ndjson(bytes, MAX_METRIC_RECORD_BYTES)?;
     if record.v != 1 {
-        return Err(ProtocolError::UnsupportedVersion);
+        return Err(ProtocolError::UnsupportedVersion { actual: record.v });
     }
     if record.schema != "rutile.metric.v1" {
         return Err(ProtocolError::InvalidMetricSchema);
@@ -1018,7 +1037,7 @@ pub fn decode_metric_record(bytes: &[u8]) -> Result<MetricRecordV1, ProtocolErro
 
 pub fn encode_metric_record(record: &MetricRecordV1) -> Result<Vec<u8>, ProtocolError> {
     if record.v != 1 {
-        return Err(ProtocolError::UnsupportedVersion);
+        return Err(ProtocolError::UnsupportedVersion { actual: record.v });
     }
     if record.schema != "rutile.metric.v1" {
         return Err(ProtocolError::InvalidMetricSchema);
@@ -1073,10 +1092,13 @@ fn is_lower_hex(value: &str, length: usize) -> bool {
 
 const fn validate_header(v: u8, revision: Revision, loaded: Revision) -> Result<(), ProtocolError> {
     if v != 1 {
-        return Err(ProtocolError::UnsupportedVersion);
+        return Err(ProtocolError::UnsupportedVersion { actual: v });
     }
     if revision != loaded {
-        return Err(ProtocolError::StaleRevision);
+        return Err(ProtocolError::StaleRevision {
+            expected: loaded,
+            actual: revision,
+        });
     }
     Ok(())
 }
@@ -1103,7 +1125,7 @@ fn decode_ndjson<T: DeserializeOwned>(bytes: &[u8], maximum: usize) -> Result<T,
     // Mirrors the VersionEnvelope pattern in core::session_contract.
     if let Ok(peek) = serde_json::from_slice::<VersionPeek>(record) {
         if peek.v != 1 {
-            return Err(ProtocolError::UnsupportedVersion);
+            return Err(ProtocolError::UnsupportedVersion { actual: peek.v });
         }
     }
     Ok(serde_json::from_slice(record)?)
