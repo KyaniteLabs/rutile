@@ -312,12 +312,19 @@ fn search_forward_sensitive(text: &str, query: &FindQuery, start: usize) -> Opti
 
 fn search_forward_insensitive(text: &str, query: &FindQuery, start: usize) -> Option<Range<usize>> {
     let start = start.min(text.len());
-    for (offset, _) in text[start..].char_indices() {
-        let at = start + offset;
-        if let Some(end) = try_match_ci(text, query.pattern(), at)
-            && accept(text, query.mode(), at, end)
-        {
-            return Some(at..end);
+    let pattern = query.pattern();
+    // L16: gate on the first pattern char before the full O(m) `try_match_ci`.
+    // This converts the common case from O(n*m) to O(n): positions whose first
+    // character does not fold-match the pattern head are skipped in O(1).
+    let first = pattern.chars().next()?;
+    for (offset, ch) in text[start..].char_indices() {
+        if chars_eq_ignore_case(ch, first) {
+            let at = start + offset;
+            if let Some(end) = try_match_ci(text, pattern, at)
+                && accept(text, query.mode(), at, end)
+            {
+                return Some(at..end);
+            }
         }
     }
     None
@@ -340,13 +347,15 @@ fn search_backward(text: &str, query: &FindQuery, limit: usize) -> Option<Range<
         None
     } else {
         // No reverse case-insensitive primitive in std: scan forward and keep
-        // the last accepted match strictly before `limit`.
+        // the last accepted match strictly before `limit`.  L16: gate on the
+        // first pattern char before the full O(m) `try_match_ci` (same
+        // optimization as `search_forward_insensitive`).
+        let pattern = query.pattern();
+        let first = pattern.chars().next()?;
         let mut best: Option<Range<usize>> = None;
-        for (at, _) in text.char_indices() {
-            if at >= limit {
-                break;
-            }
-            if let Some(end) = try_match_ci(text, query.pattern(), at)
+        for (at, ch) in text[..limit].char_indices() {
+            if chars_eq_ignore_case(ch, first)
+                && let Some(end) = try_match_ci(text, pattern, at)
                 && accept(text, query.mode(), at, end)
             {
                 best = Some(at..end);
@@ -519,6 +528,54 @@ mod tests {
         // Case sensitive finds neither of the first two spellings from 0.
         let cs = plain("hello");
         assert_eq!(find_next(text, &cs, 0, FindDirection::Forward, false), None);
+    }
+
+    #[test]
+    fn backward_ci_search_finds_last_match() {
+        // L16 regression: backward case-insensitive search with the first-char
+        // gate must still find the correct last match before `limit`.
+        let text = "Hello HELLO hello";
+        let q = query("hello", MatchMode::Plain, false);
+        assert_eq!(
+            find_next(text, &q, 18, FindDirection::Backward, false),
+            Some(12..17)
+        );
+        assert_eq!(
+            find_next(text, &q, 12, FindDirection::Backward, false),
+            Some(6..11)
+        );
+        assert_eq!(
+            find_next(text, &q, 6, FindDirection::Backward, false),
+            Some(0..5)
+        );
+    }
+
+    #[test]
+    fn backward_ci_search_with_adversarial_prefix() {
+        // L16 regression: the first-char gate must not skip valid matches when
+        // many positions share the pattern's first char. "a" repeated 1000
+        // times, searching backward for "ab" — no match, but the gate fires at
+        // every position, confirming O(n) skip for non-matches.
+        let text = "a".repeat(1000);
+        let q = query("ab", MatchMode::Plain, false);
+        assert_eq!(
+            find_next(&text, &q, 1000, FindDirection::Backward, false),
+            None
+        );
+    }
+
+    #[test]
+    fn backward_ci_search_multibyte_first_char() {
+        // L16 regression: the first-char gate uses `chars_eq_ignore_case` which
+        // handles multibyte fold-matching. "É" and "é" must both match.
+        let text = "xÉy éz";
+        let q = query("é", MatchMode::Plain, false);
+        // Backward from the end finds the second "é" at byte offset 5.
+        let found = find_next(text, &q, text.len(), FindDirection::Backward, false);
+        assert_eq!(found, Some(5..7));
+        // Backward from 5 finds the first "É" at byte offset 1.
+        let found = find_next(text, &q, 5, FindDirection::Backward, false);
+        assert_eq!(found, Some(1..3));
     }
 
     #[test]
