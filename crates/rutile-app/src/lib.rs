@@ -51,6 +51,7 @@ pub mod publishing;
 pub mod render_scheduler;
 pub mod revision_history;
 pub mod session_core;
+pub mod tab_strip;
 pub mod tasteroll;
 
 /// Dispatches to the selected native adapter. With no platform feature this is
