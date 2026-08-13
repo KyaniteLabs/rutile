@@ -49,6 +49,47 @@ pub struct PaletteCandidate {
     pub rank: MatchRank,
 }
 
+/// One projected palette row for a native panel (availability is live).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaletteRowView {
+    pub title: &'static str,
+    pub shortcut: Option<String>,
+    pub available: bool,
+    pub selected: bool,
+}
+
+/// Snapshot the shell renders into an `NSPanel`. `None` means the panel is closed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PalettePanelSnapshot {
+    pub query: String,
+    pub rows: Vec<PaletteRowView>,
+}
+
+impl PalettePanelSnapshot {
+    /// Plain-text body for the nonactivating display panel.
+    #[must_use]
+    pub fn display_text(&self) -> String {
+        let mut out = String::new();
+        out.push_str("Filter: ");
+        if self.query.is_empty() {
+            out.push_str("(all commands)");
+        } else {
+            out.push_str(&self.query);
+        }
+        out.push('\n');
+        for row in &self.rows {
+            let marker = if row.selected { '>' } else { ' ' };
+            let avail = if row.available { ' ' } else { '·' };
+            let shortcut = row.shortcut.as_deref().unwrap_or("");
+            let _ = std::fmt::Write::write_fmt(
+                &mut out,
+                format_args!("\n{marker}{avail}{title:<28} {shortcut}", title = row.title),
+            );
+        }
+        out
+    }
+}
+
 /// The palette interaction state.
 ///
 /// Owned by [`AppState`](crate::app::AppState) and driven through reducer

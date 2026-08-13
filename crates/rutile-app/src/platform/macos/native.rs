@@ -45,7 +45,7 @@ use super::{
     MacExternalOutcome, MacMenuCommand, MacSaveAction, MacScrollDispatch, MacUserEvent,
     PreviewIpcFatal, PreviewIpcIngress, ProductSession, bind_open_proxy, forward_open_urls,
     install_file_menu_with_actions, install_view_menu, install_window_menu, preview_ipc_channel,
-    split_panes, take_pending_switch, update_recent_documents, update_tabs,
+    split_panes, sync_palette_panel, take_pending_switch, update_recent_documents, update_tabs,
 };
 use crate::actions::SessionRestore;
 use crate::app::{AppEffect, AppMessage, CloseDecision, CloseOutcome, UserNotice};
@@ -398,6 +398,7 @@ impl ProductRunner {
                 self.session
                     .core_mut()
                     .reduce(AppMessage::OpenCommandPalette);
+                self.sync_palette();
             }
             MacMenuCommand::ViewModeEdit => {
                 self.session.core_mut().reduce(AppMessage::SetDocumentMode {
@@ -517,6 +518,10 @@ impl ProductRunner {
     fn sync_recent_documents(&mut self) {
         let paths = self.session.app_state().recents().to_strings();
         update_recent_documents(paths);
+    }
+
+    fn sync_palette(&mut self) {
+        sync_palette_panel(self.session.app_state().palette_snapshot());
     }
 
     /// Rebuilds the Tabs submenu from the current `DocumentManager` state.
@@ -1268,6 +1273,52 @@ impl ProductRunner {
             Err(error) => self.set_find_status(error.to_string()),
         }
         self.push_find_display();
+    }
+
+    fn handle_palette_key(&mut self, key_event: &winit::event::KeyEvent, command: bool) -> bool {
+        use winit::keyboard::NamedKey;
+
+        match &key_event.logical_key {
+            Key::Named(NamedKey::Escape) => {
+                self.session
+                    .core_mut()
+                    .reduce(AppMessage::CloseCommandPalette);
+                true
+            }
+            Key::Named(NamedKey::Enter) => {
+                self.session.core_mut().reduce(AppMessage::PaletteSubmit);
+                true
+            }
+            Key::Named(NamedKey::ArrowDown) => {
+                self.session
+                    .core_mut()
+                    .reduce(AppMessage::PaletteSelectNext);
+                true
+            }
+            Key::Named(NamedKey::ArrowUp) => {
+                self.session
+                    .core_mut()
+                    .reduce(AppMessage::PaletteSelectPrev);
+                true
+            }
+            Key::Named(NamedKey::Backspace) if !command => {
+                let mut query = self.session.app_state().palette().query().to_owned();
+                query.pop();
+                self.session
+                    .core_mut()
+                    .reduce(AppMessage::PaletteQueryChanged { query });
+                true
+            }
+            Key::Character(ch) if !command => {
+                let mut query = self.session.app_state().palette().query().to_owned();
+                query.push_str(ch);
+                self.session
+                    .core_mut()
+                    .reduce(AppMessage::PaletteQueryChanged { query });
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Handles a keystroke while the find bar is open. Returns `true` when the
@@ -2075,6 +2126,13 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
                     self.dismiss_recovery();
                     return;
                 }
+                return;
+            }
+
+            if self.session.app_state().palette().is_open()
+                && self.handle_palette_key(key_event, command)
+            {
+                self.sync_palette();
                 return;
             }
 

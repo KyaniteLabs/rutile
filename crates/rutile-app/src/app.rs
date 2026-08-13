@@ -481,6 +481,37 @@ impl AppState {
     pub const fn palette(&self) -> &CommandPalette {
         &self.palette
     }
+
+    /// Projects the open palette for a native panel. `None` when closed.
+    #[must_use]
+    pub fn palette_snapshot(&self) -> Option<crate::command_palette::PalettePanelSnapshot> {
+        if !self.palette.is_open() {
+            return None;
+        }
+        let selected = self.palette.selected_index();
+        let rows = self
+            .palette
+            .candidates()
+            .iter()
+            .enumerate()
+            .map(|(index, candidate)| {
+                let available = self
+                    .registry
+                    .lookup(&candidate.id)
+                    .is_some_and(|desc| (desc.message)(self).is_some());
+                crate::command_palette::PaletteRowView {
+                    title: candidate.title,
+                    shortcut: candidate.shortcut.and_then(|shortcut| shortcut.display()),
+                    available,
+                    selected: selected == Some(index),
+                }
+            })
+            .collect();
+        Some(crate::command_palette::PalettePanelSnapshot {
+            query: self.palette.query().to_owned(),
+            rows,
+        })
+    }
     /// The shell-level view mode (roadmap 04).
     #[must_use]
     pub const fn mode(&self) -> DocumentMode {
