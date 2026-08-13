@@ -179,7 +179,7 @@ The rutile-core architect agent was still running at consolidation time. Its fin
 **All 33 audit findings are resolved.** The codebase is at S+-tier quality
 with zero outstanding audit items.
 
-### PRs merged across all remediation sessions (#88–#104, 31 fixes total):
+### PRs merged across all remediation sessions (#88–#106, 33 fixes + 2 doc/infra PRs):
 
 | PR  | Cluster | Findings |
 |-----|---------|----------|
@@ -199,6 +199,8 @@ with zero outstanding audit items.
 | #102 | `fix/m8-newtypes-and-remaining-deferred` | M8, L4, L7, O1 |
 | #103 | `fix/l10-l11-session-restore-and-save-as` | L10, L11 |
 | #104 | `fix/l14-tasteroll-css-injection` | L14 |
+| #105 | `doc/final-audit-update` | (this document — complete PR-to-finding mapping) |
+| #106 | `fix/cargo-lock-serde-sync` | (infra — Cargo.lock out of sync with `serde` dep added in #102; broke `cargo build --locked`) |
 
 ### All findings resolved (33/33):
 
@@ -217,6 +219,7 @@ with zero outstanding audit items.
 - **L11** (PR #103): request_save_as redundant branches consolidated.
 - **L14** (PR #104): Tasteroll CSS injected into preview HTML.
 - **L3**: Test coverage gaps addressed by regression tests across multiple PRs.
+- **PR #106** (infra): Cargo.lock sync — PR #102 added `serde` to `rutile-types/Cargo.toml` but the lockfile update was never committed, breaking `cargo build --locked` on `main`. Fixed with a 2-line lockfile sync.
 
 ### Frozen-file invariant:
 
@@ -224,4 +227,4 @@ with zero outstanding audit items.
 
 ### Final gate state:
 
-fmt . clippy (pedantic+nursery, zero warnings) . test (1107 tests, exit 0) . deny . audit
+fmt ✓ · clippy (pedantic+nursery, zero warnings) ✓ · test (1107 tests, exit 0) ✓ · deny ✓ · audit ✓ · `cargo build --locked` ✓ (main `20c6d25`)
