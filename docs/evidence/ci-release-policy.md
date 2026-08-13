@@ -16,11 +16,11 @@ claim.
 | Formatting | `cargo fmt --all -- --check` | Required on every CI and release run. |
 | Workspace build/test/lint | Locked `cargo check`, `cargo test --workspace --all-targets`, and `cargo clippy -D warnings` | Required on every CI and release run. |
 | Dependency policy | `cargo deny check`, `cargo deny check licenses`, and `cargo audit` | Missing tools or a failing result blocks the run. |
-| macOS native | `feathermark-app` with `--no-default-features --features macos-shell` | Must run on a real macOS runner; no startup-only substitute. |
-| Linux native | `scripts/feathermark-linux-gate.sh` | Must use private Xvfb/D-Bus and retain the 50-cycle lifecycle receipt. |
+| macOS native | `rutile-app` with `--no-default-features --features macos-shell` via `scripts/ci/macos-native-gate.sh` | Must run on a real macOS runner; no startup-only substitute. |
+| Linux native | `scripts/ci/linux-native-gate.sh` (CI) or `scripts/rutile-linux-gate.sh` (host) | Must use private Xvfb/D-Bus and retain the 50-cycle lifecycle receipt. |
 | Production separation | Release artifacts use `macos-shell` or `linux-gtk` only | `test-control` is permitted only for the instrumented lifecycle binary and never for packages. |
 | Artifact inspection | Binary/package strings scan for test-control markers and absolute builder paths | Any match quarantines the output. |
-| Builder identity remapping | Source `scripts/feathermark-rust-path-remap.sh` before production Rust builds | A release build that still contains builder paths fails the artifact scan. |
+| Builder identity remapping | `xtask reproducible-build` (`--remap-path-prefix` + `SOURCE_DATE_EPOCH` + `target/prod`) | A release build that still contains builder paths fails the artifact scan. |
 | SBOM/licenses | A fresh machine-readable SBOM plus `cargo deny check licenses` | Existing historical evidence cannot substitute for a fresh release receipt. |
 | Signing/provenance | Signed tag, artifact signatures, source commit, input hash, and retained evidence | Missing signing material or provenance is a blocker. |
 | Publication | Explicit operator approval plus configured Forgejo credentials | Publication remains blocked until all gates and approval are present. |

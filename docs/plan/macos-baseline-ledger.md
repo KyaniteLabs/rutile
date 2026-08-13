@@ -1,6 +1,6 @@
 # Rutile 0.2 macOS Baseline Ledger
 
-Status: **updated 2026-08-13** against `main` `ceed4cd`. Feature-by-feature
+Status: **updated 2026-08-13** against `main` `f569859` (product tip `ceed4cd`). Feature-by-feature
 truth of the current macOS product (0.2.2). Scratch roadmap issues under
 `.scratch/` may still say `open`; this ledger is the checked-in truth.
 
@@ -28,13 +28,13 @@ truth of the current macOS product (0.2.2). Scratch roadmap issues under
 
 - **Session restore**: last file only; not every open tab (D8).
 - **Autosave recovery**: shared journal, highest-sequence snapshot.
-- **Linux**: GTK shell is Linux-only and has no tab chrome.
+- **Linux**: GTK shell is Linux-only. Shared data plane is on `main`; chrome sequenced in `docs/plan/linux-parity.md`.
 - **Outline / local search / revision history**: contracts exist; no native sidebar.
 - **Quality probes**: catalog + emit harness shipped; physical GUI attestation pending.
 
 ## Absent / blocked
 
-- Linux visual tab strip (needs a Linux host).
+- Linux visual tab strip / File menus / CLI open (needs a Linux host; see `docs/plan/linux-parity.md`).
 - Local AI editing (roadmap 13, deferred).
 - GUI-stack unification (no crates.io pin).
 - Publication / notarization / independent readiness verifier.

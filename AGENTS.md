@@ -34,6 +34,7 @@ crates/rutile-types/src/safe_link.rs
 - `xtask/` — build and evidence
 - `docs/handoff/current-state.md` — live operational snapshot (prefer over README)
 - `docs/handoff/2026-08-13-tablestakes.md` — PRs #108–#118
+- `docs/plan/linux-parity.md` — Linux File/CLI → strip → view/palette sequence
 - `docs/evidence/`, `docs/plan/`
 - `vendor/pulldown-cmark/` — do not bypass `[patch.crates-io]`
 

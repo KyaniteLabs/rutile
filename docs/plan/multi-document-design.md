@@ -1,7 +1,8 @@
 # Multi-Document Manager and Tabs (Roadmap 08) — Design Decisions
 
 Status: **implemented on macOS (PRs #112–#113, #116–#118).** Linux has the
-shared data plane only — no GTK strip. D8 window restore of every open path
+shared data plane only — no GTK strip. GTK chrome is P1 in
+`docs/plan/linux-parity.md`. D8 window restore of every open path
 is still last-file-only. Parent issue:
 `.scratch/rutile-macos-roadmap/issues/08-multi-document-manager-and-tabs.md`.
 

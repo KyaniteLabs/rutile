@@ -1,9 +1,9 @@
 # Handoff: Table-stakes follow-up — 2026-08-13
 
-> **Main HEAD**: `ceed4cd` · **Branch**: `main` · **Remote**: Forgejo
-> `git.kyanitelabs.tech:simon/feathermark.git`
+> **Main HEAD**: `f569859` · product tip `ceed4cd` · **Branch**: `main` ·
+> **Remote**: Forgejo `git.kyanitelabs.tech:simon/feathermark.git`
 > **Status**: Audit leftovers that were table-stakes are shipped or honestly
-> blocked. Not a public release.
+> blocked. Docs #119–#120 reconciled living status. Not a public release.
 
 ## Sequence
 
@@ -21,6 +21,8 @@ Ralplan consensus (rev 2) then IMPLEMENT NOW, one PR per change:
 | — | #116 | Autosave store inherited onto every tab |
 | — | #117 | File Open uses D4 (`adopt_opened_document`) |
 | — | #118 | Active tab uses `INK` |
+| docs | #119 | Living docs + S+ README + AGENTS crate names |
+| docs | #120 | Linux daily-driver plan + host rule |
 
 ## Frozen files
 

@@ -1,6 +1,7 @@
 # Reader-First View Mode (Roadmap 04) — Design Decisions
 
-Status: **locked (contract implemented; native View-menu items wired)**. Parent
+Status: **locked (contract implemented; macOS View-menu items wired).**
+Linux View modes are P2 in `docs/plan/linux-parity.md`. Parent
 issue: `.scratch/rutile-macos-roadmap/issues/04-reader-first-view-mode.md`.
 Blocked by 03 (DONE).
 

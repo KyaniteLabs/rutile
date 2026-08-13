@@ -1,7 +1,8 @@
 # Focus Mode (Roadmap 10) — Design Decisions
 
 Status: **implemented (contract + macOS chrome hide).** Focus mode hides the
-Iced tab strip and toolbar.
+Iced tab strip and toolbar. Linux focus-hides-chrome is P2 in
+`docs/plan/linux-parity.md`.
 Parent issue: `.scratch/rutile-macos-roadmap/issues/10-focus-mode.md`.
 Blocked by 03 (DONE), 04 (DONE).
 
