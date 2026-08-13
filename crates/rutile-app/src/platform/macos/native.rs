@@ -368,28 +368,30 @@ impl ProductRunner {
             }
             MacMenuCommand::NewTab => {
                 self.session.core_mut().reduce(AppMessage::NewTab);
+                if let Err(error) = self.refresh_after_document_swap(event_loop) {
+                    self.fail(event_loop, error.to_string());
+                }
                 self.sync_tabs();
             }
             MacMenuCommand::CloseTab => {
-                let active = self.session.app_state().documents().active_id();
-                if self.session.app_state().dirty() {
-                    // Dirty tab: present save dialog instead of discarding.
-                    self.pending_close = true;
-                    let _ = self.session.request_close(CloseDecision::Save {
-                        untitled_path: None,
-                    });
-                } else {
-                    self.session
-                        .core_mut()
-                        .reduce(AppMessage::CloseTab { id: active });
-                    self.sync_tabs();
+                if self.session.app_state().documents().len() <= 1 {
+                    return;
                 }
+                let active = self.session.app_state().documents().active_id();
+                let effects = self
+                    .session
+                    .core_mut()
+                    .reduce(AppMessage::CloseTab { id: active });
+                self.apply_tab_close_effects(event_loop, effects);
             }
             MacMenuCommand::SwitchTab => {
                 if let Some(index) = take_pending_switch() {
                     let tabs: Vec<_> = self.session.app_state().documents().tab_order().to_vec();
                     if let Some(&id) = tabs.get(index) {
                         self.session.core_mut().reduce(AppMessage::SwitchTab { id });
+                        if let Err(error) = self.refresh_after_document_swap(event_loop) {
+                            self.fail(event_loop, error.to_string());
+                        }
                         self.sync_tabs();
                     }
                 }
@@ -522,6 +524,60 @@ impl ProductRunner {
 
     fn sync_palette(&mut self) {
         sync_palette_panel(self.session.app_state().palette_snapshot());
+    }
+
+    fn apply_tab_close_effects(&mut self, event_loop: &ActiveEventLoop, effects: Vec<AppEffect>) {
+        for effect in effects {
+            match effect {
+                AppEffect::RequestTabCloseDecision { id } => {
+                    self.prompt_tab_close(event_loop, id);
+                }
+                AppEffect::PresentNotice { notice } => {
+                    self.surface_error(notice.message);
+                }
+                _ => {}
+            }
+        }
+        if let Err(error) = self.refresh_after_document_swap(event_loop) {
+            self.fail(event_loop, error.to_string());
+        }
+        self.sync_tabs();
+    }
+
+    fn prompt_tab_close(&mut self, event_loop: &ActiveEventLoop, id: rutile_types::DocumentId) {
+        let action = match run_dirty_close_alert() {
+            Ok(action) => action,
+            Err(error) => {
+                self.surface_error(error.to_string());
+                return;
+            }
+        };
+        match action {
+            CloseDialogAction::Cancel => {
+                let _ = self.session.core_mut().reduce(AppMessage::TabCloseDecided {
+                    id,
+                    decision: CloseDecision::Cancel,
+                });
+            }
+            CloseDialogAction::Discard => {
+                let _ = self.session.core_mut().reduce(AppMessage::TabCloseDecided {
+                    id,
+                    decision: CloseDecision::Discard,
+                });
+            }
+            CloseDialogAction::Save => match self.session.request_save() {
+                Ok(MacSaveAction::Completed | MacSaveAction::Noop) => {
+                    let _ = self.session.core_mut().reduce(AppMessage::CloseTab { id });
+                }
+                Ok(MacSaveAction::NeedSaveAs) => {
+                    self.run_save_as_md(event_loop);
+                    if !self.session.app_state().dirty() {
+                        let _ = self.session.core_mut().reduce(AppMessage::CloseTab { id });
+                    }
+                }
+                Err(error) => self.surface_error(format!("Save failed: {error}")),
+            },
+        }
     }
 
     /// Rebuilds the Tabs submenu from the current `DocumentManager` state.
