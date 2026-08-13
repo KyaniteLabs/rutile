@@ -15,6 +15,9 @@ pub struct PasteFlavors {
 /// the same empty-pasteboard error [`read_paste_text`] uses.
 pub fn read_paste_flavors() -> Result<PasteFlavors, MacError> {
     let pasteboard = NSPasteboard::generalPasteboard();
+    // SAFETY: `NSPasteboardTypeHTML` and `NSPasteboardTypeString` are immutable
+    // extern `NSString*` constants initialized by the AppKit runtime before
+    // `main`; reading them from any thread is sound.
     let html_type = unsafe { NSPasteboardTypeHTML };
     let string_type = unsafe { NSPasteboardTypeString };
     let html = pasteboard
@@ -41,6 +44,7 @@ pub fn write_html(html: &str) -> Result<(), MacError> {
         ));
     }
     let value = NSString::from_str(html);
+    // SAFETY: same immutable AppKit UTI constants as `read_paste_flavors`.
     let html_type = unsafe { NSPasteboardTypeHTML };
     let string_type = unsafe { NSPasteboardTypeString };
     if !pasteboard.setString_forType(&value, html_type) {
@@ -63,6 +67,7 @@ pub fn write_html(html: &str) -> Result<(), MacError> {
 /// paste path (it would re-introduce the raw-HTML fallback, H-L4-1).
 pub fn read_paste_text() -> Result<String, MacError> {
     let pasteboard = NSPasteboard::generalPasteboard();
+    // SAFETY: same immutable AppKit UTI constants as `read_paste_flavors`.
     let html_type = unsafe { NSPasteboardTypeHTML };
     if let Some(value) = pasteboard.stringForType(html_type) {
         return Ok(value.to_string());
