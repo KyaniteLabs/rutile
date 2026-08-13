@@ -18,6 +18,7 @@ use rutile_core::{
     FindDirection, FindQuery, FormatCommand, MatchMode, ScrollClock, Selection, TransactionKind,
     apply_editor_commit, html_to_markdown,
 };
+use rutile_types::{InteractionId, Revision};
 
 #[test]
 fn format_command_bolds_the_selection_through_the_shared_engine() {
@@ -269,7 +270,9 @@ fn session_detects_and_resolves_external_file_changes_through_the_reducer() {
     std::fs::write(&path, "disk two").unwrap();
     assert_eq!(
         session.inspect_external_change(100).unwrap(),
-        LinuxExternalOutcome::Reloaded { revision: 0 }
+        LinuxExternalOutcome::Reloaded {
+            revision: Revision::new(0),
+        }
     );
     assert_eq!(session.source(), "disk two");
 
@@ -406,7 +409,7 @@ fn scroll_controller_owns_revisioned_leases_and_suppresses_echoes() {
             .unwrap(),
         LinuxScrollDispatch::Source {
             source_start: 50,
-            interaction_id: 42,
+            interaction_id: InteractionId::new(42),
             ..
         }
     ));

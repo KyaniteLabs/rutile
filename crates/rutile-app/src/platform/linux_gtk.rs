@@ -15,12 +15,12 @@ use gtk::gdk::keys::constants as keys;
 use gtk::gio::prelude::ApplicationExtManual;
 use gtk::prelude::*;
 use rutile_core::{
-    AdapterCommitId, ChangeSet, CompositionCancelReason, CompositionTracker, Document, Edit,
-    EditTransaction, EditorAdapter, EditorCommit, EditorError, EditorEvent, EditorEventSink,
-    ExternalChange, ExternalResolution, FileService, LocalCommitRejection, LocalFileService,
-    RenderError, ScrollAnchorView, ScrollClock, ScrollGeometry, ScrollMap, ScrollOutcome,
-    ScrollPosition, ScrollSynchronizer, ScrollTarget, StaleRevision, TransactionKind,
-    apply_editor_commit,
+    AdapterCommitId, ChangeSet, CompositionCancelReason, CompositionId, CompositionTracker,
+    Document, Edit, EditTransaction, EditorAdapter, EditorCommit, EditorError, EditorEvent,
+    EditorEventSink, ExternalChange, ExternalResolution, FileService, LocalCommitRejection,
+    LocalFileService, RenderError, ScrollAnchorView, ScrollClock, ScrollGeometry, ScrollMap,
+    ScrollOutcome, ScrollPosition, ScrollSynchronizer, ScrollTarget, StaleRevision,
+    TransactionKind, apply_editor_commit,
 };
 use rutile_core::{
     AutosaveEntryV1, AutosaveRecordOutcome, AutosaveStore, Counts, FindDirection, FindQuery,
@@ -197,7 +197,7 @@ struct PendingNativeEdit {
 
 #[derive(Clone, Debug)]
 struct GtkComposition {
-    id: u64,
+    id: CompositionId,
     base_revision: Revision,
     range: std::ops::Range<usize>,
 }
@@ -214,7 +214,7 @@ struct GtkEditorInner {
     index: LineByteIndex,
     revision: Revision,
     next_commit_id: AdapterCommitId,
-    next_composition_id: u64,
+    next_composition_id: CompositionId,
     pending_native: Option<PendingNativeEdit>,
     pending_commit: Option<AdapterCommitId>,
     pending_paint: Option<Revision>,
@@ -300,9 +300,9 @@ impl GtkSourceEditorAdapter {
         let inner = Rc::new(RefCell::new(GtkEditorInner {
             sink: None,
             index: LineByteIndex::from_text(""),
-            revision: 0,
+            revision: Revision::new(0),
             next_commit_id: AdapterCommitId::new(0),
-            next_composition_id: 0,
+            next_composition_id: CompositionId::new(0),
             pending_native: None,
             pending_commit: None,
             pending_paint: None,
@@ -421,7 +421,8 @@ impl GtkSourceEditorAdapter {
                             .unwrap_or(inner.index.len);
                         byte..byte
                     });
-                inner.next_composition_id = inner.next_composition_id.saturating_add(1);
+                inner.next_composition_id =
+                    CompositionId::new(inner.next_composition_id.get().saturating_add(1));
                 let active = GtkComposition {
                     id: inner.next_composition_id,
                     base_revision: inner.revision,
@@ -919,7 +920,7 @@ impl LinuxProductSession {
             scroll: None,
             file_service: LocalFileService::new(),
             next_transaction_id: 0,
-            next_scroll_interaction_id: 1,
+            next_scroll_interaction_id: InteractionId::new(1),
             stats: Cell::new(LinuxSessionStats::default()),
             closed: false,
         })
