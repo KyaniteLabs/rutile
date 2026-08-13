@@ -153,6 +153,53 @@ impl DocumentSessionCore {
         self.document = self.parked.remove(&id).unwrap_or_else(Self::empty_document);
     }
 
+    /// Installs a freshly loaded file as the active tab (design D4).
+    ///
+    /// - Same path already active: replace the live rope in place (reload).
+    /// - Same path open in another tab: switch there and install the load.
+    /// - Single untitled clean tab: replace in place (startup / first open).
+    /// - Otherwise: park the current tab and open a new one.
+    pub fn adopt_opened_document(
+        &mut self,
+        document: Document,
+        path: PathBuf,
+        disk: DiskVersion,
+    ) -> Vec<AppEffect> {
+        if let Some(existing) = self.app.documents().find_by_path(&path) {
+            if existing != self.app.documents().active_id() {
+                self.park_active();
+                let _ = self.app.reduce(AppMessage::SwitchTab { id: existing });
+                self.parked.remove(&existing);
+            }
+            self.document = document;
+            return self.app.reduce(AppMessage::DocumentOpened {
+                revision: self.document.revision(),
+                path,
+                disk,
+            });
+        }
+
+        let replace_in_place =
+            self.app.documents().len() == 1 && !self.app.dirty() && self.app.path().is_none();
+        if !replace_in_place {
+            self.park_active();
+            let effects = self.app.reduce(AppMessage::NewTab);
+            if effects
+                .iter()
+                .any(|effect| matches!(effect, AppEffect::PresentNotice { .. }))
+            {
+                self.load_active();
+                return effects;
+            }
+        }
+        self.document = document;
+        self.app.reduce(AppMessage::DocumentOpened {
+            revision: self.document.revision(),
+            path,
+            disk,
+        })
+    }
+
     pub fn reduce(&mut self, message: AppMessage) -> Vec<AppEffect> {
         match message {
             AppMessage::NewTab => {
@@ -307,6 +354,53 @@ mod tests {
         core.set_document(Document::new("second").unwrap());
         let (app, document) = core.app_mut_and_document();
         assert!(app.autosave_tick(document, 1).unwrap().is_some());
+    }
+
+    fn sample_disk(name: &str, source: &str) -> (PathBuf, DiskVersion) {
+        use rutile_core::{FileService, LocalFileService};
+        let path = std::env::temp_dir().join(format!("rutile-adopt-{name}-{}", std::process::id()));
+        let document = Document::new(source).unwrap();
+        let disk = match LocalFileService::new().save_atomic(&path, &document.snapshot()) {
+            rutile_core::SaveOutcome::Committed { disk } => disk,
+            other => panic!("expected committed save, got {other:?}"),
+        };
+        (path, disk)
+    }
+
+    #[test]
+    fn first_open_replaces_the_single_untitled_tab() {
+        let mut core = DocumentSessionCore::new_in_memory("starter").unwrap();
+        let (path, disk) = sample_disk("first", "from disk");
+        let _ = core.adopt_opened_document(Document::new("from disk").unwrap(), path, disk);
+        assert_eq!(core.app().documents().len(), 1);
+        assert_eq!(core.document().snapshot().to_string(), "from disk");
+    }
+
+    #[test]
+    fn open_after_edit_parks_the_current_tab() {
+        let mut core = DocumentSessionCore::new_in_memory("keep me").unwrap();
+        let first = core.app().documents().active_id();
+        let _ = core.reduce(AppMessage::DocumentEdited {
+            revision: Revision::new(1),
+        });
+        let (path, disk) = sample_disk("second", "opened");
+        let _ = core.adopt_opened_document(Document::new("opened").unwrap(), path, disk);
+        assert_eq!(core.app().documents().len(), 2);
+        assert_eq!(core.document().snapshot().to_string(), "opened");
+        let _ = core.reduce(AppMessage::SwitchTab { id: first });
+        assert_eq!(core.document().snapshot().to_string(), "keep me");
+    }
+
+    #[test]
+    fn reopen_same_path_switches_instead_of_duplicating() {
+        let mut core = DocumentSessionCore::new_in_memory("").unwrap();
+        let (path, disk) = sample_disk("dup", "once");
+        let _ =
+            core.adopt_opened_document(Document::new("once").unwrap(), path.clone(), disk.clone());
+        let _ = core.reduce(AppMessage::NewTab);
+        let _ = core.adopt_opened_document(Document::new("once").unwrap(), path, disk);
+        assert_eq!(core.app().documents().len(), 2);
+        assert_eq!(core.document().snapshot().to_string(), "once");
     }
 
     #[test]
