@@ -4,6 +4,7 @@ use rutile_core::{
     SessionError, SessionSelectionV1, SessionStateV1, SessionWindowV1, decode_autosave_entry,
     decode_session_state, encode_autosave_entry, encode_session_state,
 };
+use rutile_types::Revision;
 
 fn entry() -> AutosaveEntryV1 {
     AutosaveEntryV1 {
@@ -12,7 +13,7 @@ fn entry() -> AutosaveEntryV1 {
         sequence: 9,
         captured_at_unix_ms: 1_760_000_000_000,
         document_path: Some("/notes/todo.md".into()),
-        document_revision: 42,
+        document_revision: Revision::new(42),
         snapshot_file: "autosave-9.md".into(),
         snapshot_bytes: 128,
         snapshot_blake3: "a".repeat(64),

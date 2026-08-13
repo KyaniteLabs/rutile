@@ -258,7 +258,7 @@ fn flush_chunk(
     // length change of earlier edits in the *same* chunk and overshot the final
     // document length for a shrinking multi-match replace-all.
     let selection_after = Selection::collapsed(last.byte_range.end.saturating_add_signed(delta));
-    let revision = base_revision.saturating_add(revision_offset);
+    let revision = Revision::new(base_revision.get().saturating_add(revision_offset));
     plans.push(EditPlan::new(revision, shifted, selection_after)?);
     Ok((delta, 1))
 }
@@ -625,7 +625,7 @@ mod tests {
     fn replace_current_builds_single_edit() {
         let text = "hello world";
         let spec = ReplaceSpec::new(plain("world"), "there".to_owned()).unwrap();
-        let plan = replace_current(0, text, &spec, 6..11).unwrap();
+        let plan = replace_current(Revision::new(0), text, &spec, 6..11).unwrap();
         assert_eq!(plan.edits().len(), 1);
         assert_eq!(apply_plans(text, &[plan]), "hello there");
     }
@@ -636,11 +636,11 @@ mod tests {
         let spec = ReplaceSpec::new(plain("x"), "y".to_owned()).unwrap();
         let reversed = Range { start: 3, end: 2 };
         assert!(matches!(
-            replace_current(0, text, &spec, reversed),
+            replace_current(Revision::new(0), text, &spec, reversed),
             Err(ReplaceError::ReversedRange { .. })
         ));
         assert!(matches!(
-            replace_current(0, text, &spec, 0..99),
+            replace_current(Revision::new(0), text, &spec, 0..99),
             Err(ReplaceError::OutOfBounds { .. })
         ));
     }
@@ -649,7 +649,7 @@ mod tests {
     fn replace_all_small_document_single_plan() {
         let text = "a a a a";
         let spec = ReplaceSpec::new(plain("a"), "bb".to_owned()).unwrap();
-        let plans = replace_all(0, text, &spec).unwrap();
+        let plans = replace_all(Revision::new(0), text, &spec).unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(apply_plans(text, &plans), "bb bb bb bb");
     }
@@ -664,7 +664,7 @@ mod tests {
         // set_selection landed out of bounds and quit the app.
         let text = "aa aa";
         let spec = ReplaceSpec::new(plain("aa"), "b".to_owned()).unwrap();
-        let plans = replace_all(0, text, &spec).unwrap();
+        let plans = replace_all(Revision::new(0), text, &spec).unwrap();
         assert_eq!(plans.len(), 1);
         let result = apply_plans(text, &plans);
         assert_eq!(result, "b b");
@@ -683,7 +683,7 @@ mod tests {
         // last match: "aa aa" / "aa"->"bbb" => "bbb bbb" (len 7); cursor at 7.
         let text = "aa aa";
         let spec = ReplaceSpec::new(plain("aa"), "bbb".to_owned()).unwrap();
-        let plans = replace_all(0, text, &spec).unwrap();
+        let plans = replace_all(Revision::new(0), text, &spec).unwrap();
         assert_eq!(plans.len(), 1);
         let result = apply_plans(text, &plans);
         assert_eq!(result, "bbb bbb");
@@ -696,7 +696,11 @@ mod tests {
     fn replace_all_no_matches_is_empty() {
         let text = "nothing here";
         let spec = ReplaceSpec::new(plain("zzz"), "!".to_owned()).unwrap();
-        assert!(replace_all(0, text, &spec).unwrap().is_empty());
+        assert!(
+            replace_all(Revision::new(0), text, &spec)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -705,7 +709,7 @@ mod tests {
         let count = 5000;
         let text = "x ".repeat(count);
         let spec = ReplaceSpec::new(plain("x"), "yy".to_owned()).unwrap();
-        let plans = replace_all(0, &text, &spec).unwrap();
+        let plans = replace_all(Revision::new(0), &text, &spec).unwrap();
 
         assert!(
             plans.len() >= 2,
@@ -717,7 +721,7 @@ mod tests {
         }
         // Revisions are consecutive starting at the base.
         for (index, plan) in plans.iter().enumerate() {
-            assert_eq!(plan.base_revision(), index as u64);
+            assert_eq!(plan.base_revision(), Revision::new(index as u64));
         }
         // Applying every plan in order fully replaces the document.
         let expected = "yy ".repeat(count);
@@ -731,7 +735,7 @@ mod tests {
         let count = 400; // 400 * ~2001 bytes >> MAX_PLAN_TOTAL_BYTES (256 KiB)
         let text = "a".repeat(count);
         let spec = ReplaceSpec::new(plain("a"), replacement.clone()).unwrap();
-        let plans = replace_all(0, &text, &spec).unwrap();
+        let plans = replace_all(Revision::new(0), &text, &spec).unwrap();
         assert!(plans.len() >= 2);
         let expected = replacement.repeat(count);
         assert_eq!(apply_plans(&text, &plans), expected);
@@ -747,13 +751,14 @@ mod tests {
             wrap: false,
         };
         assert_eq!(
-            execute(0, text, &find).unwrap(),
+            execute(Revision::new(0), text, &find).unwrap(),
             FindReplaceOutcome::Match(Some(0..3))
         );
 
         let spec = ReplaceSpec::new(plain("one"), "1".to_owned()).unwrap();
         let all = FindReplaceOp::ReplaceAll { spec: spec.clone() };
-        let FindReplaceOutcome::Plans(plans) = execute(0, text, &all).unwrap() else {
+        let FindReplaceOutcome::Plans(plans) = execute(Revision::new(0), text, &all).unwrap()
+        else {
             panic!("replace-all yields plans");
         };
         assert_eq!(apply_plans(text, &plans), "1 two 1");
@@ -771,7 +776,7 @@ mod tests {
         // Sanity: an EditPlan lowers to a Programmatic transaction.
         let text = "hi hi";
         let spec = ReplaceSpec::new(plain("hi"), "yo".to_owned()).unwrap();
-        let plans = replace_all(0, text, &spec).unwrap();
+        let plans = replace_all(Revision::new(0), text, &spec).unwrap();
         let tx: EditTransaction = plans[0].clone().into_transaction(7);
         assert_eq!(tx.kind, TransactionKind::Programmatic);
     }

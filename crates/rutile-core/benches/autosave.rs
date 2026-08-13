@@ -31,6 +31,7 @@ use rutile_core::{
     SessionSelectionV1, SessionStateV1, SessionWindowV1, decode_autosave_entry,
     decode_session_state, encode_autosave_entry, encode_session_state,
 };
+use rutile_types::Revision;
 
 fn main() {
     bench_decode_entry();
@@ -50,7 +51,7 @@ fn bench_decode_entry() {
         sequence: 42,
         captured_at_unix_ms: 1_750_000_000_000,
         document_path: Some(format!("/home/user/{}", "a".repeat(3_800))),
-        document_revision: 7,
+        document_revision: Revision::new(7),
         snapshot_file: "snap-42".to_owned(),
         snapshot_bytes: 4096,
         snapshot_blake3: "0".repeat(64),

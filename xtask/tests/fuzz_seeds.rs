@@ -1,6 +1,6 @@
 use std::fs;
 
-use rutile_protocol::{PreviewEventV1, decode_preview_event};
+use rutile_protocol::{PreviewEventV1, Revision, decode_preview_event};
 
 #[test]
 fn committed_preview_seed_set_reaches_all_four_success_variants() {
@@ -14,7 +14,7 @@ fn committed_preview_seed_set_reaches_all_four_success_variants() {
     ] {
         let bytes = fs::read(root.join(name)).unwrap();
         let prefix: [u8; 8] = bytes[..8].try_into().unwrap();
-        let revision = u64::from_le_bytes(prefix);
+        let revision = Revision::new(u64::from_le_bytes(prefix));
         let actual = match decode_preview_event(&bytes[8..], revision).unwrap() {
             PreviewEventV1::BridgeReady { revision: event } => {
                 assert_eq!(event, revision);

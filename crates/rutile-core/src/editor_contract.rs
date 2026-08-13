@@ -10,7 +10,41 @@ use crate::{
 };
 
 pub type AdapterCommitId = u64;
-pub type CompositionId = u64;
+/// A composition (IME) sequence id. Distinct from `Revision` and
+/// `AdapterCommitId`: the newtype wrapper prevents transposed-argument bugs.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[serde(transparent)]
+pub struct CompositionId(u64);
+
+impl CompositionId {
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl std::fmt::Display for CompositionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImeCommit {

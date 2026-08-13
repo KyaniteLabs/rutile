@@ -16,6 +16,7 @@
 //! source-block API. It never parses files, follows links, or constructs HTML.
 
 use rutile_core::{RenderError, SourceBlockKind, build_source_blocks};
+use rutile_types::Revision;
 
 /// Maximum outline entries (resource bound, O5).
 pub const MAX_OUTLINE_ENTRIES: usize = 500;
@@ -45,7 +46,7 @@ impl Outline {
     /// document; propagates a [`RenderError`] only if the source is so
     /// pathological the renderer itself rejects it.
     pub fn from_source(source: &str) -> Result<Self, RenderError> {
-        let blocks = build_source_blocks(source, 0)?;
+        let blocks = build_source_blocks(source, Revision::new(0))?;
         let mut entries = Vec::new();
         for block in blocks.iter().filter(|b| b.kind == SourceBlockKind::Heading) {
             if entries.len() >= MAX_OUTLINE_ENTRIES {

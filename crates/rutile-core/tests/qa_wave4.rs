@@ -18,6 +18,7 @@ use rutile_core::{
     find_next, html_to_markdown, match_count, render_export_page, render_markdown, replace_all,
     smart_enter,
 };
+use rutile_types::Revision;
 
 // ---------------------------------------------------------------------------
 // Lane 1 — format engine edge cases
@@ -289,7 +290,7 @@ fn smart_paste_output_is_safe_by_construction() {
             !lower.contains("javascript:"),
             "md leaked javascript: {markdown:?}"
         );
-        let Ok(rendered) = render_markdown(&markdown, 1) else {
+        let Ok(rendered) = render_markdown(&markdown, Revision::new(1)) else {
             continue;
         };
         let body = rendered.body.to_ascii_lowercase();
@@ -313,7 +314,7 @@ fn smart_paste_output_is_safe_by_construction() {
 // ---------------------------------------------------------------------------
 
 fn export(source: &str) -> String {
-    let request = ExportRequest::new(1, Some("QA".to_owned())).unwrap();
+    let request = ExportRequest::new(Revision::new(1), Some("QA".to_owned())).unwrap();
     render_export_page(source, &request)
         .expect("hostile-but-renderable doc exports")
         .into_html()
@@ -421,7 +422,7 @@ fn q(pattern: &str, mode: MatchMode, cs: bool) -> FindQuery {
 }
 
 fn apply_plans_sequential(text: &str, spec: &ReplaceSpec) -> String {
-    let plans = replace_all(0, text, spec).unwrap();
+    let plans = replace_all(Revision::new(0), text, spec).unwrap();
     let mut document = Document::new(text).unwrap();
     for plan in plans {
         let tx = plan.into_transaction(0);
@@ -435,7 +436,7 @@ fn replace_all_over_ten_thousand_matches_fully_replaces() {
     let count = 10_000usize;
     let text = "x ".repeat(count);
     let spec = ReplaceSpec::new(q("x", MatchMode::Plain, true), "yy".to_owned()).unwrap();
-    let plans = replace_all(0, &text, &spec).unwrap();
+    let plans = replace_all(Revision::new(0), &text, &spec).unwrap();
     assert!(plans.len() >= 2, "expected chunking, got {}", plans.len());
     let out = apply_plans_sequential(&text, &spec);
     assert_eq!(out, "yy ".repeat(count));

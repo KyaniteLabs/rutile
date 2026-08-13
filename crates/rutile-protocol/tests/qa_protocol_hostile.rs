@@ -10,8 +10,9 @@ use rutile_protocol::{
     ProtocolError, decode_gui_command, decode_gui_event, decode_metric_record,
     decode_preview_event, encode_gui_command,
 };
+use rutile_types::Revision;
 
-const LOADED: u64 = 5;
+const LOADED: Revision = Revision::new(5);
 
 // ---------- framing abuse ----------
 

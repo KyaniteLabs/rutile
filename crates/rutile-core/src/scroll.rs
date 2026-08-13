@@ -380,9 +380,12 @@ impl ScrollSynchronizer {
         };
 
         let interaction_id = self.next_interaction_id;
-        self.next_interaction_id = interaction_id
-            .checked_add(1)
-            .ok_or(ScrollError::InteractionIdOverflow)?;
+        self.next_interaction_id = InteractionId::new(
+            interaction_id
+                .get()
+                .checked_add(1)
+                .ok_or(ScrollError::InteractionIdOverflow)?,
+        );
         let target_pane = pane.other();
         self.lease = Some(InteractionLease {
             interaction_id,

@@ -17,8 +17,80 @@ pub mod safe_link;
 
 pub use safe_link::{SafeLinkError, SafeLinkTarget};
 
-pub type Revision = u64;
-pub type InteractionId = u64;
+/// A document's edit generation (M8 newtype).
+///
+/// Distinct from [`InteractionId`] and [`DocumentId`]; the newtype wrapper
+/// prevents transposed-argument bugs that a bare `u64` alias allows.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[serde(transparent)]
+pub struct Revision(u64);
+
+impl Revision {
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl std::fmt::Display for Revision {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// A user-interaction sequence id. Distinct from [`Revision`] (a document's
+/// edit generation) and [`DocumentId`] (which document).
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[serde(transparent)]
+pub struct InteractionId(u64);
+
+impl InteractionId {
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl std::fmt::Display for InteractionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// Stable, opaque identifier for an open document within the editor shell.
 ///
 /// Distinct from [`Revision`] (a document's edit generation) and
@@ -26,7 +98,8 @@ pub type InteractionId = u64;
 /// document, not its state or an interaction with it. The newtype wrapper keeps
 /// it from being silently passed where a `Revision` or `InteractionId` is
 /// expected. The single-document baseline uses [`DocumentId::ROOT`] exclusively;
-/// multi-document/tabs (roadmap 08) mint fresh ids from a shell-owned counter.
+/// multi-document/tabs (roadmap 08) mint fresh ids from a shell-owned counter
+/// seeded at 1 so generated ids never collide with [`DocumentId::ROOT`] (L7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DocumentId(u64);
 
@@ -48,7 +121,7 @@ impl DocumentId {
 
 #[cfg(test)]
 mod tests {
-    use super::DocumentId;
+    use super::{DocumentId, InteractionId, Revision};
 
     #[test]
     fn root_is_stable_zero_and_documents_are_distinct() {
@@ -58,15 +131,20 @@ mod tests {
     }
 
     #[test]
-    fn document_id_does_not_equate_to_revision_or_interaction_aliases() {
-        // DocumentId is a newtype, not a u64 alias, so it cannot be silently
-        // mixed with Revision/InteractionId at a type-check level.
+    fn all_identifier_newtypes_are_type_distinct() {
+        // L7/M8: Revision, InteractionId, and DocumentId are all distinct
+        // newtypes. None can be silently passed where another is expected.
+        fn accepts_revision(_: Revision) {}
+        fn accepts_interaction(_: InteractionId) {}
         fn accepts_document(id: DocumentId) -> DocumentId {
             id
         }
+        accepts_revision(Revision::new(0));
+        accepts_interaction(InteractionId::new(0));
         let _ = accepts_document(DocumentId::ROOT);
         // These would fail to compile if uncommented (type mismatch):
-        //   let _: DocumentId = 0u64;          // Revision/InteractionId are u64
-        //   _accepts_document(0u64);
+        //   accepts_revision(InteractionId::new(0));
+        //   accepts_interaction(DocumentId::ROOT);
+        //   accepts_document(Revision::new(0));
     }
 }
