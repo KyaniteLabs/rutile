@@ -111,12 +111,22 @@ pub struct PreviewHost {
     document: Option<HostedDocument>,
     pending_navigation: Option<String>,
     loaded_revision: Option<Revision>,
+    /// Tasteroll CSS custom-property block to inject into preview HTML (L14).
+    /// Updated by the platform shell whenever the tasteroll state changes.
+    tasteroll_css: Option<String>,
 }
 
 impl PreviewHost {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Set or clear the tasteroll CSS custom-property block (L14).
+    /// When set, the CSS is injected as a `<style>` block into every
+    /// preview HTML response before `</head>`.
+    pub fn set_tasteroll_css(&mut self, css: Option<String>) {
+        self.tasteroll_css = css;
     }
 
     pub fn stage_document(
@@ -160,7 +170,12 @@ impl PreviewHost {
         if let Some(document) = &self.document
             && request.url == document.exact_url
         {
-            return response("text/html; charset=utf-8", true, document.page.clone());
+            let body = if let Some(css) = &self.tasteroll_css {
+                inject_tasteroll_css(&document.page, css)
+            } else {
+                document.page.clone()
+            };
+            return response("text/html; charset=utf-8", true, body);
         }
         SchemeResponse::not_found()
     }
@@ -265,4 +280,24 @@ fn common_headers(
         headers.push(("Content-Security-Policy", CONTENT_SECURITY_POLICY));
     }
     headers
+}
+
+/// Injects a `<style>` block containing tasteroll CSS custom properties into
+/// the HTML page, inserting before `</head>` (or prepending if no head).
+fn inject_tasteroll_css(page: &[u8], css: &str) -> Arc<[u8]> {
+    let style_block = format!("<style>{css}</style>");
+    let style_bytes = style_block.as_bytes();
+    let insert_pos = find_ci(page, b"</head>").unwrap_or(0);
+    let mut result = Vec::with_capacity(page.len() + style_bytes.len());
+    result.extend_from_slice(&page[..insert_pos]);
+    result.extend_from_slice(style_bytes);
+    result.extend_from_slice(&page[insert_pos..]);
+    Arc::from(result)
+}
+
+/// Case-insensitive search for `needle` in `haystack`.
+fn find_ci(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|w| w.eq_ignore_ascii_case(needle))
 }
