@@ -1047,14 +1047,12 @@ impl LinuxProductSession {
             .file_service
             .load(path, rutile_core::MAX_DOCUMENT_BYTES)
             .map_err(|error| error.to_string())?;
-        self.core.set_document(loaded.document);
         self.closed = false;
-        let revision = self.core.document().revision();
-        for effect in self.core.reduce(AppMessage::DocumentOpened {
-            revision,
-            path: path.to_path_buf(),
-            disk: loaded.disk,
-        }) {
+        let revision = loaded.document.revision();
+        for effect in
+            self.core
+                .adopt_opened_document(loaded.document, path.to_path_buf(), loaded.disk)
+        {
             if let AppEffect::ScheduleRender { revision } = effect {
                 self.submit_rope_render(revision, now_ms);
             }
@@ -1144,13 +1142,11 @@ impl LinuxProductSession {
         {
             ExternalChange::Unchanged => Ok(LinuxExternalOutcome::Unchanged),
             ExternalChange::Reloaded(loaded) => {
-                self.core.set_document(loaded.document);
-                let revision = self.core.document().revision();
-                for effect in self.core.reduce(AppMessage::DocumentOpened {
-                    revision,
-                    path,
-                    disk: loaded.disk,
-                }) {
+                let revision = loaded.document.revision();
+                for effect in self
+                    .core
+                    .adopt_opened_document(loaded.document, path, loaded.disk)
+                {
                     if let AppEffect::ScheduleRender { revision } = effect {
                         self.submit_rope_render(revision, now_ms);
                     }
@@ -1661,16 +1657,20 @@ impl LinuxProductSession {
             .core
             .app_mut()
             .reduce(AppMessage::OpenDocument { path: path.clone() });
-        let result = self
+        match self
             .file_service
             .load(&path, rutile_core::MAX_DOCUMENT_BYTES)
-            .map(|loaded| {
-                self.core.set_document(loaded.document);
+        {
+            Ok(loaded) => {
                 self.closed = false;
-                (self.core.document().revision(), path, loaded.disk)
-            })
-            .map_err(|error| error.to_string());
-        self.complete_open_request(result, now_ms)
+                let effects = self
+                    .core
+                    .adopt_opened_document(loaded.document, path, loaded.disk);
+                self.schedule_effects(&effects, now_ms);
+                effects
+            }
+            Err(error) => self.complete_open_request(Err(error.to_string()), now_ms),
+        }
     }
 
     /// Records a failed save as a durable error notice while keeping the

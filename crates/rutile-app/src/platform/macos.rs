@@ -910,13 +910,10 @@ impl ProductSession {
                         })
                         .map_err(|error| error.to_string());
                     match result {
-                        Ok((revision, path, disk, document)) => {
-                            self.core.set_document(document);
+                        Ok((_revision, path, disk, document)) => {
                             self.scheduler = RenderScheduler::new();
                             self.scroll = None;
-                            let complete = self.core.reduce(AppMessage::OpenRequestCompleted {
-                                result: Ok((revision, path, disk)),
-                            });
+                            let complete = self.core.adopt_opened_document(document, path, disk);
                             for effect in complete {
                                 if let AppEffect::ScheduleRender { .. } = effect {
                                     self.queue_current();
@@ -996,15 +993,13 @@ impl ProductSession {
         )? {
             ExternalChange::Unchanged => Ok(MacExternalOutcome::Unchanged),
             ExternalChange::Reloaded(loaded) => {
-                self.core.set_document(loaded.document);
                 self.scheduler = RenderScheduler::new();
                 self.scroll = None;
-                let revision = self.core.document().revision();
-                for effect in self.core.reduce(AppMessage::DocumentOpened {
-                    revision,
-                    path,
-                    disk: loaded.disk,
-                }) {
+                let revision = loaded.document.revision();
+                for effect in self
+                    .core
+                    .adopt_opened_document(loaded.document, path, loaded.disk)
+                {
                     if let AppEffect::ScheduleRender { .. } = effect {
                         self.queue_current();
                     }
@@ -1319,13 +1314,11 @@ impl ProductSession {
             if let AppEffect::PerformOpen { path } = effect {
                 match LocalFileService::new().load(&path, MAX_DOCUMENT_BYTES) {
                     Ok(loaded) => {
-                        self.core.set_document(loaded.document);
                         self.scheduler = RenderScheduler::new();
                         self.scroll = None;
-                        let revision = self.core.document().revision();
-                        let complete = self.core.reduce(AppMessage::OpenRequestCompleted {
-                            result: Ok((revision, path, loaded.disk)),
-                        });
+                        let complete =
+                            self.core
+                                .adopt_opened_document(loaded.document, path, loaded.disk);
                         for effect in complete {
                             if let AppEffect::ScheduleRender { .. } = effect {
                                 self.queue_current();
