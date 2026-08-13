@@ -110,7 +110,7 @@ macOS FFI bridge (`platform/macos*.rs`): `#![allow(clippy::pedantic, clippy::nur
 | `InteractionId(u64)` | `crates/rutile-types/src/lib.rs:50-73` | same |
 | `CompositionId(u64)` | `crates/rutile-core/src/editor_contract.rs:13-38` | same |
 | `DocumentId(u64)` | `crates/rutile-types/src/lib.rs` | unchanged (was already newtype) |
-| `AdapterCommitId` | `crates/rutile-core/src/editor_contract.rs:12` | **still `pub type = u64`** (not converted) |
+| `AdapterCommitId` | `crates/rutile-core/src/editor_contract.rs` | newtype (`new()` / `.get()`), same pattern as `CompositionId` |
 
 ### Protocol re-exports
 
@@ -158,7 +158,7 @@ local state file. Harmless.
 | Command-palette NSPanel UI | Medium | Contract is locked, menu-accessible |
 | Publishing HTML splice into export | Low | Publishing presets defined, not wired to export |
 | GUI stack unification | Medium | Retires `deny.toml` bans.skip 43 entries |
-| `AdapterCommitId` → newtype | Low | Last remaining `u64` alias. Follow M8 pattern |
+| `AdapterCommitId` → newtype | Low | Done — last remaining `u64` alias converted. `EditTransaction.id` stays `u64` (shared with programmatic txs) |
 
 ## Untracked files in working tree (not part of any PR)
 

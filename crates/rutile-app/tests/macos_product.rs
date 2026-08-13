@@ -11,9 +11,9 @@ use rutile_app::platform::macos::{
     PreviewIpcFatal, PreviewIpcOutcome, ProductSession, preview_ipc_channel, split_panes,
 };
 use rutile_core::{
-    Document, Edit, EditTransaction, EditorAdapter, EditorCommit, EditorEvent, FindDirection,
-    FindQuery, FormatCommand, MatchMode, ScrollClock, Selection, SessionWindowV1, SmartEnterAction,
-    TransactionKind, apply_editor_commit,
+    AdapterCommitId, Document, Edit, EditTransaction, EditorAdapter, EditorCommit, EditorEvent,
+    FindDirection, FindQuery, FormatCommand, MatchMode, ScrollClock, Selection, SessionWindowV1,
+    SmartEnterAction, TransactionKind, apply_editor_commit,
 };
 use rutile_types::{InteractionId, Revision};
 
@@ -31,14 +31,14 @@ impl Drop for DropSpy {
 
 fn edit_session(session: &mut ProductSession, replacement: &str) {
     let snapshot = session.snapshot();
-    let adapter_commit_id = snapshot.revision.get() + 1;
+    let adapter_commit_id = AdapterCommitId::new(snapshot.revision.get() + 1);
     session
         .apply_editor_event(EditorEvent::CommitRequested {
             adapter_commit_id,
             commit: EditorCommit::Edit {
                 transaction: EditTransaction {
                     base_revision: snapshot.revision,
-                    id: adapter_commit_id,
+                    id: adapter_commit_id.get(),
                     kind: TransactionKind::Typing,
                     edits: vec![Edit {
                         byte_range: 0..snapshot.len_bytes(),
@@ -208,7 +208,7 @@ fn iced_editor_emits_incremental_commit_and_requires_matching_ack() {
     .unwrap();
     assert!(
         editor
-            .acknowledge_local_commit(adapter_commit_id + 1, &change)
+            .acknowledge_local_commit(AdapterCommitId::new(adapter_commit_id.get() + 1), &change,)
             .is_err()
     );
     editor
