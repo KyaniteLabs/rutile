@@ -55,19 +55,19 @@ fn preview_event_version_and_revision_gating() {
     let bad_v = b"{\"type\":\"painted\",\"v\":2,\"revision\":5,\"frame_seq\":0}\n";
     assert!(matches!(
         decode_preview_event(bad_v, LOADED),
-        Err(ProtocolError::UnsupportedVersion)
+        Err(ProtocolError::UnsupportedVersion { .. })
     ));
     // Stale revision (replay from an old revision).
     let stale = b"{\"type\":\"painted\",\"v\":1,\"revision\":4,\"frame_seq\":0}\n";
     assert!(matches!(
         decode_preview_event(stale, LOADED),
-        Err(ProtocolError::StaleRevision)
+        Err(ProtocolError::StaleRevision { .. })
     ));
     // Revision far in the future (replay forward).
     let future = b"{\"type\":\"painted\",\"v\":1,\"revision\":999999,\"frame_seq\":0}\n";
     assert!(matches!(
         decode_preview_event(future, LOADED),
-        Err(ProtocolError::StaleRevision)
+        Err(ProtocolError::StaleRevision { .. })
     ));
     // Valid frame at the loaded revision decodes.
     let ok = b"{\"type\":\"painted\",\"v\":1,\"revision\":5,\"frame_seq\":0}\n";
@@ -83,7 +83,7 @@ fn preview_event_scroll_offset_out_of_range() {
     );
     assert!(matches!(
         decode_preview_event(huge.as_bytes(), LOADED),
-        Err(ProtocolError::InvalidOffset)
+        Err(ProtocolError::InvalidOffset { .. })
     ));
 }
 

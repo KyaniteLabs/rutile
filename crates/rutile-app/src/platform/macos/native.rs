@@ -2269,7 +2269,7 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
                         Ok(event) => self.process_preview_event(event_loop, event),
                         Err(
                             error @ (HostError::NoLoadedDocument
-                            | HostError::Protocol(ProtocolError::StaleRevision)),
+                            | HostError::Protocol(ProtocolError::StaleRevision { .. })),
                         ) => {
                             eprintln!("rutile: transient preview IPC drop ignored: {error}");
                             continue;
