@@ -770,13 +770,17 @@ impl ProductSession {
     }
 
     /// Wave 2-B: `SaveAsRequested` → `PerformSaveAs` (MAC-002 untitled path).
+    ///
+    /// For an explicit Save As action, the user's intent is to persist the
+    /// document to the requested path regardless of reducer state. If the
+    /// reducer emits `PerformSaveAs`, we use that path. If not (clean buffer
+    /// rebind or unexpected dirty-decline), we still atomically save to
+    /// honor the explicit user request (L11).
     pub fn request_save_as(&mut self, path: PathBuf) -> Result<(), MacError> {
         let effects = self
             .core
             .app_mut()
             .reduce(AppMessage::SaveAsRequested { path: path.clone() });
-        // Clean document: reducer yields no PerformSaveAs; still allow explicit
-        // rebinding via direct save for tests that call save_as on a clean buffer.
         let mut performed = false;
         for effect in effects {
             if let AppEffect::PerformSaveAs { path } = effect {
@@ -784,11 +788,7 @@ impl ProductSession {
                 performed = true;
             }
         }
-        if !performed && self.core.app().dirty() {
-            // Path was requested but reducer declined (unexpected); fall through
-            // to atomic save so the adapter still persists exact bytes.
-            self.perform_save_effect(&path)?;
-        } else if !performed && !self.core.app().dirty() {
+        if !performed {
             self.perform_save_effect(&path)?;
         }
         Ok(())
@@ -1277,6 +1277,13 @@ impl ProductSession {
     }
 
     /// Ordered session restore: last file → selection → viewport (MAC-006).
+    ///
+    /// This function **opens the last file** and **validates** the saved
+    /// selection and viewport against the loaded document. The caller is
+    /// responsible for **applying** the selection and viewport to the editor
+    /// based on the `selection_applied` / `viewport_applied` flags in the
+    /// returned [`MacRestoreReport`] (L10).
+    ///
     /// Degraded steps surface nonfatal [`UserNotice`]s and continue.
     pub fn apply_session_restore(
         &mut self,
