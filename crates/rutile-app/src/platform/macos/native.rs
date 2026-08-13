@@ -54,6 +54,7 @@ use crate::preview_host::{
     HostError, NavigationKind, PreviewControlSink, PreviewHost, SchemeRequest, SchemeResponse,
     ScrollDelivery,
 };
+use rutile_types::{InteractionId, Revision};
 
 const WINDOW_WIDTH: u32 = 1_000;
 const WINDOW_HEIGHT: u32 = 720;
@@ -133,7 +134,7 @@ struct ProductRunner {
     deadline: Instant,
     failure: Option<String>,
     webview_first: bool,
-    painted_revision: Option<u64>,
+    painted_revision: Option<Revision>,
     smoke_resize_requested: bool,
     resize_proven: bool,
     preview_scroll_events: u64,
@@ -766,9 +767,9 @@ impl ProductRunner {
 
     fn deliver_preview_scroll(
         &mut self,
-        revision: u64,
+        revision: Revision,
         source_start: usize,
-        interaction_id: u64,
+        interaction_id: InteractionId,
     ) -> Result<(), MacError> {
         let webview = self
             .webview
@@ -1503,10 +1504,11 @@ impl ProductRunner {
                 if report.viewport_applied {
                     if let Some(top) = viewport {
                         let revision = self.session.snapshot().revision;
-                        let _ = self
-                            .source_pane
-                            .editor_mut()
-                            .scroll_to_byte(revision, top, revision);
+                        let _ = self.source_pane.editor_mut().scroll_to_byte(
+                            revision,
+                            top,
+                            InteractionId::new(0),
+                        );
                     }
                 }
                 for notice in report.notices {
@@ -1564,7 +1566,7 @@ impl ProductRunner {
                 .top_visible_byte(revision)
                 .map_err(|error| HostError::Platform(error.to_string()))
                 .and_then(|source_start| {
-                    self.deliver_preview_scroll(revision, source_start, revision)
+                    self.deliver_preview_scroll(revision, source_start, InteractionId::new(0))
                         .map_err(|error| HostError::Platform(error.to_string()))
                 });
             if let Err(error) = delivery {
@@ -1786,11 +1788,11 @@ impl ProductRunner {
 /// scroll receipt (`preview_scroll_events > 0`). Pure over plain integers so
 /// the invariant can be unit-tested without a live compositor or window.
 fn smoke_stage_zero_ready_to_edit(
-    painted_revision: Option<u64>,
+    painted_revision: Option<Revision>,
     presented_frames: u64,
     preview_scroll_events: u64,
 ) -> bool {
-    painted_revision == Some(0) && presented_frames > 0 && preview_scroll_events > 0
+    painted_revision == Some(Revision::new(0)) && presented_frames > 0 && preview_scroll_events > 0
 }
 
 impl ApplicationHandler<MacUserEvent> for ProductRunner {
@@ -3295,20 +3297,25 @@ mod tests {
     };
     use crate::app::{NoticeSeverity, UserNotice};
     use rutile_core::Selection;
+    use rutile_types::Revision;
 
     #[test]
     fn stage_zero_blocks_the_first_edit_until_a_preview_scroll_receipt_arrives() {
         // The preview has painted revision 0 and the editor has presented a
         // frame, but no scroll receipt has echoed back yet: editing must stay
         // blocked. This is the invariant the supervised smoke relies on.
-        assert!(!smoke_stage_zero_ready_to_edit(Some(0), 1, 0));
+        assert!(!smoke_stage_zero_ready_to_edit(
+            Some(Revision::new(0)),
+            1,
+            0
+        ));
     }
 
     #[test]
     fn stage_zero_is_ready_to_edit_once_the_preview_scroll_receipt_arrives() {
         // A single receipt is sufficient, and further receipts keep it ready.
-        assert!(smoke_stage_zero_ready_to_edit(Some(0), 1, 1));
-        assert!(smoke_stage_zero_ready_to_edit(Some(0), 4, 7));
+        assert!(smoke_stage_zero_ready_to_edit(Some(Revision::new(0)), 1, 1));
+        assert!(smoke_stage_zero_ready_to_edit(Some(Revision::new(0)), 4, 7));
     }
 
     #[test]
@@ -3316,12 +3323,20 @@ mod tests {
         // No painted preview yet.
         assert!(!smoke_stage_zero_ready_to_edit(None, 1, 1));
         // Painted, but not revision 0.
-        assert!(!smoke_stage_zero_ready_to_edit(Some(3), 1, 1));
+        assert!(!smoke_stage_zero_ready_to_edit(
+            Some(Revision::new(3)),
+            1,
+            1
+        ));
     }
 
     #[test]
     fn stage_zero_blocks_until_the_source_editor_has_presented_a_frame() {
-        assert!(!smoke_stage_zero_ready_to_edit(Some(0), 0, 1));
+        assert!(!smoke_stage_zero_ready_to_edit(
+            Some(Revision::new(0)),
+            0,
+            1
+        ));
     }
     #[test]
     fn recovery_dialog_buttons_have_the_exact_restore_then_dismiss_ordering() {

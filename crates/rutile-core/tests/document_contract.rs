@@ -4,6 +4,7 @@ use std::cell::Cell;
 use rutile_core::{
     Document, Edit, EditError, EditTransaction, MAX_DOCUMENT_BYTES, TransactionKind,
 };
+use rutile_types::Revision;
 
 struct CountingAllocator;
 
@@ -57,7 +58,7 @@ fn utf8_split_edit_is_atomic() {
         .unwrap_err();
 
     assert!(matches!(error, EditError::NotCharBoundary { .. }));
-    assert_eq!(document.revision(), 0);
+    assert_eq!(document.revision(), Revision::new(0));
     assert_eq!(document.snapshot().to_string(), before);
     assert!(document.undo().is_none());
 }
@@ -139,7 +140,7 @@ fn post_edit_limit_rejection_preserves_document_and_history() {
         .unwrap_err();
 
     assert_eq!(error, EditError::TooLarge);
-    assert_eq!(document.revision(), 0);
+    assert_eq!(document.revision(), Revision::new(0));
     assert_eq!(document.snapshot().to_string(), "kept");
     assert!(document.undo().is_none());
 }
@@ -162,7 +163,7 @@ fn undo_budget_evicts_only_complete_transactions() {
     }
 
     assert_eq!(undo_count, 31);
-    assert_eq!(document.revision(), 34 + undo_count);
+    assert_eq!(document.revision(), Revision::new(34 + undo_count as u64));
 }
 
 #[test]
@@ -171,16 +172,22 @@ fn undo_and_redo_emit_incremental_changes() {
     let change = document
         .apply(transaction(&document, 1, 4..8, "two"))
         .unwrap();
-    assert_eq!(change.before, 0);
-    assert_eq!(change.after, 1);
+    assert_eq!(change.before, Revision::new(0));
+    assert_eq!(change.after, Revision::new(1));
     assert_eq!(change.changed_bytes_after, 4..7);
     assert_eq!(document.snapshot().to_string(), "one two three");
 
     let undo = document.undo().unwrap();
-    assert_eq!((undo.before, undo.after), (1, 2));
+    assert_eq!(
+        (undo.before, undo.after),
+        (Revision::new(1), Revision::new(2))
+    );
     assert_eq!(document.snapshot().to_string(), "one 🪶 three");
 
     let redo = document.redo().unwrap();
-    assert_eq!((redo.before, redo.after), (2, 3));
+    assert_eq!(
+        (redo.before, redo.after),
+        (Revision::new(2), Revision::new(3))
+    );
     assert_eq!(document.snapshot().to_string(), "one two three");
 }

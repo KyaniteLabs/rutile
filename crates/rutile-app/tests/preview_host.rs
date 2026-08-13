@@ -5,20 +5,21 @@ use rutile_app::preview_host::{
     SchemeRequest, ScrollDelivery,
 };
 use rutile_protocol::{PreviewEventV1, RenderUrl};
+use rutile_types::{InteractionId, Revision};
 
 const NONCE: [u8; 16] = [0xab; 16];
 
 fn document_url(revision: u64) -> String {
     format!(
         "rutile://preview{}",
-        RenderUrl::new(revision, NONCE).document_path()
+        RenderUrl::new(Revision::new(revision), NONCE).document_path()
     )
 }
 
 #[test]
 fn serves_only_exact_get_host_path_revision_and_nonce() {
     let mut host = PreviewHost::new();
-    let render_url = RenderUrl::new(7, NONCE);
+    let render_url = RenderUrl::new(Revision::new(7), NONCE);
     host.stage_document(
         render_url.clone(),
         Arc::from(b"<!doctype html>ok".as_slice()),
@@ -44,8 +45,11 @@ fn serves_only_exact_get_host_path_revision_and_nonce() {
 #[test]
 fn fixed_assets_and_document_have_exact_security_headers() {
     let mut host = PreviewHost::new();
-    host.stage_document(RenderUrl::new(1, NONCE), Arc::from(b"page".as_slice()))
-        .unwrap();
+    host.stage_document(
+        RenderUrl::new(Revision::new(1), NONCE),
+        Arc::from(b"page".as_slice()),
+    )
+    .unwrap();
 
     let document = host.serve(&SchemeRequest::get(document_url(1)));
     assert_eq!(
@@ -93,7 +97,7 @@ fn fixed_assets_and_document_have_exact_security_headers() {
 #[test]
 fn navigation_downloads_and_new_windows_are_deny_by_default() {
     let mut host = PreviewHost::new();
-    let url = RenderUrl::new(4, NONCE);
+    let url = RenderUrl::new(Revision::new(4), NONCE);
     host.stage_document(url.clone(), Arc::from(b"page".as_slice()))
         .unwrap();
 
@@ -108,8 +112,11 @@ fn navigation_downloads_and_new_windows_are_deny_by_default() {
 #[test]
 fn ipc_is_bounded_reparsed_and_rejects_stale_paint_and_scroll() {
     let mut host = PreviewHost::new();
-    host.stage_document(RenderUrl::new(9, NONCE), Arc::from(b"page".as_slice()))
-        .unwrap();
+    host.stage_document(
+        RenderUrl::new(Revision::new(9), NONCE),
+        Arc::from(b"page".as_slice()),
+    )
+    .unwrap();
     assert!(host.allow_navigation(&document_url(9), NavigationKind::AppInitiated));
 
     let link = b"{\"type\":\"link_activated\",\"v\":1,\"revision\":9,\"normalized_url\":\"https://example.com/path\"}\n";
@@ -137,11 +144,17 @@ fn ipc_is_bounded_reparsed_and_rejects_stale_paint_and_scroll() {
 #[test]
 fn staging_a_new_revision_closes_the_old_documents_ipc_window() {
     let mut host = PreviewHost::new();
-    host.stage_document(RenderUrl::new(9, NONCE), Arc::from(b"old".as_slice()))
-        .unwrap();
+    host.stage_document(
+        RenderUrl::new(Revision::new(9), NONCE),
+        Arc::from(b"old".as_slice()),
+    )
+    .unwrap();
     assert!(host.allow_navigation(&document_url(9), NavigationKind::AppInitiated));
-    host.stage_document(RenderUrl::new(10, NONCE), Arc::from(b"new".as_slice()))
-        .unwrap();
+    host.stage_document(
+        RenderUrl::new(Revision::new(10), NONCE),
+        Arc::from(b"new".as_slice()),
+    )
+    .unwrap();
 
     let old_paint = b"{\"type\":\"painted\",\"v\":1,\"revision\":9,\"frame_seq\":2}\n";
     assert!(matches!(
@@ -167,24 +180,34 @@ fn scroll_control_is_the_only_bounded_native_to_document_channel() {
     }
 
     let mut host = PreviewHost::new();
-    host.stage_document(RenderUrl::new(2, NONCE), Arc::from(b"page".as_slice()))
-        .unwrap();
+    host.stage_document(
+        RenderUrl::new(Revision::new(2), NONCE),
+        Arc::from(b"page".as_slice()),
+    )
+    .unwrap();
     assert!(host.allow_navigation(&document_url(2), NavigationKind::AppInitiated));
 
     let mut sink = Sink::default();
-    host.deliver_scroll_to(&mut sink, 2, 42, 3).unwrap();
+    host.deliver_scroll_to(&mut sink, Revision::new(2), 42, InteractionId::new(3))
+        .unwrap();
     assert_eq!(sink.deliveries, 1);
     assert!(sink.bytes.len() <= 256);
     assert_eq!(sink.bytes.last(), Some(&b'\n'));
-    assert!(host.deliver_scroll_to(&mut sink, 1, 42, 3).is_err());
+    assert!(
+        host.deliver_scroll_to(&mut sink, Revision::new(1), 42, InteractionId::new(3))
+            .is_err()
+    );
     assert_eq!(sink.deliveries, 1);
 }
 
 #[test]
 fn malformed_ipc_frames_are_rejected_without_mutating_state() {
     let mut host = PreviewHost::new();
-    host.stage_document(RenderUrl::new(5, NONCE), Arc::from(b"page".as_slice()))
-        .unwrap();
+    host.stage_document(
+        RenderUrl::new(Revision::new(5), NONCE),
+        Arc::from(b"page".as_slice()),
+    )
+    .unwrap();
     assert!(host.allow_navigation(&document_url(5), NavigationKind::AppInitiated));
 
     let cases = [
@@ -209,8 +232,11 @@ fn malformed_ipc_frames_are_rejected_without_mutating_state() {
 #[test]
 fn forbidden_navigation_urls_are_rejected() {
     let mut host = PreviewHost::new();
-    host.stage_document(RenderUrl::new(3, NONCE), Arc::from(b"page".as_slice()))
-        .unwrap();
+    host.stage_document(
+        RenderUrl::new(Revision::new(3), NONCE),
+        Arc::from(b"page".as_slice()),
+    )
+    .unwrap();
 
     for url in [
         "https://example.com/",
@@ -239,8 +265,11 @@ fn required_frame_loss_and_disconnect_are_fatal_to_old_page_authority() {
     }
 
     let mut host = PreviewHost::new();
-    host.stage_document(RenderUrl::new(6, NONCE), Arc::from(b"old".as_slice()))
-        .unwrap();
+    host.stage_document(
+        RenderUrl::new(Revision::new(6), NONCE),
+        Arc::from(b"old".as_slice()),
+    )
+    .unwrap();
     assert!(host.allow_navigation(&document_url(6), NavigationKind::AppInitiated));
 
     // A missing required painted frame (frame_seq < 2) is accepted by the
@@ -249,14 +278,17 @@ fn required_frame_loss_and_disconnect_are_fatal_to_old_page_authority() {
     assert!(matches!(
         host.handle_ipc(single_frame).unwrap(),
         PreviewEventV1::Painted {
-            revision: 6,
+            revision: _, // can't pattern match on newtype value
             frame_seq: 1
         }
     ));
 
     // Staging a new revision revokes the old page's IPC authority entirely.
-    host.stage_document(RenderUrl::new(7, NONCE), Arc::from(b"new".as_slice()))
-        .unwrap();
+    host.stage_document(
+        RenderUrl::new(Revision::new(7), NONCE),
+        Arc::from(b"new".as_slice()),
+    )
+    .unwrap();
     let old_required = b"{\"type\":\"painted\",\"v\":1,\"revision\":6,\"frame_seq\":2}\n";
     assert!(matches!(
         host.handle_ipc(old_required),
@@ -265,5 +297,8 @@ fn required_frame_loss_and_disconnect_are_fatal_to_old_page_authority() {
 
     // A disconnected scroll-control sink propagates the failure.
     let mut sink = DisconnectedSink;
-    assert!(host.deliver_scroll_to(&mut sink, 7, 0, 1).is_err());
+    assert!(
+        host.deliver_scroll_to(&mut sink, Revision::new(7), 0, InteractionId::new(1))
+            .is_err()
+    );
 }

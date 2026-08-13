@@ -188,7 +188,9 @@ mod tests {
     fn core_is_sole_app_document_authority() {
         let mut core = DocumentSessionCore::new_in_memory("x").unwrap();
         assert!(!core.dirty());
-        let _ = core.reduce(AppMessage::DocumentEdited { revision: 1 });
+        let _ = core.reduce(AppMessage::DocumentEdited {
+            revision: Revision::new(1),
+        });
         // NewDocument path starts clean; edit without document apply keeps dirty false
         // until DocumentEdited with matching revision after real edit — still owns app.
         assert!(core.app().path().is_none());

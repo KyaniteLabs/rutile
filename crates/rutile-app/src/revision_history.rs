@@ -136,19 +136,19 @@ mod tests {
     fn record_adds_to_front() {
         let mut h = RevisionHistory::new();
         h.record(HistoryEntry {
-            revision: 1,
+            revision: Revision::new(1),
             timestamp_ms: 100,
             description: "first".into(),
             source: HistorySource::Manual,
         });
         h.record(HistoryEntry {
-            revision: 2,
+            revision: Revision::new(2),
             timestamp_ms: 200,
             description: "second".into(),
             source: HistorySource::OnSave,
         });
         assert_eq!(h.len(), 2);
-        assert_eq!(h.latest().unwrap().revision, 2);
+        assert_eq!(h.latest().unwrap().revision, Revision::new(2));
     }
 
     #[test]
@@ -156,7 +156,7 @@ mod tests {
         let mut h = RevisionHistory::new();
         for i in 0..(MAX_HISTORY_ENTRIES + 50) {
             h.record(HistoryEntry {
-                revision: i as u64,
+                revision: Revision::new(i as u64),
                 timestamp_ms: i as u64 * 1000,
                 description: format!("entry {i}"),
                 source: HistorySource::Manual,
@@ -166,7 +166,7 @@ mod tests {
         // Most recent should be the last recorded
         assert_eq!(
             h.latest().unwrap().revision,
-            (MAX_HISTORY_ENTRIES + 49) as u64
+            Revision::new((MAX_HISTORY_ENTRIES + 49) as u64)
         );
     }
 
@@ -174,20 +174,20 @@ mod tests {
     fn find_revision_locates_entry() {
         let mut h = RevisionHistory::new();
         h.record(HistoryEntry {
-            revision: 5,
+            revision: Revision::new(5),
             timestamp_ms: 500,
             description: "five".into(),
             source: HistorySource::BeforeBulk,
         });
-        assert!(h.find_revision(5).is_some());
-        assert!(h.find_revision(99).is_none());
+        assert!(h.find_revision(Revision::new(5)).is_some());
+        assert!(h.find_revision(Revision::new(99)).is_none());
     }
 
     #[test]
     fn clear_empties_history() {
         let mut h = RevisionHistory::new();
         h.record(HistoryEntry {
-            revision: 1,
+            revision: Revision::new(1),
             timestamp_ms: 100,
             description: "test".into(),
             source: HistorySource::Manual,

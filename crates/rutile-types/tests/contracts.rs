@@ -2,9 +2,18 @@ use rutile_types::{InteractionId, Revision, SafeLinkTarget};
 
 #[test]
 fn revision_and_interaction_id_are_canonical_u64_types() {
-    let revision: Revision = u64::MAX;
-    let interaction: InteractionId = revision;
-    assert_eq!(interaction, u64::MAX);
+    // Revision and InteractionId are distinct newtypes over u64: they wrap the
+    // same primitive but cannot be silently passed where the other (or a bare
+    // u64) is expected. This test pins the canonical new() / get() surface and
+    // the value-preserving round trip.
+    let revision = Revision::new(u64::MAX);
+    assert_eq!(revision.get(), u64::MAX);
+    let interaction = InteractionId::new(u64::MAX);
+    assert_eq!(interaction.get(), u64::MAX);
+    // Identical inner values stay distinct types: equality is only possible
+    // within a type, never across Revision/InteractionId.
+    assert_eq!(revision, Revision::new(u64::MAX));
+    assert_eq!(interaction, InteractionId::new(u64::MAX));
 }
 
 #[test]

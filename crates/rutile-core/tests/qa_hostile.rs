@@ -10,8 +10,9 @@ use rutile_core::{
     TransactionKind, TypingDirection, build_source_blocks, render_markdown,
     render_markdown_with_limits, validate_source_blocks,
 };
+use rutile_types::Revision;
 
-const REV: u64 = 7;
+const REV: Revision = Revision::new(7);
 
 /// The only literal `<` in rendered output come from the fixed typed-tag set in
 /// security.rs; every byte of untrusted input is HTML-escaped (`<` -> `&lt;`).
@@ -293,7 +294,7 @@ fn source_blocks_never_violate_own_contract() {
 // ---------- Lane 2: editor / document contracts ----------
 
 fn tx(
-    base: u64,
+    base: Revision,
     id: u64,
     range: std::ops::Range<usize>,
     repl: &str,

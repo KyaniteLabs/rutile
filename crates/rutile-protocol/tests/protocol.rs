@@ -4,6 +4,8 @@ use rutile_protocol::{
     PreviewHostCommand, RenderUrl, decode_gui_command, decode_gui_event, decode_metric_record,
     decode_preview_event, encode_gui_command, encode_gui_event, encode_scroll_control,
 };
+use rutile_types::InteractionId;
+use rutile_types::Revision;
 use std::time::Duration;
 
 #[test]
@@ -11,18 +13,18 @@ fn preview_event_framing_validates_version_revision_size_and_unknown_fields() {
     let good = br#"{"type":"painted","v":1,"revision":7,"frame_seq":3}
 "#;
     assert_eq!(
-        decode_preview_event(good, 7).unwrap(),
+        decode_preview_event(good, Revision::new(7)).unwrap(),
         PreviewEventV1::Painted {
-            revision: 7,
+            revision: Revision::new(7),
             frame_seq: 3
         }
     );
-    assert!(decode_preview_event(good, 8).is_err());
+    assert!(decode_preview_event(good, Revision::new(8)).is_err());
     assert!(
         decode_preview_event(
             br#"{"type":"painted","v":2,"revision":7,"frame_seq":3}
 "#,
-            7
+            Revision::new(7)
         )
         .is_err()
     );
@@ -30,7 +32,7 @@ fn preview_event_framing_validates_version_revision_size_and_unknown_fields() {
         decode_preview_event(
             br#"{"type":"painted","v":1,"revision":7,"frame_seq":3,"extra":true}
 "#,
-            7
+            Revision::new(7)
         )
         .is_err()
     );
@@ -38,13 +40,13 @@ fn preview_event_framing_validates_version_revision_size_and_unknown_fields() {
         decode_preview_event(
             br#"{"type":"painted","v":1,"revision":7,"revision":7,"frame_seq":3}
 "#,
-            7
+            Revision::new(7)
         )
         .is_err()
     );
-    assert!(decode_preview_event(b"not utf8: \xff\n", 7).is_err());
+    assert!(decode_preview_event(b"not utf8: \xff\n", Revision::new(7)).is_err());
     let oversized = vec![b'x'; MAX_PREVIEW_EVENT_BYTES + 1];
-    assert!(decode_preview_event(&oversized, 7).is_err());
+    assert!(decode_preview_event(&oversized, Revision::new(7)).is_err());
 }
 
 #[test]
@@ -52,7 +54,7 @@ fn link_activation_crosses_the_boundary_only_as_a_safe_canonical_type() {
     let good =
         br#"{"type":"link_activated","v":1,"revision":9,"normalized_url":"https://example.com/"}
 "#;
-    match decode_preview_event(good, 9).unwrap() {
+    match decode_preview_event(good, Revision::new(9)).unwrap() {
         PreviewEventV1::LinkActivated { target, .. } => {
             assert_eq!(target.as_canonical_str(), "https://example.com/");
         }
@@ -61,27 +63,27 @@ fn link_activation_crosses_the_boundary_only_as_a_safe_canonical_type() {
     let mixed =
         br#"{"type":"link_activated","v":1,"revision":9,"normalized_url":"HTTPS://example.com/"}
 "#;
-    assert!(decode_preview_event(mixed, 9).is_err());
+    assert!(decode_preview_event(mixed, Revision::new(9)).is_err());
 }
 
 #[test]
 fn scroll_control_is_the_only_bounded_json_control_payload() {
     assert_eq!(
-        RenderUrl::new(4, [0xab; 16]).document_path(),
+        RenderUrl::new(Revision::new(4), [0xab; 16]).document_path(),
         "/v1/document/4/abababababababababababababababab"
     );
     let command = PreviewHostCommand::ScrollTo {
-        revision: 4,
+        revision: Revision::new(4),
         source_start: 42,
-        interaction_id: 11,
+        interaction_id: InteractionId::new(11),
     };
     let bytes = encode_scroll_control(&command).unwrap();
     assert!(bytes.len() <= MAX_SCROLL_CONTROL_BYTES);
     assert_eq!(bytes.last(), Some(&b'\n'));
     assert!(
         encode_scroll_control(&PreviewHostCommand::Navigate {
-            revision: 4,
-            url: RenderUrl::new(4, [7; 16]),
+            revision: Revision::new(4),
+            url: RenderUrl::new(Revision::new(4), [7; 16]),
             page_bytes: 12,
         })
         .is_err()
@@ -92,7 +94,7 @@ fn scroll_control_is_the_only_bounded_json_control_payload() {
 fn gui_events_are_versioned_correlated_and_newline_delimited() {
     let bytes = encode_gui_event(&GuiEventV1::SourcePainted {
         request_id: 44,
-        revision: 5,
+        revision: Revision::new(5),
         frame_seq: 9,
     })
     .unwrap();
@@ -188,21 +190,21 @@ fn gui_command_and_event_codecs_roundtrip_the_complete_closed_surface() {
         GuiEventV1::ControlReady { request_id: 1 },
         GuiEventV1::EditAccepted {
             request_id: 2,
-            revision: 3,
+            revision: Revision::new(3),
         },
         GuiEventV1::SourcePainted {
             request_id: 4,
-            revision: 3,
+            revision: Revision::new(3),
             frame_seq: 5,
         },
         GuiEventV1::PreviewPainted {
             request_id: 6,
-            revision: 3,
+            revision: Revision::new(3),
             frame_seq: 7,
         },
         GuiEventV1::Interactive {
             request_id: 8,
-            revision: 3,
+            revision: Revision::new(3),
         },
         GuiEventV1::FocusChanged {
             request_id: 9,

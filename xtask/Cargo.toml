@@ -40,3 +40,4 @@ toml.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 trybuild = "=1.0.104"
+rutile-types = { path = "../crates/rutile-types", version = "=0.2.2" }

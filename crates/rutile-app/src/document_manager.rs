@@ -49,7 +49,7 @@ pub struct DocumentSlot {
 impl Default for DocumentSlot {
     fn default() -> Self {
         Self {
-            revision: 0,
+            revision: Revision::new(0),
             dirty: false,
             preview: PreviewState::Empty,
             path: None,
@@ -296,6 +296,7 @@ impl DocumentManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rutile_types::Revision;
 
     #[test]
     fn new_manager_has_single_root_tab() {
@@ -319,7 +320,7 @@ mod tests {
     fn open_document_creates_new_tab() {
         let mut mgr = DocumentManager::new();
         let path = PathBuf::from("/tmp/test.md");
-        let id = mgr.open_document(1, path.clone()).unwrap();
+        let id = mgr.open_document(Revision::new(1), path.clone()).unwrap();
         assert_ne!(id, DocumentId::ROOT);
         assert_eq!(mgr.active_id(), id);
         assert_eq!(mgr.slot(id).unwrap().path.as_deref(), Some(path.as_path()));
@@ -329,13 +330,13 @@ mod tests {
     fn open_duplicate_path_switches_to_existing_tab() {
         let mut mgr = DocumentManager::new();
         let path = PathBuf::from("/tmp/dup.md");
-        let id1 = mgr.open_document(1, path.clone()).unwrap();
+        let id1 = mgr.open_document(Revision::new(1), path.clone()).unwrap();
 
         // Open a second tab
         mgr.new_tab().unwrap();
 
         // Reopen the same path → should switch, not create
-        let id2 = mgr.open_document(2, path).unwrap();
+        let id2 = mgr.open_document(Revision::new(2), path).unwrap();
         assert_eq!(id1, id2);
         assert_eq!(mgr.len(), 3); // ROOT + opened + new_tab, no dup created
         assert_eq!(mgr.active_id(), id1);
@@ -423,7 +424,7 @@ mod tests {
     fn find_by_path_locates_open_document() {
         let mut mgr = DocumentManager::new();
         let path = PathBuf::from("/tmp/find.md");
-        let id = mgr.open_document(1, path.clone()).unwrap();
+        let id = mgr.open_document(Revision::new(1), path.clone()).unwrap();
 
         assert_eq!(mgr.find_by_path(&path), Some(id));
         assert_eq!(mgr.find_by_path(Path::new("/tmp/other.md")), None);
@@ -432,7 +433,7 @@ mod tests {
     #[test]
     fn document_slot_default_is_empty_untitled() {
         let slot = DocumentSlot::default();
-        assert_eq!(slot.revision, 0);
+        assert_eq!(slot.revision, Revision::new(0));
         assert!(!slot.dirty);
         assert_eq!(slot.preview, PreviewState::Empty);
         assert!(slot.path.is_none());
@@ -441,10 +442,15 @@ mod tests {
     #[test]
     fn document_slot_opened_has_path_and_revision() {
         let path = PathBuf::from("/tmp/opened.md");
-        let slot = DocumentSlot::opened(5, path.clone());
-        assert_eq!(slot.revision, 5);
+        let slot = DocumentSlot::opened(Revision::new(5), path.clone());
+        assert_eq!(slot.revision, Revision::new(5));
         assert!(!slot.dirty);
-        assert_eq!(slot.preview, PreviewState::Waiting { revision: 5 });
+        assert_eq!(
+            slot.preview,
+            PreviewState::Waiting {
+                revision: Revision::new(5)
+            }
+        );
         assert_eq!(slot.path.as_deref(), Some(path.as_path()));
     }
 }

@@ -2,6 +2,7 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use rutile_core::render_markdown;
+use rutile_types::Revision;
 
 fn main() {
     measure(1024 * 1024, Duration::from_secs(2));
@@ -13,7 +14,7 @@ fn measure(bytes: usize, gate: Duration) {
     let mut samples = Vec::with_capacity(5);
     for revision in 0..5 {
         let started = Instant::now();
-        black_box(render_markdown(black_box(&source), revision).unwrap());
+        black_box(render_markdown(black_box(&source), Revision::new(revision)).unwrap());
         samples.push(started.elapsed());
     }
     samples.sort_unstable();

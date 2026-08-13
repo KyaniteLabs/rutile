@@ -7,6 +7,8 @@ use rutile_core::{
     SmartEnterAction,
 };
 use rutile_protocol::PreviewEventV1;
+use rutile_types::InteractionId;
+use rutile_types::Revision;
 use rutile_types::SafeLinkTarget;
 
 /// Replays a returned [`ChangeSet`] sequence against `before` exactly as a shell
@@ -24,7 +26,7 @@ fn replay(before: &str, changes: &[ChangeSet]) -> String {
 
 /// Asserts the change sequence chains `before`→`after` contiguously from
 /// `first_before`, ending at `last_after`.
-fn assert_chained(changes: &[ChangeSet], first_before: u64, last_after: u64) {
+fn assert_chained(changes: &[ChangeSet], first_before: Revision, last_after: Revision) {
     assert!(!changes.is_empty(), "expected at least one change");
     assert_eq!(changes.first().unwrap().before, first_before);
     assert_eq!(changes.last().unwrap().after, last_after);
@@ -36,55 +38,80 @@ fn assert_chained(changes: &[ChangeSet], first_before: u64, last_after: u64) {
 #[test]
 fn editing_marks_dirty_and_coalesces_render_through_an_effect() {
     let mut state = AppState::new();
-    let effects = state.reduce(AppMessage::DocumentEdited { revision: 3 });
+    let effects = state.reduce(AppMessage::DocumentEdited {
+        revision: Revision::new(3),
+    });
 
     assert!(state.dirty());
-    assert_eq!(state.revision(), 3);
-    assert_eq!(effects, vec![AppEffect::ScheduleRender { revision: 3 }]);
+    assert_eq!(state.revision(), Revision::new(3));
+    assert_eq!(
+        effects,
+        vec![AppEffect::ScheduleRender {
+            revision: Revision::new(3)
+        }]
+    );
 }
 
 #[test]
 fn stale_render_and_paint_acknowledgements_have_no_state_effect() {
     let mut state = AppState::new();
-    state.reduce(AppMessage::DocumentEdited { revision: 5 });
+    state.reduce(AppMessage::DocumentEdited {
+        revision: Revision::new(5),
+    });
 
     assert_eq!(
         state.reduce(AppMessage::RenderAccepted {
-            revision: 4,
+            revision: Revision::new(4),
             page_bytes: 20,
         }),
-        vec![AppEffect::IgnoredStale { revision: 4 }]
+        vec![AppEffect::IgnoredStale {
+            revision: Revision::new(4)
+        }]
     );
-    assert_eq!(state.preview(), &PreviewState::Waiting { revision: 5 });
+    assert_eq!(
+        state.preview(),
+        &PreviewState::Waiting {
+            revision: Revision::new(5)
+        }
+    );
 
     assert_eq!(
         state.reduce(AppMessage::PreviewEvent(PreviewEventV1::Painted {
-            revision: 4,
+            revision: Revision::new(4),
             frame_seq: 2,
         })),
-        vec![AppEffect::IgnoredStale { revision: 4 }]
+        vec![AppEffect::IgnoredStale {
+            revision: Revision::new(4)
+        }]
     );
 }
 
 #[test]
 fn current_render_navigates_and_two_frame_paint_marks_ready() {
     let mut state = AppState::new();
-    state.reduce(AppMessage::DocumentEdited { revision: 6 });
+    state.reduce(AppMessage::DocumentEdited {
+        revision: Revision::new(6),
+    });
     assert_eq!(
         state.reduce(AppMessage::RenderAccepted {
-            revision: 6,
+            revision: Revision::new(6),
             page_bytes: 100,
         }),
         vec![AppEffect::NavigatePreview {
-            revision: 6,
+            revision: Revision::new(6),
             page_bytes: 100,
         }]
     );
     state.reduce(AppMessage::PreviewEvent(PreviewEventV1::Painted {
-        revision: 6,
+        revision: Revision::new(6),
         frame_seq: 2,
     }));
-    assert_eq!(state.preview(), &PreviewState::Ready { revision: 6 });
+    assert_eq!(
+        state.preview(),
+        &PreviewState::Ready {
+            revision: Revision::new(6)
+        }
+    );
 }
 
 #[test]
@@ -92,7 +119,7 @@ fn typed_link_activation_crosses_the_reducer_without_a_string_url() {
     let target = SafeLinkTarget::parse("https://example.com/").unwrap();
     let mut state = AppState::new();
     let effects = state.reduce(AppMessage::PreviewEvent(PreviewEventV1::LinkActivated {
-        revision: 0,
+        revision: Revision::new(0),
         target: target.clone(),
     }));
 
@@ -102,28 +129,38 @@ fn typed_link_activation_crosses_the_reducer_without_a_string_url() {
 #[test]
 fn stale_preview_scroll_never_moves_the_source() {
     let mut state = AppState::new();
-    state.reduce(AppMessage::DocumentEdited { revision: 3 });
+    state.reduce(AppMessage::DocumentEdited {
+        revision: Revision::new(3),
+    });
     assert_eq!(
         state.reduce(AppMessage::PreviewEvent(PreviewEventV1::Scroll {
-            revision: 2,
+            revision: Revision::new(2),
             source_start: 9,
-            interaction_id: 7,
+            interaction_id: InteractionId::new(7),
             user: true,
         })),
-        vec![AppEffect::IgnoredStale { revision: 2 }]
+        vec![AppEffect::IgnoredStale {
+            revision: Revision::new(2)
+        }]
     );
 }
 
 #[test]
 fn stale_editor_acknowledgement_cannot_roll_back_the_revision() {
     let mut state = AppState::new();
-    state.reduce(AppMessage::DocumentEdited { revision: 3 });
+    state.reduce(AppMessage::DocumentEdited {
+        revision: Revision::new(3),
+    });
 
     assert_eq!(
-        state.reduce(AppMessage::DocumentEdited { revision: 2 }),
-        vec![AppEffect::IgnoredStale { revision: 2 }]
+        state.reduce(AppMessage::DocumentEdited {
+            revision: Revision::new(2)
+        }),
+        vec![AppEffect::IgnoredStale {
+            revision: Revision::new(2)
+        }]
     );
-    assert_eq!(state.revision(), 3);
+    assert_eq!(state.revision(), Revision::new(3));
 }
 
 fn disk_version(name: &str, source: &str) -> (std::path::PathBuf, rutile_core::DiskVersion) {
@@ -145,7 +182,7 @@ fn open_save_as_stale_save_and_new_document_keep_path_version_paired() {
     let mut state = AppState::new();
 
     state.reduce(AppMessage::DocumentOpened {
-        revision: 4,
+        revision: Revision::new(4),
         path: opened_path.clone(),
         disk: opened_disk.clone(),
     });
@@ -153,9 +190,11 @@ fn open_save_as_stale_save_and_new_document_keep_path_version_paired() {
     assert_eq!(state.saved_disk(), Some(&opened_disk));
     assert!(!state.dirty());
 
-    state.reduce(AppMessage::DocumentEdited { revision: 5 });
+    state.reduce(AppMessage::DocumentEdited {
+        revision: Revision::new(5),
+    });
     state.reduce(AppMessage::SaveCompleted {
-        revision: 5,
+        revision: Revision::new(5),
         path: saved_path.clone(),
         disk: saved_disk.clone(),
     });
@@ -163,14 +202,18 @@ fn open_save_as_stale_save_and_new_document_keep_path_version_paired() {
     assert_eq!(state.saved_disk(), Some(&saved_disk));
     assert!(!state.dirty());
 
-    state.reduce(AppMessage::DocumentEdited { revision: 6 });
+    state.reduce(AppMessage::DocumentEdited {
+        revision: Revision::new(6),
+    });
     assert_eq!(
         state.reduce(AppMessage::SaveCompleted {
-            revision: 5,
+            revision: Revision::new(5),
             path: stale_path,
             disk: stale_disk,
         }),
-        vec![AppEffect::IgnoredStale { revision: 5 }]
+        vec![AppEffect::IgnoredStale {
+            revision: Revision::new(5)
+        }]
     );
     assert_eq!(state.path(), Some(saved_path.as_path()));
     assert_eq!(state.saved_disk(), Some(&saved_disk));
@@ -189,13 +232,15 @@ fn durability_unknown_save_records_disk_but_keeps_dirty() {
     let (path, disk) = disk_version("durability-unknown", "payload");
     let mut state = AppState::new();
     state.reduce(AppMessage::DocumentOpened {
-        revision: 1,
+        revision: Revision::new(1),
         path: path.clone(),
         disk: disk.clone(),
     });
-    state.reduce(AppMessage::DocumentEdited { revision: 2 });
+    state.reduce(AppMessage::DocumentEdited {
+        revision: Revision::new(2),
+    });
     let effects = state.reduce(AppMessage::SaveDurabilityUnknown {
-        revision: 2,
+        revision: Revision::new(2),
         path: path.clone(),
         disk: disk.clone(),
     });
@@ -231,11 +276,13 @@ fn dirty_external_conflict_has_three_explicit_resolution_effects() {
     ] {
         let mut state = AppState::new();
         state.reduce(AppMessage::DocumentOpened {
-            revision: 2,
+            revision: Revision::new(2),
             path: path.clone(),
             disk: saved_disk.clone(),
         });
-        state.reduce(AppMessage::DocumentEdited { revision: 3 });
+        state.reduce(AppMessage::DocumentEdited {
+            revision: Revision::new(3),
+        });
         assert_eq!(
             state.reduce(AppMessage::ExternalConflictDetected {
                 disk: external_disk.clone(),
@@ -266,11 +313,13 @@ fn failed_save_keeps_dirty_and_conflict_state_open() {
     let mut state = AppState::new();
 
     state.reduce(AppMessage::DocumentOpened {
-        revision: 2,
+        revision: Revision::new(2),
         path: path.clone(),
         disk: saved_disk.clone(),
     });
-    state.reduce(AppMessage::DocumentEdited { revision: 3 });
+    state.reduce(AppMessage::DocumentEdited {
+        revision: Revision::new(3),
+    });
     state.reduce(AppMessage::ExternalConflictDetected {
         disk: external_disk.clone(),
     });
@@ -278,7 +327,9 @@ fn failed_save_keeps_dirty_and_conflict_state_open() {
     assert!(state.dirty());
     assert_eq!(state.external_conflict(), Some(&external_disk));
 
-    let effects = state.reduce(AppMessage::SaveFailed { revision: 3 });
+    let effects = state.reduce(AppMessage::SaveFailed {
+        revision: Revision::new(3),
+    });
     assert_eq!(effects, Vec::<AppEffect>::new());
     assert!(state.dirty());
     assert_eq!(state.external_conflict(), Some(&external_disk));
@@ -287,11 +338,20 @@ fn failed_save_keeps_dirty_and_conflict_state_open() {
 
     // A stale failure for an earlier revision is ignored but still does not
     // mutate current state.
-    state.reduce(AppMessage::DocumentEdited { revision: 4 });
-    let effects = state.reduce(AppMessage::SaveFailed { revision: 3 });
-    assert_eq!(effects, vec![AppEffect::IgnoredStale { revision: 3 }]);
+    state.reduce(AppMessage::DocumentEdited {
+        revision: Revision::new(4),
+    });
+    let effects = state.reduce(AppMessage::SaveFailed {
+        revision: Revision::new(3),
+    });
+    assert_eq!(
+        effects,
+        vec![AppEffect::IgnoredStale {
+            revision: Revision::new(3)
+        }]
+    );
     assert!(state.dirty());
-    assert_eq!(state.revision(), 4);
+    assert_eq!(state.revision(), Revision::new(4));
 
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_file(external_path);
@@ -342,18 +402,20 @@ fn format_command_applies_the_plan_through_the_edit_path() {
     assert_eq!(document.snapshot().to_string(), "**bold** me");
     assert_eq!(applied.selection_after, Selection { anchor: 2, head: 6 });
     assert_eq!(applied.action, None);
-    assert_eq!(applied.revision, 1);
+    assert_eq!(applied.revision, Revision::new(1));
     assert_eq!(
         applied.effects,
-        vec![AppEffect::ScheduleRender { revision: 1 }]
+        vec![AppEffect::ScheduleRender {
+            revision: Revision::new(1)
+        }]
     );
     // The applied ChangeSet is returned so a shell can follow the mutation
     // incrementally, and replaying it reconstructs the formatted buffer.
     assert_eq!(applied.changes.len(), 1);
-    assert_chained(&applied.changes, 0, 1);
+    assert_chained(&applied.changes, Revision::new(0), Revision::new(1));
     assert_eq!(replay("bold me", &applied.changes), "**bold** me");
     assert!(state.dirty());
-    assert_eq!(state.revision(), 1);
+    assert_eq!(state.revision(), Revision::new(1));
 }
 
 #[test]
@@ -373,7 +435,7 @@ fn smart_enter_continues_a_list_and_reports_the_action() {
         })
     );
     assert_eq!(applied.changes.len(), 1);
-    assert_chained(&applied.changes, 0, 1);
+    assert_chained(&applied.changes, Revision::new(0), Revision::new(1));
     assert_eq!(replay("- item", &applied.changes), "- item\n- ");
     assert!(state.dirty());
 }
@@ -397,7 +459,7 @@ fn empty_format_plan_is_a_clean_noop() {
     ));
     assert_eq!(document.snapshot().to_string(), "   ");
     assert!(!state.dirty());
-    assert_eq!(state.revision(), 0);
+    assert_eq!(state.revision(), Revision::new(0));
 }
 
 #[test]
@@ -438,7 +500,7 @@ fn replace_current_replaces_the_highlighted_match() {
     assert_eq!(applied.replaced, 1);
     assert!(applied.selection_after.is_some());
     assert_eq!(applied.changes.len(), 1);
-    assert_chained(&applied.changes, 0, 1);
+    assert_chained(&applied.changes, Revision::new(0), Revision::new(1));
     assert_eq!(replay("hello world", &applied.changes), "hello there");
     assert!(state.dirty());
     // The stale highlighted range is cleared after the buffer mutates.
@@ -460,7 +522,10 @@ fn replace_all_over_multiple_plans_applies_fully() {
     assert_eq!(applied.replaced, count);
     assert_eq!(document.snapshot().to_string(), "yy ".repeat(count));
     // More than one plan applied means the revision advanced by more than one.
-    assert!(document.revision() >= 2, "expected chunked application");
+    assert!(
+        document.revision() >= Revision::new(2),
+        "expected chunked application"
+    );
     assert!(!applied.effects.is_empty());
     // A chunked replace-all returns one ChangeSet per bounded plan; the sequence
     // chains contiguously and, replayed in order (as a shell does), reconstructs
@@ -469,8 +534,11 @@ fn replace_all_over_multiple_plans_applies_fully() {
         applied.changes.len() >= 2,
         "expected more than one ChangeSet for a chunked replace-all"
     );
-    assert_chained(&applied.changes, 0, document.revision());
-    assert_eq!(applied.changes.len() as u64, document.revision());
+    assert_chained(&applied.changes, Revision::new(0), document.revision());
+    assert_eq!(
+        Revision::new(applied.changes.len() as u64),
+        document.revision()
+    );
     assert_eq!(replay(&before, &applied.changes), "yy ".repeat(count));
     assert!(state.dirty());
 }
@@ -513,7 +581,7 @@ fn replace_all_crossing_the_cap_is_rejected_whole_and_leaves_no_partial() {
     );
     // Nothing was applied: revision, contents, and dirty flag are untouched, so
     // the next edit still lands (no StaleRevision wedge).
-    assert_eq!(document.revision(), 0);
+    assert_eq!(document.revision(), Revision::new(0));
     assert_eq!(document.snapshot().to_string(), source);
     assert!(!state.dirty());
 
@@ -547,7 +615,7 @@ fn insert_text_advances_the_reducer_and_returns_followable_changes() {
         .unwrap();
 
     assert_eq!(document.snapshot().to_string(), "hello there");
-    assert_eq!(state.revision(), 1);
+    assert_eq!(state.revision(), Revision::new(1));
     assert!(state.dirty());
     assert_eq!(applied.selection_after, Selection::collapsed(11));
     assert_eq!(applied.revision, document.revision());
@@ -555,7 +623,7 @@ fn insert_text_advances_the_reducer_and_returns_followable_changes() {
     assert!(!applied.effects.is_empty());
     // Replayed as a shell does, the returned change reconstructs the buffer.
     assert_eq!(replay("hello world", &applied.changes), "hello there");
-    assert_chained(&applied.changes, 0, document.revision());
+    assert_chained(&applied.changes, Revision::new(0), document.revision());
 }
 
 #[test]
@@ -646,7 +714,7 @@ fn adopt_recovered_keeps_revision_and_document_path() {
         .bind_autosave(AutosaveStore::new(dir.0.clone()))
         .unwrap();
     state.reduce(AppMessage::DocumentOpened {
-        revision: 0,
+        revision: Revision::new(0),
         path: path.clone(),
         disk,
     });
@@ -662,7 +730,7 @@ fn adopt_recovered_keeps_revision_and_document_path() {
     let recovered = restarted.recover().unwrap().expect("something to recover");
     // Core reconstructs recovered snapshots at revision 0 (the open-a-file
     // baseline); the original numeric revision would need a frozen-core change.
-    assert_eq!(recovered.document.revision(), 0);
+    assert_eq!(recovered.document.revision(), Revision::new(0));
 
     let recovered_path = recovered
         .entry
@@ -679,7 +747,12 @@ fn adopt_recovered_keeps_revision_and_document_path() {
     assert_eq!(restarted.path(), Some(path.as_path()));
     assert!(restarted.dirty());
     assert_eq!(restarted.saved_disk(), None);
-    assert_eq!(effects, vec![AppEffect::ScheduleRender { revision: 0 }]);
+    assert_eq!(
+        effects,
+        vec![AppEffect::ScheduleRender {
+            revision: Revision::new(0)
+        }]
+    );
 }
 
 #[test]
@@ -724,14 +797,19 @@ fn open_request_completed_ok_installs_document_and_schedules_render() {
     let (path, disk) = disk_version("open-completed", "hello");
     let mut state = AppState::new();
     let effects = state.reduce(AppMessage::OpenRequestCompleted {
-        result: Ok((3, path.clone(), disk.clone())),
+        result: Ok((Revision::new(3), path.clone(), disk.clone())),
     });
 
-    assert_eq!(state.revision(), 3);
+    assert_eq!(state.revision(), Revision::new(3));
     assert!(!state.dirty());
     assert_eq!(state.path(), Some(path.as_path()));
     assert_eq!(state.saved_disk(), Some(&disk));
-    assert_eq!(effects, vec![AppEffect::ScheduleRender { revision: 3 }]);
+    assert_eq!(
+        effects,
+        vec![AppEffect::ScheduleRender {
+            revision: Revision::new(3)
+        }]
+    );
 
     let _ = std::fs::remove_file(path);
 }
@@ -776,11 +854,13 @@ fn save_requested_with_path_and_dirty_performs_save() {
     let (path, disk) = disk_version("save-requested", "saved");
     let mut state = AppState::new();
     state.reduce(AppMessage::DocumentOpened {
-        revision: 1,
+        revision: Revision::new(1),
         path: path.clone(),
         disk,
     });
-    state.reduce(AppMessage::DocumentEdited { revision: 2 });
+    state.reduce(AppMessage::DocumentEdited {
+        revision: Revision::new(2),
+    });
 
     let effects = state.reduce(AppMessage::SaveRequested);
 
@@ -791,7 +871,9 @@ fn save_requested_with_path_and_dirty_performs_save() {
 #[test]
 fn save_requested_without_path_requests_close_decision() {
     let mut state = AppState::new();
-    state.reduce(AppMessage::DocumentEdited { revision: 2 });
+    state.reduce(AppMessage::DocumentEdited {
+        revision: Revision::new(2),
+    });
 
     let effects = state.reduce(AppMessage::SaveRequested);
 
@@ -803,7 +885,7 @@ fn save_requested_when_clean_is_noop() {
     let (path, disk) = disk_version("save-requested-clean", "saved");
     let mut state = AppState::new();
     state.reduce(AppMessage::DocumentOpened {
-        revision: 1,
+        revision: Revision::new(1),
         path: path.clone(),
         disk,
     });
@@ -817,7 +899,9 @@ fn save_requested_when_clean_is_noop() {
 #[test]
 fn save_as_requested_when_dirty_performs_save_as() {
     let mut state = AppState::new();
-    state.reduce(AppMessage::DocumentEdited { revision: 2 });
+    state.reduce(AppMessage::DocumentEdited {
+        revision: Revision::new(2),
+    });
     let path = std::path::PathBuf::from("/tmp/save-as.md");
 
     let effects = state.reduce(AppMessage::SaveAsRequested { path: path.clone() });
@@ -840,11 +924,13 @@ fn close_requested_save_with_dirty_path_performs_save() {
     let (path, disk) = disk_version("close-save", "dirty");
     let mut state = AppState::new();
     state.reduce(AppMessage::DocumentOpened {
-        revision: 1,
+        revision: Revision::new(1),
         path: path.clone(),
         disk,
     });
-    state.reduce(AppMessage::DocumentEdited { revision: 2 });
+    state.reduce(AppMessage::DocumentEdited {
+        revision: Revision::new(2),
+    });
 
     let effects = state.reduce(AppMessage::CloseRequested {
         decision: rutile_app::app::CloseDecision::Save {
@@ -859,7 +945,9 @@ fn close_requested_save_with_dirty_path_performs_save() {
 #[test]
 fn close_requested_save_without_path_requests_decision() {
     let mut state = AppState::new();
-    state.reduce(AppMessage::DocumentEdited { revision: 2 });
+    state.reduce(AppMessage::DocumentEdited {
+        revision: Revision::new(2),
+    });
 
     let effects = state.reduce(AppMessage::CloseRequested {
         decision: rutile_app::app::CloseDecision::Save {
@@ -875,7 +963,7 @@ fn close_requested_save_clean_quits() {
     let (path, disk) = disk_version("close-clean", "clean");
     let mut state = AppState::new();
     state.reduce(AppMessage::DocumentOpened {
-        revision: 1,
+        revision: Revision::new(1),
         path: path.clone(),
         disk,
     });
@@ -893,7 +981,9 @@ fn close_requested_save_clean_quits() {
 #[test]
 fn close_requested_discard_quits() {
     let mut state = AppState::new();
-    state.reduce(AppMessage::DocumentEdited { revision: 2 });
+    state.reduce(AppMessage::DocumentEdited {
+        revision: Revision::new(2),
+    });
 
     let effects = state.reduce(AppMessage::CloseRequested {
         decision: rutile_app::app::CloseDecision::Discard,
@@ -905,7 +995,9 @@ fn close_requested_discard_quits() {
 #[test]
 fn close_requested_cancel_is_noop() {
     let mut state = AppState::new();
-    state.reduce(AppMessage::DocumentEdited { revision: 2 });
+    state.reduce(AppMessage::DocumentEdited {
+        revision: Revision::new(2),
+    });
 
     let effects = state.reduce(AppMessage::CloseRequested {
         decision: rutile_app::app::CloseDecision::Cancel,
@@ -922,7 +1014,9 @@ fn autosave_tick_when_dirty_and_store_bound_performs_autosave() {
     state
         .bind_autosave(AutosaveStore::new(dir.0.clone()))
         .unwrap();
-    state.reduce(AppMessage::DocumentEdited { revision: 2 });
+    state.reduce(AppMessage::DocumentEdited {
+        revision: Revision::new(2),
+    });
 
     let effects = state.reduce(AppMessage::AutosaveTick);
 
@@ -939,7 +1033,9 @@ fn autosave_tick_is_noop_when_clean_or_unbound() {
     assert!(bound_clean.reduce(AppMessage::AutosaveTick).is_empty());
 
     let mut dirty_unbound = AppState::new();
-    dirty_unbound.reduce(AppMessage::DocumentEdited { revision: 2 });
+    dirty_unbound.reduce(AppMessage::DocumentEdited {
+        revision: Revision::new(2),
+    });
     assert!(dirty_unbound.reduce(AppMessage::AutosaveTick).is_empty());
 }
 
@@ -985,7 +1081,7 @@ fn recovery_adopted_installs_recovered_document() {
         .bind_autosave(AutosaveStore::new(dir.0.clone()))
         .unwrap();
     state.reduce(AppMessage::DocumentOpened {
-        revision: 0,
+        revision: Revision::new(0),
         path: path.clone(),
         disk,
     });
@@ -1005,7 +1101,12 @@ fn recovery_adopted_installs_recovered_document() {
     assert_eq!(restarted.path(), Some(path.as_path()));
     assert!(restarted.dirty());
     assert_eq!(restarted.saved_disk(), None);
-    assert_eq!(effects, vec![AppEffect::ScheduleRender { revision: 0 }]);
+    assert_eq!(
+        effects,
+        vec![AppEffect::ScheduleRender {
+            revision: Revision::new(0)
+        }]
+    );
     let _ = std::fs::remove_file(path);
 }
 
@@ -1149,7 +1250,7 @@ fn open_request_completed_touches_recents() {
     let (path, disk) = disk_version("recents-open", "hello");
     let mut state = AppState::new();
     state.reduce(AppMessage::OpenRequestCompleted {
-        result: Ok((1, path.clone(), disk)),
+        result: Ok((Revision::new(1), path.clone(), disk)),
     });
 
     assert_eq!(state.recents().paths(), [path.clone()]);
@@ -1157,7 +1258,7 @@ fn open_request_completed_touches_recents() {
     // Opening a second file moves it to front.
     let (path2, disk2) = disk_version("recents-open-2", "world");
     state.reduce(AppMessage::OpenRequestCompleted {
-        result: Ok((2, path2.clone(), disk2)),
+        result: Ok((Revision::new(2), path2.clone(), disk2)),
     });
 
     assert_eq!(state.recents().paths(), [path2.clone(), path.clone()]);
@@ -1171,7 +1272,7 @@ fn document_opened_touches_recents() {
     let (path, disk) = disk_version("recents-doc-opened", "hi");
     let mut state = AppState::new();
     state.reduce(AppMessage::DocumentOpened {
-        revision: 1,
+        revision: Revision::new(1),
         path: path.clone(),
         disk,
     });
@@ -1187,15 +1288,15 @@ fn reopening_same_file_deduplicates_and_moves_to_front() {
     let (path_b, disk_b) = disk_version("recents-dedup-b", "b");
     let mut state = AppState::new();
     state.reduce(AppMessage::OpenRequestCompleted {
-        result: Ok((1, path_a.clone(), disk_a.clone())),
+        result: Ok((Revision::new(1), path_a.clone(), disk_a.clone())),
     });
     state.reduce(AppMessage::OpenRequestCompleted {
-        result: Ok((2, path_b.clone(), disk_b)),
+        result: Ok((Revision::new(2), path_b.clone(), disk_b)),
     });
 
     // Re-open A → A should move to front, B stays.
     state.reduce(AppMessage::OpenRequestCompleted {
-        result: Ok((3, path_a.clone(), disk_a)),
+        result: Ok((Revision::new(3), path_a.clone(), disk_a)),
     });
 
     assert_eq!(state.recents().paths(), [path_a.clone(), path_b.clone()]);
@@ -1209,7 +1310,7 @@ fn clear_recents_empties_the_list() {
     let (path, disk) = disk_version("recents-clear", "x");
     let mut state = AppState::new();
     state.reduce(AppMessage::OpenRequestCompleted {
-        result: Ok((1, path.clone(), disk)),
+        result: Ok((Revision::new(1), path.clone(), disk)),
     });
     assert!(!state.recents().is_empty());
 
@@ -1225,10 +1326,10 @@ fn remove_recent_drops_a_single_entry() {
     let (path_b, disk_b) = disk_version("recents-rm-b", "b");
     let mut state = AppState::new();
     state.reduce(AppMessage::OpenRequestCompleted {
-        result: Ok((1, path_a.clone(), disk_a)),
+        result: Ok((Revision::new(1), path_a.clone(), disk_a)),
     });
     state.reduce(AppMessage::OpenRequestCompleted {
-        result: Ok((2, path_b.clone(), disk_b)),
+        result: Ok((Revision::new(2), path_b.clone(), disk_b)),
     });
 
     state.reduce(AppMessage::RemoveRecent {
@@ -1275,10 +1376,10 @@ fn capture_session_state_serializes_recents() {
     let (path_b, disk_b) = disk_version("recents-capture-b", "b");
     let mut state = AppState::new();
     state.reduce(AppMessage::OpenRequestCompleted {
-        result: Ok((1, path_a.clone(), disk_a)),
+        result: Ok((Revision::new(1), path_a.clone(), disk_a)),
     });
     state.reduce(AppMessage::OpenRequestCompleted {
-        result: Ok((2, path_b.clone(), disk_b)),
+        result: Ok((Revision::new(2), path_b.clone(), disk_b)),
     });
 
     let captured = state.capture_session_state(42, None, None, None);
@@ -1296,7 +1397,7 @@ fn recents_respect_max_cap() {
     for i in 0..15 {
         let (path, disk) = disk_version(&format!("recents-cap-{i}"), &i.to_string());
         state.reduce(AppMessage::OpenRequestCompleted {
-            result: Ok((i + 1, path, disk)),
+            result: Ok((Revision::new((i + 1) as u64), path, disk)),
         });
     }
 
@@ -1318,21 +1419,23 @@ fn new_tab_creates_second_document() {
 fn switch_tab_changes_active_document() {
     let mut state = AppState::new();
     // Edit the first document
-    state.reduce(AppMessage::DocumentEdited { revision: 1 });
-    assert_eq!(state.revision(), 1);
+    state.reduce(AppMessage::DocumentEdited {
+        revision: Revision::new(1),
+    });
+    assert_eq!(state.revision(), Revision::new(1));
 
     // Create a new tab
     state.reduce(AppMessage::NewTab);
 
     // The new tab should have revision 0 (fresh document)
-    assert_eq!(state.revision(), 0);
+    assert_eq!(state.revision(), Revision::new(0));
     assert!(!state.dirty());
 
     // Switch back to ROOT tab
     state.reduce(AppMessage::SwitchTab {
         id: rutile_types::DocumentId::ROOT,
     });
-    assert_eq!(state.revision(), 1);
+    assert_eq!(state.revision(), Revision::new(1));
     assert!(state.dirty());
 }
 

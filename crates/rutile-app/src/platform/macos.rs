@@ -212,7 +212,7 @@ impl<Window, WebView, Context> Drop for MacShell<Window, WebView, Context> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RenderReceipt {
-    pub revision: u64,
+    pub revision: Revision,
     pub page_bytes: usize,
     pub url: String,
 }
@@ -538,7 +538,7 @@ impl ProductSession {
             render_worker: MacRenderWorker::new(),
             preview_host: Arc::new(Mutex::new(PreviewHost::new())),
             scroll: None,
-            next_scroll_interaction_id: 1,
+            next_scroll_interaction_id: InteractionId::new(1),
             recovered_path: None,
             render_clock_ms: 0,
         };

@@ -3,6 +3,7 @@ use rutile_core::{
     MAX_PLAN_TOTAL_BYTES, MAX_PLANNED_REPLACEMENT_BYTES, MAX_PLANNED_SPAN_BYTES, OrderedDelimiter,
     Selection, SmartEnterAction, TransactionKind,
 };
+use rutile_types::Revision;
 
 fn edit(start: usize, end: usize, replacement: &str) -> Edit {
     Edit {
@@ -12,7 +13,7 @@ fn edit(start: usize, end: usize, replacement: &str) -> Edit {
 }
 
 fn plan(edits: Vec<Edit>) -> Result<EditPlan, EditPlanError> {
-    EditPlan::new(0, edits, Selection::collapsed(0))
+    EditPlan::new(Revision::new(0), edits, Selection::collapsed(0))
 }
 
 /// Every 0.2 format command, pinned. Adding, removing, or renaming a variant
@@ -116,7 +117,7 @@ fn list_marker_and_delimiter_enumerations_are_stable() {
 #[test]
 fn edit_plan_accepts_span_scoped_marker_edits() {
     let built = EditPlan::new(
-        7,
+        Revision::new(7),
         vec![edit(4, 4, "**"), edit(10, 10, "**")],
         Selection {
             anchor: 6,
@@ -124,7 +125,7 @@ fn edit_plan_accepts_span_scoped_marker_edits() {
         },
     )
     .unwrap();
-    assert_eq!(built.base_revision(), 7);
+    assert_eq!(built.base_revision(), Revision::new(7));
     assert_eq!(built.edits().len(), 2);
     assert_eq!(
         built.selection_after(),

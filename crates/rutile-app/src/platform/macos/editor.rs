@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use iced_widget::text_editor;
 use rutile_core::{
-    AdapterCommitId, ChangeSet, CompositionCancelReason, CompositionTracker, DocumentSnapshot,
-    Edit, EditTransaction, EditorAdapter, EditorCommit, EditorError, EditorEvent, EditorEventSink,
-    LocalCommitRejection, Selection, StaleRevision, TransactionKind,
+    AdapterCommitId, ChangeSet, CompositionCancelReason, CompositionId, CompositionTracker,
+    DocumentSnapshot, Edit, EditTransaction, EditorAdapter, EditorCommit, EditorError, EditorEvent,
+    EditorEventSink, LocalCommitRejection, Selection, StaleRevision, TransactionKind,
 };
 use rutile_types::{InteractionId, Revision};
 
@@ -124,7 +124,7 @@ impl LineByteIndex {
 
 #[derive(Clone, Debug)]
 struct ActiveComposition {
-    id: u64,
+    id: CompositionId,
     base_revision: Revision,
     range: Range<usize>,
 }
@@ -139,7 +139,7 @@ pub struct IcedEditorAdapter {
     index: LineByteIndex,
     revision: Revision,
     next_commit_id: AdapterCommitId,
-    next_composition_id: u64,
+    next_composition_id: CompositionId,
     pending_commit: Option<AdapterCommitId>,
     sink: Option<EditorEventSink>,
     composition_tracker: CompositionTracker,
@@ -160,9 +160,9 @@ impl IcedEditorAdapter {
             content: text_editor::Content::new(),
             mirror: String::new(),
             index: LineByteIndex::from_text(""),
-            revision: 0,
+            revision: Revision::new(0),
             next_commit_id: 0,
-            next_composition_id: 0,
+            next_composition_id: CompositionId::new(0),
             pending_commit: None,
             sink: None,
             composition_tracker: CompositionTracker::default(),
@@ -297,7 +297,7 @@ impl IcedEditorAdapter {
         Ok(delta)
     }
 
-    pub fn start_composition(&mut self) -> Result<u64, EditorError> {
+    pub fn start_composition(&mut self) -> Result<CompositionId, EditorError> {
         if self.pending_commit.is_some() || self.composition.is_some() {
             return Err(EditorError::Platform(
                 "Iced composition cannot start while another edit is pending".into(),
@@ -312,7 +312,8 @@ impl IcedEditorAdapter {
             .map(|position| self.index.byte_at(position.line, position.column))
             .transpose()?
             .unwrap_or(caret);
-        self.next_composition_id = self.next_composition_id.saturating_add(1);
+        self.next_composition_id =
+            CompositionId::new(self.next_composition_id.get().saturating_add(1));
         let active = ActiveComposition {
             id: self.next_composition_id,
             base_revision: self.revision,

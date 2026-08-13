@@ -196,7 +196,7 @@ impl Document {
         }
         Ok(Self {
             rope: Rope::from_str(text),
-            revision: 0,
+            revision: Revision::new(0),
             undo: VecDeque::new(),
             redo: VecDeque::new(),
             undo_bytes: 0,
@@ -246,10 +246,12 @@ impl Document {
                 actual: tx.base_revision,
             });
         }
-        let after = self
-            .revision
-            .checked_add(1)
-            .ok_or(EditError::RevisionOverflow)?;
+        let after = Revision::new(
+            self.revision
+                .get()
+                .checked_add(1)
+                .ok_or(EditError::RevisionOverflow)?,
+        );
         self.validate_edits(&tx.edits)?;
         let post_edit_len = post_edit_len(self.len_bytes(), &tx.edits)?;
         if post_edit_len > MAX_DOCUMENT_BYTES {
@@ -290,7 +292,7 @@ impl Document {
     }
 
     pub fn undo(&mut self) -> Option<ChangeSet> {
-        let after = self.revision.checked_add(1)?;
+        let after = Revision::new(self.revision.get().checked_add(1)?);
         let entry = self.undo.pop_back()?;
         self.undo_bytes = self.undo_bytes.saturating_sub(entry.charged_bytes);
         let edits = entry.inverse.clone();
@@ -309,7 +311,7 @@ impl Document {
     }
 
     pub fn redo(&mut self) -> Option<ChangeSet> {
-        let after = self.revision.checked_add(1)?;
+        let after = Revision::new(self.revision.get().checked_add(1)?);
         let entry = self.redo.pop_back()?;
         let edits = entry.transaction.edits.clone();
         let changed_bytes_after = changed_range_after(&edits);
@@ -517,7 +519,7 @@ mod tests {
     #[test]
     fn revision_overflow_rejects_apply_without_mutation() {
         let mut document = Document::new("a").unwrap();
-        document.revision = Revision::MAX;
+        document.revision = Revision::new(u64::MAX);
         let before = document.snapshot().to_string();
 
         assert_eq!(
@@ -525,7 +527,7 @@ mod tests {
             Err(EditError::RevisionOverflow)
         );
         assert_eq!(document.snapshot().to_string(), before);
-        assert_eq!(document.revision, Revision::MAX);
+        assert_eq!(document.revision, Revision::new(u64::MAX));
         assert!(document.undo.is_empty());
     }
 
@@ -533,7 +535,7 @@ mod tests {
     fn revision_overflow_leaves_undo_entry_available() {
         let mut document = Document::new("a").unwrap();
         document.apply(replace(&document, 1)).unwrap();
-        document.revision = Revision::MAX;
+        document.revision = Revision::new(u64::MAX);
 
         assert!(document.undo().is_none());
         assert_eq!(document.snapshot().to_string(), "b");
@@ -545,7 +547,7 @@ mod tests {
         let mut document = Document::new("a").unwrap();
         document.apply(replace(&document, 1)).unwrap();
         document.undo().unwrap();
-        document.revision = Revision::MAX;
+        document.revision = Revision::new(u64::MAX);
 
         assert!(document.redo().is_none());
         assert_eq!(document.snapshot().to_string(), "a");

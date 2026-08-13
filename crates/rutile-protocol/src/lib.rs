@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::time::Duration;
 
-use rutile_types::{InteractionId, Revision, SafeLinkTarget};
+pub use rutile_types::{InteractionId, Revision, SafeLinkTarget};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
@@ -1090,11 +1090,11 @@ fn is_lower_hex(value: &str, length: usize) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-const fn validate_header(v: u8, revision: Revision, loaded: Revision) -> Result<(), ProtocolError> {
+fn validate_header(v: u8, revision: Revision, loaded: Revision) -> Result<(), ProtocolError> {
     if v != 1 {
         return Err(ProtocolError::UnsupportedVersion { actual: v });
     }
-    if revision != loaded {
+    if revision.get() != loaded.get() {
         return Err(ProtocolError::StaleRevision {
             expected: loaded,
             actual: revision,

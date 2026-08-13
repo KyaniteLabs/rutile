@@ -550,13 +550,17 @@ impl AppState {
         match message {
             AppMessage::NewDocument => {
                 let slot = self.documents.active_slot_mut();
-                slot.revision = 0;
+                slot.revision = Revision::new(0);
                 slot.dirty = false;
                 slot.path = None;
                 slot.saved_disk = None;
                 slot.external_conflict = None;
-                slot.preview = PreviewState::Waiting { revision: 0 };
-                vec![AppEffect::ScheduleRender { revision: 0 }]
+                slot.preview = PreviewState::Waiting {
+                    revision: Revision::new(0),
+                };
+                vec![AppEffect::ScheduleRender {
+                    revision: Revision::new(0),
+                }]
             }
             AppMessage::DocumentOpened {
                 revision,

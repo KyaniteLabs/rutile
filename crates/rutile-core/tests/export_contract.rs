@@ -2,16 +2,17 @@ use rutile_core::{
     EXPORT_CSP, ExportError, ExportPage, ExportRequest, ExportViolation, MAX_EXPORT_PAGE_BYTES,
     MAX_EXPORT_TITLE_BYTES, MAX_RENDERED_PAGE_BYTES, RenderError, render_export_page,
 };
+use rutile_types::Revision;
 
 const CLEAN_PAGE: &str = "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'\">\n<title>Note</title>\n<style>:root{color-scheme:light dark}@media print{a{color:#000}}</style>\n</head>\n<body><h1>Note</h1><p>Hello <a href=\"https://example.com\">there</a>.</p></body>\n</html>\n";
 
 #[test]
 fn export_request_accepts_bounded_titles() {
-    let request = ExportRequest::new(3, Some("My Note".into())).unwrap();
-    assert_eq!(request.revision(), 3);
+    let request = ExportRequest::new(Revision::new(3), Some("My Note".into())).unwrap();
+    assert_eq!(request.revision(), Revision::new(3));
     assert_eq!(request.title(), Some("My Note"));
 
-    let untitled = ExportRequest::new(0, None).unwrap();
+    let untitled = ExportRequest::new(Revision::new(0), None).unwrap();
     assert_eq!(untitled.title(), None);
 }
 
@@ -19,7 +20,7 @@ fn export_request_accepts_bounded_titles() {
 fn export_request_rejects_oversized_titles() {
     let title = "x".repeat(MAX_EXPORT_TITLE_BYTES + 1);
     assert!(matches!(
-        ExportRequest::new(0, Some(title)),
+        ExportRequest::new(Revision::new(0), Some(title)),
         Err(ExportError::TitleTooLarge {
             len,
             max: MAX_EXPORT_TITLE_BYTES,
@@ -173,7 +174,7 @@ const REPRESENTATIVE_DOC: &str = "# Field Notes\n\nA paragraph with **bold**, *i
 - one\n- two\n\n1. first\n2. second\n\n```rust\nfn main() { println!(\"hi\"); }\n```\n";
 
 fn export(source: &str, title: Option<&str>) -> ExportPage {
-    let request = ExportRequest::new(7, title.map(str::to_owned)).unwrap();
+    let request = ExportRequest::new(Revision::new(7), title.map(str::to_owned)).unwrap();
     render_export_page(source, &request).expect("representative document must export")
 }
 
@@ -511,8 +512,11 @@ fn export_validator_rejects_href_outside_allowlist() {
 
 #[test]
 fn export_of_a_normal_document_passes_and_contains_exact_csp() {
-    let page = render_export_page("# Note\n\nHello.", &ExportRequest::new(1, None).unwrap())
-        .expect("normal document must export");
+    let page = render_export_page(
+        "# Note\n\nHello.",
+        &ExportRequest::new(Revision::new(1), None).unwrap(),
+    )
+    .expect("normal document must export");
     let html = page.as_html();
     let expected =
         format!("<meta http-equiv=\"Content-Security-Policy\" content=\"{EXPORT_CSP}\">");

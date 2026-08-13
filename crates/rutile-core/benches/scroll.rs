@@ -2,6 +2,7 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use rutile_core::{ScrollAnchorView, ScrollGeometry, ScrollMap};
+use rutile_types::Revision;
 
 const BLOCK_COUNT: usize = 100_000;
 const LOOKUPS_PER_DIRECTION: usize = 200_000;
@@ -15,8 +16,8 @@ struct BenchBlock {
 }
 
 impl ScrollAnchorView for BenchBlock {
-    fn revision(&self) -> u64 {
-        1
+    fn revision(&self) -> Revision {
+        Revision::new(1)
     }
 
     fn start(&self) -> usize {
@@ -46,7 +47,7 @@ fn main() {
     let build_started = Instant::now();
     let map = ScrollMap::new(
         ScrollGeometry {
-            revision: 1,
+            revision: Revision::new(1),
             document_len,
             source_max_top: document_len - 1,
             preview_max_y: BLOCK_COUNT as f64,
@@ -59,16 +60,24 @@ fn main() {
     let mut checksum = 0_u128;
     for sample in 0..WARMUPS_PER_DIRECTION {
         let byte = black_box(sample.wrapping_mul(7_919) % document_len);
-        checksum ^= black_box(map.source_to_preview(1, byte).expect("source warmup")) as u128;
+        checksum ^= black_box(
+            map.source_to_preview(Revision::new(1), byte)
+                .expect("source warmup"),
+        ) as u128;
         let y = black_box((sample.wrapping_mul(1_009) % BLOCK_COUNT) as f64);
-        checksum ^= black_box(map.preview_to_source(1, y).expect("preview warmup")) as u128;
+        checksum ^= black_box(
+            map.preview_to_source(Revision::new(1), y)
+                .expect("preview warmup"),
+        ) as u128;
     }
 
     let mut source_durations = Vec::with_capacity(LOOKUPS_PER_DIRECTION);
     for sample in 0..LOOKUPS_PER_DIRECTION {
         let byte = black_box(sample.wrapping_mul(7_919) % document_len);
         let started = Instant::now();
-        let mapped = map.source_to_preview(1, byte).expect("source map");
+        let mapped = map
+            .source_to_preview(Revision::new(1), byte)
+            .expect("source map");
         source_durations.push(started.elapsed());
         checksum ^= black_box(mapped) as u128;
     }
@@ -77,7 +86,9 @@ fn main() {
     for sample in 0..LOOKUPS_PER_DIRECTION {
         let y = black_box((sample.wrapping_mul(1_009) % BLOCK_COUNT) as f64);
         let started = Instant::now();
-        let mapped = map.preview_to_source(1, y).expect("preview map");
+        let mapped = map
+            .preview_to_source(Revision::new(1), y)
+            .expect("preview map");
         preview_durations.push(started.elapsed());
         checksum ^= black_box(mapped) as u128;
     }

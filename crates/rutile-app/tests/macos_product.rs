@@ -15,6 +15,7 @@ use rutile_core::{
     FindQuery, FormatCommand, MatchMode, ScrollClock, Selection, SessionWindowV1, SmartEnterAction,
     TransactionKind, apply_editor_commit,
 };
+use rutile_types::{InteractionId, Revision};
 
 #[derive(Clone)]
 struct DropSpy {
@@ -30,7 +31,7 @@ impl Drop for DropSpy {
 
 fn edit_session(session: &mut ProductSession, replacement: &str) {
     let snapshot = session.snapshot();
-    let adapter_commit_id = snapshot.revision + 1;
+    let adapter_commit_id = snapshot.revision.get() + 1;
     session
         .apply_editor_event(EditorEvent::CommitRequested {
             adapter_commit_id,
@@ -122,10 +123,10 @@ fn product_session_edits_renders_saves_and_reopens_exact_utf8() {
     assert_eq!(session.app_state().path(), None);
     assert_eq!(session.app_state().saved_disk(), None);
     let first = session.render_now().unwrap();
-    assert_eq!(first.revision, 0);
+    assert_eq!(first.revision, Revision::new(0));
     edit_session(&mut session, "# edited 🪶\n");
     let second = session.render_now().unwrap();
-    assert_eq!(second.revision, 1);
+    assert_eq!(second.revision, Revision::new(1));
     assert!(second.page_bytes > 0);
     session.save_as(&path).unwrap();
     assert!(!session.app_state().dirty());
@@ -216,7 +217,7 @@ fn iced_editor_emits_incremental_commit_and_requires_matching_ack() {
 
     assert_eq!(document.snapshot().to_string(), "hello!");
     assert_eq!(editor.mirror(), "hello!");
-    assert_eq!(editor.revision(), 1);
+    assert_eq!(editor.revision(), Revision::new(1));
 }
 
 #[test]
@@ -362,8 +363,13 @@ fn dirty_close_discard_is_explicit_and_does_not_write() {
 
 #[test]
 fn mac_scroll_controller_maps_both_directions_and_suppresses_echoes() {
-    let mut scroll =
-        MacScrollController::new(7, 100, [(0, 20, 0), (20, 60, 1), (60, 100, 2)], 40).unwrap();
+    let mut scroll = MacScrollController::new(
+        Revision::new(7),
+        100,
+        [(0, 20, 0), (20, 60, 1), (60, 100, 2)],
+        InteractionId::new(40),
+    )
+    .unwrap();
     let clock = ScrollClock {
         monotonic_ms: 10,
         preview_frame: 2,
@@ -378,9 +384,9 @@ fn mac_scroll_controller_maps_both_directions_and_suppresses_echoes() {
     else {
         panic!("source user scroll must target preview")
     };
-    assert_eq!(revision, 7);
+    assert_eq!(revision, Revision::new(7));
     assert_eq!(source_start, 20);
-    assert_eq!(interaction_id, 40);
+    assert_eq!(interaction_id, InteractionId::new(40));
     assert_eq!(
         scroll.preview(20, interaction_id, false, clock).unwrap(),
         MacScrollDispatch::Suppressed
@@ -390,7 +396,7 @@ fn mac_scroll_controller_maps_both_directions_and_suppresses_echoes() {
         scroll
             .preview(
                 65,
-                999,
+                InteractionId::new(999),
                 true,
                 ScrollClock {
                     monotonic_ms: 700,
@@ -399,9 +405,9 @@ fn mac_scroll_controller_maps_both_directions_and_suppresses_echoes() {
             )
             .unwrap(),
         MacScrollDispatch::Source {
-            revision: 7,
+            revision: Revision::new(7),
             source_start: 60,
-            interaction_id: 41,
+            interaction_id: InteractionId::new(41),
         }
     );
 }

@@ -3,6 +3,7 @@
 use rutile_core::{
     HtmlToMarkdownError, MAX_HTML_INPUT_BYTES, MAX_NESTING_DEPTH, html_to_markdown, render_markdown,
 };
+use rutile_types::Revision;
 
 fn convert(html: &str) -> String {
     html_to_markdown(html).expect("conversion should succeed")
@@ -17,7 +18,7 @@ fn assert_safe_roundtrip(markdown: &str) {
         !lower.contains("javascript:"),
         "markdown leaked a javascript: url"
     );
-    let rendered = render_markdown(markdown, 1).expect("rendered markdown");
+    let rendered = render_markdown(markdown, Revision::new(1)).expect("rendered markdown");
     let body = rendered.body.to_ascii_lowercase();
     assert!(!body.contains("<script"), "rendered body leaked a script");
     assert!(!body.contains("<iframe"), "rendered body leaked an iframe");
@@ -156,7 +157,7 @@ fn entities_are_decoded() {
         "Fish &amp; chips &lt; tea &gt; coffee \"quoted\" 'apos' end"
     );
     // The entity-encoded text renders back to the original literal characters.
-    let rendered = render_markdown(&markdown, 1).unwrap();
+    let rendered = render_markdown(&markdown, Revision::new(1)).unwrap();
     assert!(
         rendered
             .body
@@ -212,7 +213,7 @@ fn markdown_special_chars_in_prose_are_escaped() {
         "Use \\*asterisks\\* and \\_underscores\\_ and \\[brackets\\] literally."
     );
     // Round-trip: escaped text must render as literal, not emphasis.
-    let rendered = render_markdown(&markdown, 1).unwrap();
+    let rendered = render_markdown(&markdown, Revision::new(1)).unwrap();
     assert!(rendered.body.contains("*asterisks*"));
 }
 
@@ -221,7 +222,7 @@ fn leading_block_marker_in_prose_is_escaped() {
     let html = "<p># not a heading</p>";
     let markdown = convert(html);
     assert_eq!(markdown, "\\# not a heading");
-    let rendered = render_markdown(&markdown, 1).unwrap();
+    let rendered = render_markdown(&markdown, Revision::new(1)).unwrap();
     assert!(!rendered.body.contains("<h1"));
 }
 
@@ -360,7 +361,7 @@ fn code_span_with_backticks_is_fenced() {
     let html = "<p>Use <code>a`b</code> here</p>";
     let markdown = convert(html);
     assert!(markdown.contains("a`b"));
-    let rendered = render_markdown(&markdown, 1).unwrap();
+    let rendered = render_markdown(&markdown, Revision::new(1)).unwrap();
     assert!(rendered.body.contains("a`b"));
 }
 
@@ -369,7 +370,7 @@ fn code_block_preserves_angle_brackets_safely() {
     let html = "<pre>if (a &lt; b) { return &lt;T&gt;; }</pre>";
     let markdown = convert(html);
     assert_safe_roundtrip(&markdown);
-    let rendered = render_markdown(&markdown, 1).unwrap();
+    let rendered = render_markdown(&markdown, Revision::new(1)).unwrap();
     assert!(rendered.body.contains("&lt;T&gt;"));
 }
 
@@ -406,14 +407,14 @@ fn many_raw_text_tags_do_not_blow_up_quadratically() {
 #[test]
 fn unterminated_tag_like_text_is_preserved_literally() {
     let markdown = convert("This is a <tag");
-    let rendered = render_markdown(&markdown, 1).expect("rendered markdown");
+    let rendered = render_markdown(&markdown, Revision::new(1)).expect("rendered markdown");
     assert!(
         rendered.body.contains("&lt;tag"),
         "unterminated tag must survive as literal text; got markdown: {markdown}"
     );
     // A later genuine tag still parses normally.
     let markdown2 = convert("a <tag and <p>real</p>");
-    let rendered2 = render_markdown(&markdown2, 1).expect("rendered markdown");
+    let rendered2 = render_markdown(&markdown2, Revision::new(1)).expect("rendered markdown");
     assert!(rendered2.body.contains("&lt;tag"));
     assert!(rendered2.body.contains("<p>"));
 }
@@ -433,7 +434,7 @@ fn inert_prose_containing_security_keywords_is_preserved() {
     ];
     for (html, expected_rendered) in cases {
         let markdown = html_to_markdown(html).expect("conversion should succeed");
-        let rendered = render_markdown(&markdown, 1).expect("rendered markdown");
+        let rendered = render_markdown(&markdown, Revision::new(1)).expect("rendered markdown");
         assert!(
             rendered.body.contains(expected_rendered),
             "literal security keyword prose must be preserved; got markdown: {markdown}"
@@ -446,7 +447,7 @@ fn inert_prose_containing_security_keywords_is_preserved() {
 
     // Bare security-scheme strings in prose stay literal (not links or scripts).
     let js = convert("<p>javascript:alert(1)</p>");
-    let rendered_js = render_markdown(&js, 1).expect("rendered markdown");
+    let rendered_js = render_markdown(&js, Revision::new(1)).expect("rendered markdown");
     assert!(
         rendered_js.body.contains("javascript:alert(1)"),
         "literal javascript: prose must be preserved"
@@ -454,7 +455,7 @@ fn inert_prose_containing_security_keywords_is_preserved() {
     assert!(!rendered_js.body.contains("href=\"javascript:"));
 
     let url = convert("<p>url(http://evil.example/x.png)</p>");
-    let rendered_url = render_markdown(&url, 1).expect("rendered markdown");
+    let rendered_url = render_markdown(&url, Revision::new(1)).expect("rendered markdown");
     assert!(
         rendered_url.body.contains("url(http://evil.example/x.png)"),
         "literal url(http…) prose must be preserved"
