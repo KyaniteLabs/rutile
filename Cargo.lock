@@ -3448,6 +3448,7 @@ name = "rutile-types"
 version = "0.2.2"
 dependencies = [
  "html-escape",
+ "serde",
  "thiserror 2.0.12",
  "url",
 ]
@@ -5358,6 +5359,7 @@ dependencies = [
  "jsonschema",
  "libc",
  "rutile-protocol",
+ "rutile-types",
  "serde",
  "serde_json",
  "sha2",
