@@ -9,7 +9,43 @@ use crate::{
     TransactionKind,
 };
 
-pub type AdapterCommitId = u64;
+/// A platform-adapter local-commit token. Distinct from [`Revision`],
+/// [`InteractionId`], and [`CompositionId`]: the newtype wrapper prevents
+/// transposed-argument bugs that a bare `u64` alias allows.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[serde(transparent)]
+pub struct AdapterCommitId(u64);
+
+impl AdapterCommitId {
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl std::fmt::Display for AdapterCommitId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// A composition (IME) sequence id. Distinct from `Revision` and
 /// `AdapterCommitId`: the newtype wrapper prevents transposed-argument bugs.
 #[derive(
@@ -176,9 +212,9 @@ pub fn apply_editor_commit(
             transaction,
             history,
         } => {
-            if transaction.id != adapter_commit_id {
+            if transaction.id != adapter_commit_id.get() {
                 return Err(EditorError::AdapterCommitMismatch {
-                    expected: transaction.id,
+                    expected: AdapterCommitId::new(transaction.id),
                     actual: adapter_commit_id,
                 });
             }
@@ -191,7 +227,7 @@ pub fn apply_editor_commit(
         EditorCommit::Ime(ime) => document
             .apply(EditTransaction {
                 base_revision: ime.base_revision,
-                id: adapter_commit_id,
+                id: adapter_commit_id.get(),
                 kind: TransactionKind::ImeCommit,
                 edits: vec![Edit {
                     byte_range: ime.byte_range,

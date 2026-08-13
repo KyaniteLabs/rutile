@@ -237,7 +237,7 @@ impl GtkEditorInner {
     }
 
     fn next_commit(&mut self) -> AdapterCommitId {
-        self.next_commit_id = self.next_commit_id.saturating_add(1);
+        self.next_commit_id = AdapterCommitId::new(self.next_commit_id.get().saturating_add(1));
         self.next_commit_id
     }
 
@@ -270,7 +270,7 @@ impl GtkEditorInner {
                 commit: EditorCommit::Edit {
                     transaction: EditTransaction {
                         base_revision: self.revision,
-                        id: commit_id,
+                        id: commit_id.get(),
                         kind: TransactionKind::Typing,
                         edits: vec![Edit {
                             byte_range: edit.range,
@@ -301,7 +301,7 @@ impl GtkSourceEditorAdapter {
             sink: None,
             index: LineByteIndex::from_text(""),
             revision: 0,
-            next_commit_id: 0,
+            next_commit_id: AdapterCommitId::new(0),
             next_composition_id: 0,
             pending_native: None,
             pending_commit: None,

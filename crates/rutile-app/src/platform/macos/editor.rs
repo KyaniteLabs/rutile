@@ -161,7 +161,7 @@ impl IcedEditorAdapter {
             mirror: String::new(),
             index: LineByteIndex::from_text(""),
             revision: Revision::new(0),
-            next_commit_id: 0,
+            next_commit_id: AdapterCommitId::new(0),
             next_composition_id: CompositionId::new(0),
             pending_commit: None,
             sink: None,
@@ -231,7 +231,7 @@ impl IcedEditorAdapter {
             commit: EditorCommit::Edit {
                 transaction: EditTransaction {
                     base_revision: self.revision,
-                    id: adapter_commit_id,
+                    id: adapter_commit_id.get(),
                     kind: TransactionKind::Typing,
                     edits: vec![Edit {
                         byte_range: range,
@@ -477,7 +477,7 @@ impl IcedEditorAdapter {
     }
 
     fn next_commit_id(&mut self) -> AdapterCommitId {
-        self.next_commit_id = self.next_commit_id.saturating_add(1);
+        self.next_commit_id = AdapterCommitId::new(self.next_commit_id.get().saturating_add(1));
         self.next_commit_id
     }
 

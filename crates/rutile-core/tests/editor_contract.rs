@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use rutile_core::CompositionId;
 use rutile_core::{
-    ChangeSet, CompositionCancelReason, CompositionTracker, Document, DocumentSnapshot, Edit,
-    EditTransaction, EditorAdapter, EditorCommit, EditorError, EditorEvent, EditorEventSink,
-    HistoryContext, ImeCommit, LocalCommitRejection, Selection, StaleRevision, TransactionKind,
-    TypingDirection, ViewportState, apply_editor_commit,
+    AdapterCommitId, ChangeSet, CompositionCancelReason, CompositionTracker, Document,
+    DocumentSnapshot, Edit, EditTransaction, EditorAdapter, EditorCommit, EditorError, EditorEvent,
+    EditorEventSink, HistoryContext, ImeCommit, LocalCommitRejection, Selection, StaleRevision,
+    TransactionKind, TypingDirection, ViewportState, apply_editor_commit,
 };
 use rutile_types::{InteractionId, Revision};
 
@@ -16,7 +16,7 @@ struct TraceAdapter {
     composition: CompositionTracker,
     mirror: String,
     revision: Revision,
-    pending_commit: Option<u64>,
+    pending_commit: Option<AdapterCommitId>,
     pending_paint: Option<Revision>,
     mirror_replacements: usize,
     acknowledgements: usize,
@@ -61,7 +61,7 @@ impl TraceAdapter {
     fn native_ime_commit(
         &mut self,
         id: CompositionId,
-        adapter_commit_id: u64,
+        adapter_commit_id: AdapterCommitId,
         replacement: &str,
     ) -> bool {
         let Some(event) =
@@ -115,7 +115,7 @@ impl EditorAdapter for TraceAdapter {
 
     fn acknowledge_local_commit(
         &mut self,
-        adapter_commit_id: u64,
+        adapter_commit_id: AdapterCommitId,
         change: &ChangeSet,
     ) -> Result<(), EditorError> {
         if self.pending_commit != Some(adapter_commit_id) || change.before != self.revision {
@@ -130,7 +130,7 @@ impl EditorAdapter for TraceAdapter {
 
     fn reject_local_commit(
         &mut self,
-        adapter_commit_id: u64,
+        adapter_commit_id: AdapterCommitId,
         _reason: LocalCommitRejection,
         authoritative: &DocumentSnapshot,
     ) -> Result<(), EditorError> {
@@ -207,7 +207,7 @@ fn japanese_ime_trace_mutates_mirror_and_rope_once_then_paints_once() {
 
     adapter.composition_started(CompositionId::new(7), 2..2);
     adapter.composition_updated(CompositionId::new(7), "に");
-    assert!(adapter.native_ime_commit(CompositionId::new(7), 11, "日本"));
+    assert!(adapter.native_ime_commit(CompositionId::new(7), AdapterCommitId::new(11), "日本"));
     let requested = events.borrow()[2].clone();
     let EditorEvent::CommitRequested {
         adapter_commit_id,
@@ -244,7 +244,11 @@ fn japanese_ime_trace_mutates_mirror_and_rope_once_then_paints_once() {
     assert_eq!(adapter.mirror_replacements, 1);
     assert_eq!(adapter.acknowledgements, 1);
     assert_eq!(adapter.paints, 1);
-    assert!(!adapter.native_ime_commit(CompositionId::new(7), 12, "duplicate"));
+    assert!(!adapter.native_ime_commit(
+        CompositionId::new(7),
+        AdapterCommitId::new(12),
+        "duplicate"
+    ));
     assert!(document.undo().is_some());
     assert!(document.undo().is_none());
     assert!(!include_str!("../src/editor_contract.rs").contains("CompositionCommitted"));
@@ -287,7 +291,7 @@ fn revision_change_cancels_preedit_before_external_change_and_late_commit_is_ine
             .update(CompositionId::new(9), Revision::new(0), "late")
             .is_none()
     );
-    assert!(!adapter.native_ime_commit(CompositionId::new(9), 3, "late"));
+    assert!(!adapter.native_ime_commit(CompositionId::new(9), AdapterCommitId::new(3), "late"));
     assert_eq!(adapter.mirror, mirror_after_external);
     assert_eq!(adapter.mirror, document.snapshot().to_string());
     assert_eq!(adapter.acknowledgements, 0);
@@ -305,7 +309,7 @@ fn rejected_local_ime_restores_authoritative_snapshot_and_never_paints() {
     adapter.composition_started(CompositionId::new(3), 0..4);
     assert!(adapter.native_ime_commit(
         CompositionId::new(3),
-        21,
+        AdapterCommitId::new(21),
         &"x".repeat(rutile_core::MAX_DOCUMENT_BYTES + 1)
     ));
     let commit = EditorCommit::Ime(ImeCommit {
@@ -314,9 +318,13 @@ fn rejected_local_ime_restores_authoritative_snapshot_and_never_paints() {
         byte_range: 0..4,
         replacement: "x".repeat(rutile_core::MAX_DOCUMENT_BYTES + 1),
     });
-    assert!(apply_editor_commit(&mut document, 21, commit).is_err());
+    assert!(apply_editor_commit(&mut document, AdapterCommitId::new(21), commit).is_err());
     adapter
-        .reject_local_commit(21, LocalCommitRejection::TooLarge, &authoritative)
+        .reject_local_commit(
+            AdapterCommitId::new(21),
+            LocalCommitRejection::TooLarge,
+            &authoritative,
+        )
         .unwrap();
     adapter.native_layout(1);
 
@@ -343,7 +351,7 @@ fn edit_commit_requires_the_adapter_commit_id() {
         history: None,
     };
 
-    assert!(apply_editor_commit(&mut document, 41, commit).is_err());
+    assert!(apply_editor_commit(&mut document, AdapterCommitId::new(41), commit).is_err());
     assert_eq!(document.snapshot().to_string(), "abc");
 }
 
@@ -368,7 +376,7 @@ fn adjacent_typing_commit_requests_use_history_context_and_undo_as_one() {
                 Selection::collapsed(byte + 1),
             )),
         };
-        apply_editor_commit(&mut document, id, commit).unwrap();
+        apply_editor_commit(&mut document, AdapterCommitId::new(id), commit).unwrap();
     }
 
     assert_eq!(document.snapshot().to_string(), "ab");
@@ -404,4 +412,20 @@ fn top_visible_byte_requires_exact_revision_and_utf8_boundary() {
         .unwrap();
     viewport.update(&document.snapshot(), 6).unwrap();
     assert_eq!(viewport.top_visible_byte(Revision::new(1)).unwrap(), 6);
+}
+
+#[test]
+fn adapter_commit_id_is_type_distinct_from_revision_and_composition() {
+    fn accepts_commit(_: AdapterCommitId) {}
+    fn accepts_revision(_: Revision) {}
+    fn accepts_composition(_: CompositionId) {}
+    accepts_commit(AdapterCommitId::new(0));
+    accepts_revision(Revision::new(0));
+    accepts_composition(CompositionId::new(0));
+    // These would fail to compile if uncommented (type mismatch):
+    //   accepts_commit(Revision::new(0));
+    //   accepts_revision(AdapterCommitId::new(0));
+    //   accepts_commit(CompositionId::new(0));
+    assert_eq!(AdapterCommitId::new(7).get(), 7);
+    assert_eq!(AdapterCommitId::new(7).to_string(), "7");
 }
