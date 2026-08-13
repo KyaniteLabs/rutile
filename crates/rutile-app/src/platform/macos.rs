@@ -1630,6 +1630,8 @@ mod editor;
 mod native;
 #[allow(clippy::pedantic, clippy::nursery)]
 mod open_events;
+#[allow(clippy::pedantic, clippy::nursery)]
+mod palette_panel;
 
 pub(crate) use accessibility::{AxUiState, MacAccessibilityState};
 pub use editor::{IcedAdapterStats, IcedEditorAdapter};
@@ -1639,6 +1641,7 @@ pub use open_events::{
     install_file_menu_with_actions, install_view_menu, install_window_menu, take_pending_switch,
     update_recent_documents, update_tabs,
 };
+pub(crate) use palette_panel::sync_palette_panel;
 
 fn percent_decode_path(segment: &str) -> String {
     url::Url::parse(&format!("file://{segment}"))

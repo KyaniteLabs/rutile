@@ -1507,6 +1507,30 @@ fn palette_submit_unavailable_command_is_a_clean_noop() {
 }
 
 #[test]
+fn palette_snapshot_rows_match_candidates_and_mark_unavailable() {
+    let mut state = AppState::new();
+    assert!(state.palette_snapshot().is_none());
+    state.reduce(AppMessage::OpenCommandPalette);
+    state.reduce(AppMessage::PaletteQueryChanged {
+        query: "save".into(),
+    });
+    let snapshot = state.palette_snapshot().expect("palette is open");
+    assert_eq!(snapshot.query, "save");
+    assert_eq!(snapshot.rows.len(), state.palette().candidates().len());
+    assert_eq!(
+        snapshot.rows[0].title,
+        state.palette().candidates()[0].title
+    );
+    assert!(snapshot.rows[0].selected);
+    assert!(
+        !snapshot.rows[0].available,
+        "clean document makes Save unavailable"
+    );
+    state.reduce(AppMessage::CloseCommandPalette);
+    assert!(state.palette_snapshot().is_none());
+}
+
+#[test]
 fn palette_selection_navigation_through_reducer() {
     let mut state = AppState::new();
     state.reduce(AppMessage::OpenCommandPalette);

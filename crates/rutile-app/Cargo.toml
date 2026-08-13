@@ -39,7 +39,7 @@ objc2 = { version = "=0.6.4", optional = true }
 # + NSAccessibilityProtocols expose the role/label/value/children setters;
 # NSAccessibilityElement is the AppKit class for peer/child AX elements that are
 # not real NSViews (the iced editor/toolbar/notice are drawn by tiny-skia).
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["NSAccessibility", "NSAccessibilityConstants", "NSAccessibilityElement", "NSAccessibilityProtocols", "NSAlert", "NSApplication", "NSButton", "NSControl", "NSMenu", "NSMenuItem", "NSOpenPanel", "NSPanel", "NSPasteboard", "NSResponder", "NSSavePanel", "NSView", "NSWindow"], optional = true }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["NSAccessibility", "NSAccessibilityConstants", "NSAccessibilityElement", "NSAccessibilityProtocols", "NSAlert", "NSApplication", "NSButton", "NSColor", "NSControl", "NSFont", "NSMenu", "NSMenuItem", "NSOpenPanel", "NSPanel", "NSPasteboard", "NSResponder", "NSSavePanel", "NSTextField", "NSView", "NSWindow"], optional = true }
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["NSArray", "NSString", "NSURL"], optional = true }
 # raw-window-handle reaches the content NSView of the winit window so
 # NSAccessibility attributes can be published onto it. Pinned to 0.6.2 to match
