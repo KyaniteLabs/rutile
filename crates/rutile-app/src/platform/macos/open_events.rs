@@ -107,6 +107,20 @@ fn forward_menu_command(command: MacMenuCommand) -> Result<(), String> {
         .map_err(|error| format!("menu proxy send failed: {error:?}"))
 }
 
+/// Forwards a menu command, logging on failure instead of silently swallowing.
+fn dispatch_menu(command: MacMenuCommand) {
+    if let Err(error) = forward_menu_command(command) {
+        eprintln!("rutile: menu command lost (proxy disconnected): {error}");
+    }
+}
+
+/// Forwards open URLs, logging on failure instead of silently swallowing.
+fn dispatch_open(urls: Vec<String>) {
+    if let Err(error) = forward_open_urls(urls) {
+        eprintln!("rutile: open request lost (proxy disconnected): {error}");
+    }
+}
+
 define_class!(
     // AllocAnyThread so the retained target can live in a Sync OnceLock.
     // Methods are only invoked by AppKit on the main thread.
@@ -118,22 +132,22 @@ define_class!(
     impl MenuTarget {
         #[unsafe(method(menuOpen:))]
         fn menu_open(&self, _sender: Option<&AnyObject>) {
-            let _ = forward_menu_command(MacMenuCommand::Open);
+            dispatch_menu(MacMenuCommand::Open);
         }
 
         #[unsafe(method(menuSave:))]
         fn menu_save(&self, _sender: Option<&AnyObject>) {
-            let _ = forward_menu_command(MacMenuCommand::Save);
+            dispatch_menu(MacMenuCommand::Save);
         }
 
         #[unsafe(method(menuSaveAs:))]
         fn menu_save_as(&self, _sender: Option<&AnyObject>) {
-            let _ = forward_menu_command(MacMenuCommand::SaveAs);
+            dispatch_menu(MacMenuCommand::SaveAs);
         }
 
         #[unsafe(method(menuClose:))]
         fn menu_close(&self, _sender: Option<&AnyObject>) {
-            let _ = forward_menu_command(MacMenuCommand::Close);
+            dispatch_menu(MacMenuCommand::Close);
         }
 
         #[unsafe(method(menuOpenRecent:))]
@@ -142,22 +156,22 @@ define_class!(
                 let tag: isize = unsafe { msg_send![sender, tag] };
                 let index = tag as usize;
                 if let Some(path) = recent_paths().lock().ok().and_then(|p| p.get(index).cloned()) {
-                    let _ = forward_open_urls(vec![path]);
+                    dispatch_open(vec![path]);
                 }
             }
         }
         #[unsafe(method(menuClearRecents:))]
         fn menu_clear_recents(&self, _sender: Option<&AnyObject>) {
-            let _ = forward_menu_command(MacMenuCommand::ClearRecents);
+            dispatch_menu(MacMenuCommand::ClearRecents);
         }
         #[unsafe(method(menuNewTab:))]
         fn menu_new_tab(&self, _sender: Option<&AnyObject>) {
-            let _ = forward_menu_command(MacMenuCommand::NewTab);
+            dispatch_menu(MacMenuCommand::NewTab);
         }
 
         #[unsafe(method(menuCloseTab:))]
         fn menu_close_tab(&self, _sender: Option<&AnyObject>) {
-            let _ = forward_menu_command(MacMenuCommand::CloseTab);
+            dispatch_menu(MacMenuCommand::CloseTab);
         }
 
         #[unsafe(method(menuSwitchTab:))]
@@ -167,24 +181,24 @@ define_class!(
                 if let Ok(mut g) = pending_switch().lock() {
                     *g = Some(tag as usize);
                 }
-                let _ = forward_menu_command(MacMenuCommand::SwitchTab);
+                dispatch_menu(MacMenuCommand::SwitchTab);
             }
         }
         #[unsafe(method(menuCommandPalette:))]
         fn menu_command_palette(&self, _sender: Option<&AnyObject>) {
-            let _ = forward_menu_command(MacMenuCommand::OpenCommandPalette);
+            dispatch_menu(MacMenuCommand::OpenCommandPalette);
         }
         #[unsafe(method(menuViewEdit:))]
         fn menu_view_edit(&self, _sender: Option<&AnyObject>) {
-            let _ = forward_menu_command(MacMenuCommand::ViewModeEdit);
+            dispatch_menu(MacMenuCommand::ViewModeEdit);
         }
         #[unsafe(method(menuViewSplit:))]
         fn menu_view_split(&self, _sender: Option<&AnyObject>) {
-            let _ = forward_menu_command(MacMenuCommand::ViewModeSplit);
+            dispatch_menu(MacMenuCommand::ViewModeSplit);
         }
         #[unsafe(method(menuViewRead:))]
         fn menu_view_read(&self, _sender: Option<&AnyObject>) {
-            let _ = forward_menu_command(MacMenuCommand::ViewModeRead);
+            dispatch_menu(MacMenuCommand::ViewModeRead);
         }
     }
 );

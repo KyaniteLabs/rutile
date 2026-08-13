@@ -407,6 +407,24 @@ pub enum GuiEventV1 {
     },
 }
 
+impl GuiEventV1 {
+    /// The correlation id matching the [`GuiCommandV1`] that triggered this event.
+    #[must_use]
+    pub const fn request_id(&self) -> u64 {
+        match self {
+            Self::ControlReady { request_id }
+            | Self::EditAccepted { request_id, .. }
+            | Self::SourcePainted { request_id, .. }
+            | Self::PreviewPainted { request_id, .. }
+            | Self::Interactive { request_id, .. }
+            | Self::FocusChanged { request_id, .. }
+            | Self::BoundsChanged { request_id, .. }
+            | Self::Closed { request_id }
+            | Self::Error { request_id, .. } => *request_id,
+        }
+    }
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum GuiEventWireV1 {
