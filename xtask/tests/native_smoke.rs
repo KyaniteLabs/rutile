@@ -1,4 +1,9 @@
-#![cfg(unix)]
+// Unix-wide but macOS-specific: the suite drives the `NativeSmoke` CLI
+// surface, which is `#[cfg(target_os = "macos")]` in `cli::Command` (the
+// Linux lifecycle gate uses the separate `LinuxGate` variant). Without this
+// gate `cargo test -p xtask` does not compile on Linux — which is what broke
+// the portable CI job's xtask-test stage.
+#![cfg(target_os = "macos")]
 #![allow(clippy::disallowed_methods)] // Harness launches only local fixtures and repository wrappers.
 
 use std::fs;
