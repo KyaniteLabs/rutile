@@ -202,7 +202,9 @@ jobs:
           rustup toolchain install 1.88.0 --profile minimal --no-self-update
           rustup toolchain install nightly-2026-07-01 --profile minimal --component llvm-tools-preview
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          cargo install --locked cargo-fuzz --version 0.13.2
+          # cargo-fuzz's tree needs rustc >= 1.91 at install time (cargo-platform
+          # 0.3.3); install under the nightly toolchain this stage already uses.
+          rustup run nightly-2026-07-01 cargo install cargo-fuzz --version 0.13.2 --locked
       - name: bounded fuzz smoke (60s/target)
         # Each of the five fuzz targets runs for max_total_time=60s; the libFuzzer
         # harness is the oracle. Emits one gate-result across all targets.
