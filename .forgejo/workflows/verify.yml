@@ -51,7 +51,14 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: https://github.com/Swatinem/rust-cache@v2  # full URL: the runner's action mirror lacks it
       - name: bootstrap toolchain
-        run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
+        run: |
+          set -eu
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0
+            . "$HOME/.cargo/env"
+          fi
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: portable gate (fmt + clippy -D warnings + docs + test + xtask-test)
         # portable-gate.sh emits one gate-result whose runs[] includes an
         # xtask-test row (the test stage was expanded to run cargo test -p xtask
@@ -78,7 +85,14 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: https://github.com/Swatinem/rust-cache@v2  # full URL: the runner's action mirror lacks it
       - name: bootstrap toolchain
-        run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
+        run: |
+          set -eu
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0
+            . "$HOME/.cargo/env"
+          fi
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: production build (no test-control, separate target root)
         # Emits gate-result; the clean artifact lands in target/prod/release/.
         run: bash scripts/ci/portable-gate.sh --stage build --profile "$PROFILE" --job production-build
@@ -110,7 +124,13 @@ jobs:
       - uses: https://github.com/Swatinem/rust-cache@v2  # full URL: the runner's action mirror lacks it
       - name: bootstrap toolchain + cargo-deny (pinned)
         run: |
+          set -eu
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0
+            . "$HOME/.cargo/env"
+          fi
           rustup toolchain install 1.88.0 --profile minimal --no-self-update
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           cargo install --locked cargo-deny --version 0.20.2 --locked
       - name: workspace dependency policy (cargo-deny check, deny warnings)
         run: bash scripts/ci/portable-gate.sh --stage deny --profile "$PROFILE" --job dependency-policy
@@ -135,7 +155,13 @@ jobs:
       - uses: https://github.com/Swatinem/rust-cache@v2  # full URL: the runner's action mirror lacks it
       - name: bootstrap toolchain + cargo-deny (pinned)
         run: |
+          set -eu
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0
+            . "$HOME/.cargo/env"
+          fi
           rustup toolchain install 1.88.0 --profile minimal --no-self-update
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           cargo install --locked cargo-deny --version 0.20.2 --locked
       - name: fuzz crate dependency policy (cargo-deny check, deny warnings)
         run: bash scripts/ci/portable-gate.sh --stage fuzz-deny --profile "$PROFILE" --job fuzz-dependency-policy
@@ -160,8 +186,14 @@ jobs:
       - uses: https://github.com/Swatinem/rust-cache@v2  # full URL: the runner's action mirror lacks it
       - name: bootstrap toolchains + cargo-fuzz (pinned)
         run: |
+          set -eu
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0
+            . "$HOME/.cargo/env"
+          fi
           rustup toolchain install 1.88.0 --profile minimal --no-self-update
           rustup toolchain install nightly-2026-07-01 --profile minimal --component llvm-tools-preview
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           cargo install --locked cargo-fuzz --version 0.13.2
       - name: bounded fuzz smoke (60s/target)
         # Each of the five fuzz targets runs for max_total_time=60s; the libFuzzer
