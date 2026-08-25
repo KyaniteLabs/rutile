@@ -24,7 +24,7 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0 >> /tmp/probe.log 2>&1
           . "$HOME/.cargo/env"
           rustup toolchain install 1.88.0 --profile minimal --no-self-update >> /tmp/probe.log 2>&1
-          env RUST_TEST_THREADS=1 cargo test --locked -p xtask --all-targets >> /tmp/probe.log 2>&1
+          env RUST_TEST_THREADS=1 cargo test --locked -p xtask --all-targets >> /tmp/probe.log 2>&1 || true
           post failure
           exit 1
   p25-fuzz-reason:
