@@ -1,59 +1,16 @@
 name: probe
 on: [push, pull_request]
 jobs:
-  p17-rust-cache-then-gate:
+  p19-github-path:
     runs-on: [heavy]
     steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
-      - uses: https://github.com/Swatinem/rust-cache@v2
-      - name: gate with error reporting
-        shell: bash
-        env:
-          TOKEN: ${{ github.token }}
-          SHA: ${{ github.sha }}
-          REPO: ${{ github.repository }}
-        run: |
-          report() {
-            desc=$(tail -c 130 /tmp/probe.log | tr '\n' ' ' | tr -d '"' | tr -d '\\')
-            curl -s -f -X POST -H "Authorization: token ${TOKEN}" -H "Content-Type: application/json" \
-              --data "{\"state\":\"$1\",\"context\":\"p17\",\"description\":\"$desc\"}" \
-              "https://git.kyanitelabs.tech/api/v1/repos/${REPO}/statuses/${SHA}" >/dev/null || true
-          }
-          : > /tmp/probe.log
-          { curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0
-            . "$HOME/.cargo/env"
-            rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
-            bash scripts/ci/portable-gate.sh --stage test --job portable
-            echo ALL_OK
-          } >> /tmp/probe.log 2>&1 || { report failure; exit 1; }
-          report success
-  p18-gate-then-upload:
-    runs-on: [heavy]
-    steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
-      - name: gate with error reporting
-        shell: bash
-        env:
-          TOKEN: ${{ github.token }}
-          SHA: ${{ github.sha }}
-          REPO: ${{ github.repository }}
-        run: |
-          report() {
-            desc=$(tail -c 130 /tmp/probe.log | tr '\n' ' ' | tr -d '"' | tr -d '\\')
-            curl -s -f -X POST -H "Authorization: token ${TOKEN}" -H "Content-Type: application/json" \
-              --data "{\"state\":\"$1\",\"context\":\"p18\",\"description\":\"$desc\"}" \
-              "https://git.kyanitelabs.tech/api/v1/repos/${REPO}/statuses/${SHA}" >/dev/null || true
-          }
-          : > /tmp/probe.log
-          { curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0
-            . "$HOME/.cargo/env"
-            rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
-            bash scripts/ci/portable-gate.sh --stage test --job portable
-            echo GATE_OK
-          } >> /tmp/probe.log 2>&1 || { report failure; exit 1; }
-          report success
-      - run: ls target/evidence >/dev/null && echo evidence-present
-      - uses: https://github.com/actions/upload-artifact@v3
-        with: {name: probe-p18, path: target/evidence}
+      - run: |
+          echo "MARKER=via_env" >> "$GITHUB_ENV"
+          mkdir -p /tmp/pathprobe && printf '#!/bin/sh\necho path-works\n' > /tmp/pathprobe/pathprobe && chmod +x /tmp/pathprobe/pathprobe
+          echo "/tmp/pathprobe" >> "$GITHUB_PATH"
+      - run: |
+          echo "GITHUB_PATH contents: $(cat "$GITHUB_PATH" 2>/dev/null || echo missing)"
+          echo "MARKER=$MARKER"
+          PATHPROBE_OUT=$(pathprobe 2>&1 || echo "PATH-FAILED")
+          echo "pathprobe: $PATHPROBE_OUT"
+          if [ "$PATHPROBE_OUT" = "path-works" ]; then echo PATH_SUPPORTED; else echo PATH_BROKEN; fi
