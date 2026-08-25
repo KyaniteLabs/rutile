@@ -19,8 +19,8 @@ use iced_winit::program::runtime::user_interface;
 use iced_winit::winit;
 use objc2::MainThreadMarker;
 use objc2_app_kit::{
-    NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSAlertStyle, NSModalResponse,
-    NSModalResponseOK, NSOpenPanel, NSSavePanel,
+    NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSAlertStyle, NSEvent,
+    NSEventModifierFlags, NSModalResponse, NSModalResponseOK, NSOpenPanel, NSSavePanel,
 };
 use objc2_foundation::NSString;
 use rutile_core::{
@@ -2162,7 +2162,11 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
         } = &event
             && key_event.state == ElementState::Pressed
         {
-            let command = self.modifiers.super_key();
+            // Authoritative modifiers: winit's tracked state can desync from
+            // AppKit after focus transitions (non-activating palette panel),
+            // which leaked a ⌘Q into the document as a stray `q` on
+            // 2026-08-23. Dispatch on the reconciled truth instead.
+            let command = effective_modifiers(self.modifiers, live_modifiers()).super_key();
             if self.pending_close {
                 let decision = if matches!(
                     key_event.logical_key,
@@ -2187,7 +2191,7 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
                 // Non-decision keys fall through to the rest of the keyboard
                 // handler, matching the historical smoke fallback semantics.
             }
-            let shift = self.modifiers.shift_key();
+            let shift = effective_modifiers(self.modifiers, live_modifiers()).shift_key();
 
             // Crash-recovery prompt (non-smoke): ⌘Y restore · Esc dismiss.
             // While pending, all other key-driven edits and commands are blocked
@@ -2331,7 +2335,7 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
             if command
                 && matches!(key_event.logical_key, Key::Character(ref key) if key.eq_ignore_ascii_case("z"))
             {
-                let redo = self.modifiers.shift_key();
+                let redo = shift;
                 let change = if redo {
                     self.session.redo()
                 } else {
@@ -2368,11 +2372,27 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
         let Some(window) = &self.window else {
             return;
         };
-        match self.source_pane.handle_winit_event(
-            event,
-            window.scale_factor() as f32,
-            self.modifiers,
-        ) {
+        let effective = effective_modifiers(self.modifiers, live_modifiers());
+        // Backstop: a pressed character whose CMD state winit failed to track
+        // must never reach the editor as plain text. Only the desync mismatch
+        // is dropped, so editor-side ⌘-bindings keep their fall-through when
+        // tracked and live agree.
+        if let WindowEvent::KeyboardInput {
+            event: key_event, ..
+        } = &event
+            && command_character_leaks_to_editor(
+                self.modifiers,
+                effective,
+                &key_event.logical_key,
+                key_event.state == ElementState::Pressed,
+            )
+        {
+            return;
+        }
+        match self
+            .source_pane
+            .handle_winit_event(event, window.scale_factor() as f32, effective)
+        {
             Ok(true) => {
                 if let Err(error) = self.process_editor_events(event_loop) {
                     self.fail(event_loop, error.to_string());
@@ -3516,18 +3536,137 @@ fn run_dirty_close_alert() -> Result<CloseDialogAction, MacError> {
     Ok(close_dialog_action(alert.runModal()))
 }
 
+/// Authoritative modifier state at key-event time.
+///
+/// winit's `ModifiersChanged` tracking can desync from reality after focus
+/// transitions involving non-activating panels (the command palette): the
+/// 2026-08-23 usage forensics show a ⌘Q that reached the editor as a bare
+/// `q` and was inserted as text while the AppKit menu still quit. The live
+/// AppKit read is authoritative when it succeeds; the tracked state is the
+/// fallback so a provider failure can never silently empty the modifiers.
+pub(super) fn effective_modifiers(
+    tracked: ModifiersState,
+    live: Option<ModifiersState>,
+) -> ModifiersState {
+    live.unwrap_or(tracked)
+}
+
+/// Live event-time modifiers from AppKit. `+[NSEvent modifierFlags]` reports
+/// the flags of the event AppKit is currently dispatching — the same truth a
+/// menu accelerator used. The call cannot fail on a running AppKit session;
+/// `None` exists so tests and non-AppKit contexts can inject absence.
+pub(super) fn live_modifiers() -> Option<ModifiersState> {
+    let flags = NSEvent::modifierFlags_class();
+    let mut state = ModifiersState::empty();
+    if flags.contains(NSEventModifierFlags::Command) {
+        state |= ModifiersState::SUPER;
+    }
+    if flags.contains(NSEventModifierFlags::Option) {
+        state |= ModifiersState::ALT;
+    }
+    if flags.contains(NSEventModifierFlags::Control) {
+        state |= ModifiersState::CONTROL;
+    }
+    if flags.contains(NSEventModifierFlags::Shift) {
+        state |= ModifiersState::SHIFT;
+    }
+    Some(state)
+}
+
+/// True only in the desync state: AppKit says CMD is down, winit's tracked
+/// state says it is not, and the event is a pressed character key. That is
+/// the signature of a ⌘-combo winit failed to track; the editor must never
+/// see it as plain text. Outside the mismatch the fall-through keeps its
+/// historical behavior, preserving editor-side ⌘-bindings.
+pub(super) fn command_character_leaks_to_editor(
+    tracked: ModifiersState,
+    effective: ModifiersState,
+    key: &Key,
+    pressed: bool,
+) -> bool {
+    pressed && effective.super_key() && !tracked.super_key() && matches!(key, Key::Character(_))
+}
+
 #[cfg(test)]
 mod tests {
     use super::smoke_stage_zero_ready_to_edit;
     use super::{AxAnnouncementPriority, AxFindField, AxSelection};
     use super::{
         CLOSE_DIALOG_BUTTONS, CloseDialogAction, FindBarView, FindField, RECOVERY_DIALOG_BUTTONS,
-        RecoveryDialogAction, close_dialog_action, project_announcement, project_editor_selection,
-        project_find_bar, recovery_dialog_action,
+        RecoveryDialogAction, close_dialog_action, command_character_leaks_to_editor,
+        effective_modifiers, project_announcement, project_editor_selection, project_find_bar,
+        recovery_dialog_action,
     };
     use crate::app::{NoticeSeverity, UserNotice};
+    use iced_winit::winit::keyboard::{Key, ModifiersState, NamedKey};
     use rutile_core::Selection;
     use rutile_types::Revision;
+
+    fn command_only() -> ModifiersState {
+        ModifiersState::SUPER
+    }
+
+    #[test]
+    fn effective_modifiers_prefers_the_live_appkit_truth() {
+        // The desync case: winit tracked nothing, AppKit says CMD is down.
+        // Dispatch must see CMD so ⌘S/⌘Q behave; the editor must see CMD so
+        // the character is not inserted as plain text.
+        assert_eq!(
+            effective_modifiers(ModifiersState::empty(), Some(command_only())),
+            command_only()
+        );
+    }
+
+    #[test]
+    fn effective_modifiers_falls_back_to_tracked_when_live_is_unreadable() {
+        // Provider failure must degrade to the tracked state — never to a
+        // silent empty, which would disable every shortcut.
+        assert_eq!(effective_modifiers(command_only(), None), command_only());
+        assert_eq!(
+            effective_modifiers(ModifiersState::empty(), None),
+            ModifiersState::empty()
+        );
+    }
+
+    #[test]
+    fn desynced_command_character_is_flagged_as_a_leak() {
+        let q = Key::Character("q".into());
+        // Desync: tracked empty, AppKit CMD down, pressed character.
+        assert!(command_character_leaks_to_editor(
+            ModifiersState::empty(),
+            command_only(),
+            &q,
+            true
+        ));
+        // Agreement (normal ⌘-combo): never flagged, so editor-side
+        // ⌘-bindings keep their historical fall-through.
+        assert!(!command_character_leaks_to_editor(
+            command_only(),
+            command_only(),
+            &q,
+            true
+        ));
+        // No command anywhere: plain typing.
+        assert!(!command_character_leaks_to_editor(
+            ModifiersState::empty(),
+            ModifiersState::empty(),
+            &q,
+            true
+        ));
+        // Releases and non-character keys never leak.
+        assert!(!command_character_leaks_to_editor(
+            ModifiersState::empty(),
+            command_only(),
+            &q,
+            false
+        ));
+        assert!(!command_character_leaks_to_editor(
+            ModifiersState::empty(),
+            command_only(),
+            &Key::Named(NamedKey::Enter),
+            true
+        ));
+    }
 
     #[test]
     fn stage_zero_blocks_the_first_edit_until_a_preview_scroll_receipt_arrives() {
