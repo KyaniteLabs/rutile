@@ -1,12 +1,12 @@
 name: probe
 on: [push, pull_request]
 jobs:
-  p20-xtask-test-why:
+  p21-deny-sequence:
     runs-on: [heavy]
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - name: xtask test with reporting
+      - name: deny job sequence with reporting
         shell: bash
         env:
           TOKEN: ${{ github.token }}
@@ -14,17 +14,21 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           report() {
-            desc=$(grep -E "FAILED|panicked|error\[|^error" /tmp/probe.log | tail -3 | tr '\n' ' ' | cut -c1-135 | tr -d '"' | tr -d '\\')
+            desc=$(grep -aE "FAILED|panicked|error\[|^error|error:" /tmp/probe.log | tail -3 | tr '\n' ' ' | cut -c1-135 | tr -d '"' | tr -d '\\')
             curl -s -f -X POST -H "Authorization: token ${TOKEN}" -H "Content-Type: application/json" \
-              --data "{\"state\":\"$1\",\"context\":\"p20-why\",\"description\":\"$desc\"}" \
+              --data "{\"state\":\"$1\",\"context\":\"p21\",\"description\":\"$desc\"}" \
               "https://git.kyanitelabs.tech/api/v1/repos/${REPO}/statuses/${SHA}" >/dev/null || true
           }
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0 >> /tmp/probe.log 2>&1
-          . "$HOME/.cargo/env"
-          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update >> /tmp/probe.log 2>&1
-          if cargo test -p xtask --locked >> /tmp/probe.log 2>&1; then
-            report success
-          else
-            report failure
-            exit 1
-          fi
+          {
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0
+            . "$HOME/.cargo/env"
+            rustup toolchain install 1.88.0 --profile minimal --no-self-update
+            echo "== cargo install cargo-deny begin"
+            cargo install --locked cargo-deny --version 0.20.2 --locked
+            echo "== deny gate begin"
+            bash scripts/ci/portable-gate.sh --stage deny --profile pr --job dependency-policy
+            echo ALL_OK
+          } > /tmp/probe.log 2>&1
+          rc=$?
+          tail -5 /tmp/probe.log
+          if [ $rc -eq 0 ]; then report success; else report failure; exit 1; fi
