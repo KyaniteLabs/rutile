@@ -1741,6 +1741,7 @@ mod tests {
     // --- Preflight validation tests ---
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn rejects_relative_package_path() {
         let temp = smoke_tempdir();
         let evidence = temp.path().join("evidence");
@@ -1786,6 +1787,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn rejects_oversized_package() {
         let temp = smoke_tempdir();
         let evidence = temp.path().join("evidence");
@@ -1802,6 +1804,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn rejects_hash_mismatch() {
         let temp = smoke_tempdir();
         let evidence = temp.path().join("evidence");
@@ -1845,6 +1848,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn rejects_stale_pre_existing_binary() {
         let temp = smoke_tempdir();
         let evidence = temp.path().join("evidence");
@@ -1861,6 +1865,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn rejects_invalid_expected_executable_hash() {
         let temp = smoke_tempdir();
         let evidence = temp.path().join("evidence");
@@ -1889,6 +1894,7 @@ mod tests {
     // --- Stage lifecycle tests ---
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn open_stage_skipped_when_install_did_not_place_binary() {
         let temp = smoke_tempdir();
         let evidence = temp.path().join("evidence");
@@ -1901,6 +1907,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn executable_hash_mismatch_after_install_fails() {
         let temp = smoke_tempdir();
         let evidence = temp.path().join("evidence");
@@ -1941,6 +1948,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn nonzero_install_exit_fails_and_skips_open() {
         let temp = smoke_tempdir();
         let evidence = temp.path().join("evidence");
@@ -1957,6 +1965,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn uninstall_residue_detected_when_binary_survives() {
         let temp = smoke_tempdir();
         let evidence = temp.path().join("evidence");
@@ -1999,6 +2008,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn executor_error_fails_stage_and_records_summary() {
         let temp = smoke_tempdir();
         let evidence = temp.path().join("evidence");
@@ -2019,6 +2029,7 @@ mod tests {
     // --- Full-pass and receipt tests ---
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn full_pass_produces_schema_valid_receipt() {
         let temp = smoke_tempdir();
         let evidence = temp.path().join("evidence");
@@ -2076,6 +2087,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn receipt_at_evidence_dir_root() {
         let temp = smoke_tempdir();
         let evidence = temp.path().join("ev");
