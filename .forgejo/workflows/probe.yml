@@ -1,12 +1,12 @@
 name: probe
 on: [push, pull_request]
 jobs:
-  p22-deny-reason:
+  p23-xtask-suite:
     runs-on: [heavy]
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - name: deny sequence, report last lines
+      - name: xtask suite with reporting
         shell: bash
         env:
           TOKEN: ${{ github.token }}
@@ -14,26 +14,23 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           post() {
-            desc=$(tail -3 /tmp/probe.log | tr '\n' ' ' | tr -d '"' | tr -d '\\' | cut -c1-138)
+            desc=$(grep -aE "FAILED|panicked|error" /tmp/probe.log | tail -2 | tr '\n' ' ' | tr -d '"' | tr -d '\\' | cut -c1-138)
             curl -s -X POST -H "Authorization: token ${TOKEN}" -H "Content-Type: application/json" \
-              --data "{\"state\":\"$1\",\"context\":\"p22-reason\",\"description\":\"$desc\"}" \
+              --data "{\"state\":\"$1\",\"context\":\"p23-xtask\",\"description\":\"$desc\"}" \
               "https://git.kyanitelabs.tech/api/v1/repos/${REPO}/statuses/${SHA}" >/dev/null
-            echo "posted: $desc"
           }
           : > /tmp/probe.log
-          echo "rustup-begin" >> /tmp/probe.log
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0 >> /tmp/probe.log 2>&1
-          echo "rustup-ok cargo-install-begin" >> /tmp/probe.log
           . "$HOME/.cargo/env"
-          if cargo install --locked cargo-deny --version 0.20.2 --locked >> /tmp/probe.log 2>&1; then
-            echo "cargo-deny-ok gate-begin" >> /tmp/probe.log
-            if bash scripts/ci/portable-gate.sh --stage deny --profile pr --job dependency-policy >> /tmp/probe.log 2>&1; then
+          rustup toolchain install 1.88.0 --profile minimal --no-self-update >> /tmp/probe.log 2>&1
+          echo "== xtask all-targets serial (gate semantics)"
+          if env RUST_TEST_THREADS=1 cargo test --locked -p xtask --all-targets >> /tmp/probe.log 2>&1; then
+            echo "== now types/core/protocol"
+            if cargo test --locked -p rutile-types -p rutile-core -p rutile-protocol >> /tmp/probe.log 2>&1; then
               post success
             else
-              post failure
-              exit 1
+              post failure; exit 1
             fi
           else
-            post failure
-            exit 1
+            post failure; exit 1
           fi

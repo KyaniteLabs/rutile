@@ -135,7 +135,7 @@ jobs:
           fi
           rustup toolchain install 1.88.0 --profile minimal --no-self-update
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          cargo install --locked cargo-deny --version 0.20.2 --locked
+          cargo install cargo-deny --version 0.20.2 --locked
       - name: workspace dependency policy (cargo-deny check, deny warnings)
         run: |
           . "$HOME/.cargo/env" 2>/dev/null || true
@@ -168,7 +168,7 @@ jobs:
           fi
           rustup toolchain install 1.88.0 --profile minimal --no-self-update
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          cargo install --locked cargo-deny --version 0.20.2 --locked
+          cargo install cargo-deny --version 0.20.2 --locked
       - name: fuzz crate dependency policy (cargo-deny check, deny warnings)
         run: |
           . "$HOME/.cargo/env" 2>/dev/null || true
