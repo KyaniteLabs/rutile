@@ -111,6 +111,7 @@ After this reconciliation they should match.
 | #124 | xtask native-smoke stderr assertions print child stdout/stderr on failure |
 | #125 | Living docs reconciled after #122–#124 |
 | #126 | Source-binding evidence tests skip off main instead of failing (fixes `cargo test -p xtask` and PR-run `portable` on feature branches) |
+| #128 | CI repair: Colima labels, rustup bootstrap, v3 artifacts, full-URL rust-cache, cargo-fuzz via nightly, Linux compile fixes (native-smoke gate, macOS-fixture package tests, duplicated --locked) |
 
 Audit closeout remains PRs #88–#106 (`docs/audit/2026-08-12-full-codebase-audit.md`,
 `docs/handoff/2026-08-13-splus-complete.md`).
@@ -127,7 +128,7 @@ Audit closeout remains PRs #88–#106 (`docs/audit/2026-08-12-full-codebase-audi
 | Readiness / publication | Independent verifier and runners unprovisioned |
 | Outline / search / history native chrome | Contracts exist; no dedicated sidebar UI |
 | Local AI | Explicitly deferred |
-| CI ubuntu-latest job set | Pre-existing red on every push/PR: the runner topology cannot fetch `actions/checkout@v4` (see kinocut `docs/CI_RUNNER_TOPOLOGY.md`). #122–#124 merged on the no-new-failures rule (both package jobs green, failing set identical to `main`'s baseline) |
+| CI container jobs — mostly repaired by #128 | Root causes found by live probe bisect: no runner carried `ubuntu-latest` (jobs never ran); the runner image ships no rustup; `cargo install --locked … --locked` was a hard usage error; artifact actions need the v3 protocol (this Forgejo lacks the v4 results API); rust-cache needs a full github.com URL; the native-smoke xtask suite didn't compile on Linux; macOS-fixture package-smoke tests fail on Linux hosts by design. Now green: production-build, dependency-policy, fuzz-dependency-policy (+ packages). Still red: `portable` (four `runner_native::tests::linux_native_probe_*` fexecve/reap tests fail in the container — needs linux-side debugging) and `fuzz-smoke` (fails inside the fuzz stage after the nightly cargo-fuzz install fix) |
 | xtask evidence-binding tests on PRs | RESOLVED by #126: the source-binding tests skip with a note when HEAD is not main-reachable (full validation still runs on main checkouts). The load-only native-smoke flake (1-in-4 under back-to-back full suites) did not reproduce in 12× 8-thread runs; assertions now print child stderr (#124) for the next occurrence |
 | Deprecated macOS act_runner leftover | The macOS-hosted act_runner (`tech.kyanitelabs.act-runner`) was deprecated per kinocut `docs/CI_RUNNER_TOPOLOGY.md` (it could not exec into Colima containers); its binary and config lived in `/tmp` and were purged, leaving launchd spawn-looping. The service was retired on 2026-08-25 (unloaded; plist renamed `.disabled-20260825`). The live `[self-hosted, macos, arm64]` runner is a separate tailnet host — package jobs run there; native-smoke jobs staying `pending` forever inside already-concluded runs is a Forgejo job-queue quirk (eternal pendings did not block #122–#126 merges) |
 | ⌘-modifier desync trigger | #123 fixes the leak correctness-by-construction; the trigger stays an unconfirmed hypothesis pending an input-injection repro |
