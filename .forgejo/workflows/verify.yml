@@ -41,7 +41,10 @@ permissions:
 jobs:
   # --- portable, runner-agnostic gates ---------------------------------------
   portable:
-    runs-on: ubuntu-latest
+    # Routed to the Colima runner's real label — `ubuntu-latest` matches no
+    # runner (only a default docker label on a Docker-less host, which fails
+    # the job at container setup). See kinocut docs/CI_RUNNER_TOPOLOGY.md.
+    runs-on: heavy
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
@@ -64,7 +67,10 @@ jobs:
           retention-days: 30
 
   production-build:
-    runs-on: ubuntu-latest
+    # Routed to the Colima runner's real label — `ubuntu-latest` matches no
+    # runner (only a default docker label on a Docker-less host, which fails
+    # the job at container setup). See kinocut docs/CI_RUNNER_TOPOLOGY.md.
+    runs-on: heavy
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
@@ -91,7 +97,10 @@ jobs:
           retention-days: 30
 
   dependency-policy:
-    runs-on: ubuntu-latest
+    # Routed to the Colima runner's real label — `ubuntu-latest` matches no
+    # runner (only a default docker label on a Docker-less host, which fails
+    # the job at container setup). See kinocut docs/CI_RUNNER_TOPOLOGY.md.
+    runs-on: light
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
@@ -112,7 +121,10 @@ jobs:
           retention-days: 30
 
   fuzz-dependency-policy:
-    runs-on: ubuntu-latest
+    # Routed to the Colima runner's real label — `ubuntu-latest` matches no
+    # runner (only a default docker label on a Docker-less host, which fails
+    # the job at container setup). See kinocut docs/CI_RUNNER_TOPOLOGY.md.
+    runs-on: light
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
@@ -133,7 +145,10 @@ jobs:
           retention-days: 30
 
   fuzz-smoke:
-    runs-on: ubuntu-latest
+    # Routed to the Colima runner's real label — `ubuntu-latest` matches no
+    # runner (only a default docker label on a Docker-less host, which fails
+    # the job at container setup). See kinocut docs/CI_RUNNER_TOPOLOGY.md.
+    runs-on: heavy
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
@@ -284,7 +299,10 @@ jobs:
       - linux-native-smoke
       - package
     if: always()
-    runs-on: ubuntu-latest
+    # Routed to the Colima runner's real label — `ubuntu-latest` matches no
+    # runner (only a default docker label on a Docker-less host, which fails
+    # the job at container setup). See kinocut docs/CI_RUNNER_TOPOLOGY.md.
+    runs-on: light
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
