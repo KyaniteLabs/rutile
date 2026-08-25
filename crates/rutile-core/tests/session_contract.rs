@@ -328,3 +328,47 @@ fn schema_tags_are_pinned() {
     assert_eq!(AUTOSAVE_SCHEMA_V1, "rutile.autosave.v1");
     assert_eq!(SESSION_SCHEMA_V1, "rutile.session.v1");
 }
+
+#[test]
+fn legacy_feathermark_tags_decode_and_normalize() {
+    // Regression (2026-08-25): the 2026-08-10 rebrand renamed the schema tags
+    // without changing the v1 wire shape, so every pre-rebrand journal and
+    // session record started failing decode as `InvalidSchema`. Legacy tags
+    // must stay readable, and decode must normalize them to the current tags
+    // so a re-encode migrates the record forward.
+    let legacy_entry_wire = String::from_utf8(encode_autosave_entry(&entry()).unwrap())
+        .unwrap()
+        .replace(AUTOSAVE_SCHEMA_V1, "feathermark.autosave.v1")
+        .into_bytes();
+    let decoded = decode_autosave_entry(&legacy_entry_wire).unwrap();
+    assert_eq!(
+        decoded,
+        entry(),
+        "legacy entry must decode as current-tagged"
+    );
+
+    let legacy_state_wire = String::from_utf8(encode_session_state(&state()).unwrap())
+        .unwrap()
+        .replace(SESSION_SCHEMA_V1, "feathermark.session.v1")
+        .into_bytes();
+    let decoded_state = decode_session_state(&legacy_state_wire).unwrap();
+    assert_eq!(
+        decoded_state,
+        state(),
+        "legacy session state must decode as current-tagged"
+    );
+}
+
+#[test]
+fn unrelated_legacy_style_tags_are_still_rejected() {
+    // Only the exact pre-rebrand spellings are aliases; anything else stays a
+    // hard `InvalidSchema`.
+    let hostile = AutosaveEntryV1 {
+        schema: "feathermark.metric.v1".into(),
+        ..entry()
+    };
+    assert!(matches!(
+        encode_autosave_entry(&hostile),
+        Err(SessionError::InvalidSchema)
+    ));
+}
