@@ -1,11 +1,13 @@
 name: probe
 on: [push, pull_request]
 jobs:
-  p16-portable-bisect:
+  p17-rust-cache-then-gate:
     runs-on: [heavy]
     steps:
       - uses: actions/checkout@v4
-      - name: bootstrap with error reporting
+        with: { fetch-depth: 0 }
+      - uses: https://github.com/Swatinem/rust-cache@v2
+      - name: gate with error reporting
         shell: bash
         env:
           TOKEN: ${{ github.token }}
@@ -15,21 +17,43 @@ jobs:
           report() {
             desc=$(tail -c 130 /tmp/probe.log | tr '\n' ' ' | tr -d '"' | tr -d '\\')
             curl -s -f -X POST -H "Authorization: token ${TOKEN}" -H "Content-Type: application/json" \
-              --data "{\"state\":\"$1\",\"context\":\"p16-bisect\",\"description\":\"$desc\"}" \
+              --data "{\"state\":\"$1\",\"context\":\"p17\",\"description\":\"$desc\"}" \
               "https://git.kyanitelabs.tech/api/v1/repos/${REPO}/statuses/${SHA}" >/dev/null || true
           }
           : > /tmp/probe.log
-          {
-            echo "== rustup install begin"
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0
-            echo "== cargo env"
+          { curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0
             . "$HOME/.cargo/env"
-            echo "== toolchain components"
             rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
-            echo "== cargo version"
-            cargo --version
-            echo "== gate begin"
             bash scripts/ci/portable-gate.sh --stage test --job portable
-            echo "== ALL OK"
+            echo ALL_OK
           } >> /tmp/probe.log 2>&1 || { report failure; exit 1; }
           report success
+  p18-gate-then-upload:
+    runs-on: [heavy]
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: gate with error reporting
+        shell: bash
+        env:
+          TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          report() {
+            desc=$(tail -c 130 /tmp/probe.log | tr '\n' ' ' | tr -d '"' | tr -d '\\')
+            curl -s -f -X POST -H "Authorization: token ${TOKEN}" -H "Content-Type: application/json" \
+              --data "{\"state\":\"$1\",\"context\":\"p18\",\"description\":\"$desc\"}" \
+              "https://git.kyanitelabs.tech/api/v1/repos/${REPO}/statuses/${SHA}" >/dev/null || true
+          }
+          : > /tmp/probe.log
+          { curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0
+            . "$HOME/.cargo/env"
+            rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
+            bash scripts/ci/portable-gate.sh --stage test --job portable
+            echo GATE_OK
+          } >> /tmp/probe.log 2>&1 || { report failure; exit 1; }
+          report success
+      - run: ls target/evidence >/dev/null && echo evidence-present
+      - uses: https://github.com/actions/upload-artifact@v3
+        with: {name: probe-p18, path: target/evidence}
