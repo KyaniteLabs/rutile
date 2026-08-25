@@ -10,8 +10,9 @@
 //!
 //! Recovery reads the journal under the same exclusive lock, skips corrupt or
 //! unverifiable entries with typed [`RejectionReason`]s, deletes orphan
-//! snapshots, and returns a [`RecoveryReport`] describing the winner and every
-//! rejected line.
+//! snapshots only while every journal line decodes (a journal with rejected
+//! lines fails closed: nothing is a provable orphan), and returns a
+//! [`RecoveryReport`] describing the winner and every rejected line.
 //!
 //! Session restore state ([`SessionStateV1`]) is persisted with an atomic
 //! whole-file replace and re-validated on load.
@@ -253,7 +254,8 @@ impl AutosaveStore {
     ) -> Result<AutosaveRecordOutcome, AutosaveError> {
         with_store_lock(&self.dir, || {
             let journal = read_journal_bounded(&self.dir)?.unwrap_or_default();
-            let sequence = Self::next_sequence_from_journal(&journal)?;
+            let (entries, rejected) = decode_entries_with_reasons(&journal);
+            let sequence = Self::next_sequence_from_entries(&entries)?;
 
             let snapshot_file = snapshot_file_name(sequence);
             let (snapshot_bytes, digest) =
@@ -274,8 +276,18 @@ impl AutosaveStore {
             append_bytes_durable(&self.dir, AUTOSAVE_JOURNAL_FILE, &record)?;
 
             let prune = self.prune_locked()?;
-            let referenced = self.referenced_snapshot_names()?;
-            let orphan_gc = self.collect_orphans(&referenced)?;
+            // Keep-set from the compacted journal; fail-closed gate from the
+            // pre-append decode, because prune compaction rewrites the journal
+            // from decodable entries only and would otherwise erase the
+            // evidence that made GC unsafe.
+            let journal_after = read_journal_bounded(&self.dir)?.unwrap_or_default();
+            let (entries_after, _rejected_after) = decode_entries_with_reasons(&journal_after);
+            let orphan_gc = self.gc_orphans_fail_closed(&rejected, || {
+                entries_after
+                    .iter()
+                    .map(|entry| entry.snapshot_file.clone())
+                    .collect()
+            })?;
 
             Ok(AutosaveRecordOutcome {
                 entry,
@@ -301,11 +313,12 @@ impl AutosaveStore {
             };
 
             let (entries, mut rejected) = decode_entries_with_reasons(&journal);
-            let referenced: HashSet<String> = entries
-                .iter()
-                .map(|entry| entry.snapshot_file.clone())
-                .collect();
-            let _orphan_gc = self.collect_orphans(&referenced)?;
+            let _orphan_gc = self.gc_orphans_fail_closed(&rejected, || {
+                entries
+                    .iter()
+                    .map(|entry| entry.snapshot_file.clone())
+                    .collect()
+            })?;
 
             let mut entries = entries;
             entries.sort_by(|a, b| b.sequence.cmp(&a.sequence));
@@ -362,15 +375,13 @@ impl AutosaveStore {
     fn next_sequence(&self) -> Result<u64, AutosaveError> {
         with_store_lock(&self.dir, || {
             let journal = read_journal_bounded(&self.dir)?.unwrap_or_default();
-            Self::next_sequence_from_journal(&journal)
+            let (entries, _rejected) = decode_entries_with_reasons(&journal);
+            Self::next_sequence_from_entries(&entries)
         })
     }
 
-    fn next_sequence_from_journal(journal: &[u8]) -> Result<u64, AutosaveError> {
-        let highest = complete_lines(journal)
-            .filter_map(|line| decode_autosave_entry(line).ok())
-            .map(|entry| entry.sequence)
-            .max();
+    fn next_sequence_from_entries(entries: &[AutosaveEntryV1]) -> Result<u64, AutosaveError> {
+        let highest = entries.iter().map(|entry| entry.sequence).max();
         match highest {
             Some(u64::MAX) => Err(AutosaveError::SequenceExhausted),
             Some(seq) => Ok(seq.saturating_add(1)),
@@ -435,13 +446,22 @@ impl AutosaveStore {
         Document::new(text).map_err(|_| RejectionReason::SnapshotInvalid)
     }
 
-    /// Snapshot file names currently referenced by the journal.
-    fn referenced_snapshot_names(&self) -> Result<HashSet<String>, AutosaveError> {
-        let journal = read_journal_bounded(&self.dir)?.unwrap_or_default();
-        Ok(complete_lines(&journal)
-            .filter_map(|line| decode_autosave_entry(line).ok())
-            .map(|entry| entry.snapshot_file)
-            .collect())
+    /// Runs the orphan scan only when every journal line decoded. A rejected
+    /// line may reference a snapshot by a name this build cannot understand,
+    /// so while any line is undecodable nothing is a provable orphan; failing
+    /// closed leaves harmless extra files rather than deleting recovery data.
+    /// `referenced_from_entries` supplies the keep-set built from the decoded
+    /// entries of that same journal read.
+    fn gc_orphans_fail_closed(
+        &self,
+        rejected: &[RejectedEntry],
+        referenced_from_entries: impl FnOnce() -> HashSet<String>,
+    ) -> Result<OrphanGcReport, AutosaveError> {
+        if rejected.is_empty() {
+            self.collect_orphans(&referenced_from_entries())
+        } else {
+            Ok(OrphanGcReport::default())
+        }
     }
 
     /// Scans at most [`MAX_ORPHAN_SCAN_ENTRIES`] directory entries matching
@@ -913,5 +933,98 @@ mod tests {
             store.load_session_state(),
             Err(AutosaveError::Record(_))
         ));
+    }
+
+    #[test]
+    fn recover_preserves_snapshots_of_legacy_tagged_journal_entries() {
+        // Regression (2026-08-25): pre-rebrand `feathermark.autosave.v1`
+        // journal entries failed decode, so recovery's orphan scan saw an
+        // empty reference set and deleted every snapshot on launch — turning a
+        // tag rename into data loss. Legacy entries must decode, recover, and
+        // keep their snapshots on disk.
+        let dir = TestDir::new("legacy-tags");
+        let store = AutosaveStore::new(dir.0.clone());
+        store
+            .record(&snapshot("legacy body"), Some("/notes/old.md"), 1)
+            .unwrap();
+
+        // Rewind the journal tags to the pre-rebrand spelling.
+        let journal = dir.0.join(AUTOSAVE_JOURNAL_FILE);
+        let legacy = String::from_utf8(fs::read(&journal).unwrap())
+            .unwrap()
+            .replace(AUTOSAVE_SCHEMA_V1, "feathermark.autosave.v1")
+            .into_bytes();
+        fs::write(&journal, legacy).unwrap();
+
+        let report = store.recover().unwrap();
+        let recovered = report.recovered.expect("legacy entry must recover");
+        assert_eq!(recovered.document.snapshot().to_string(), "legacy body");
+        assert!(report.rejected.is_empty());
+        assert_eq!(
+            snapshot_files(&dir.0).len(),
+            1,
+            "the legacy snapshot must survive recovery"
+        );
+    }
+
+    #[test]
+    fn undecodable_journal_lines_disable_orphan_gc_in_recover() {
+        // Fail closed: a journal line that cannot be decoded may reference a
+        // snapshot by a name this build cannot understand, so recovery must
+        // not delete anything while rejected lines exist.
+        let dir = TestDir::new("gc-fail-closed-recover");
+        let store = AutosaveStore::new(dir.0.clone());
+        store.record(&snapshot("kept"), None, 1).unwrap();
+
+        // A snapshot the current journal does not reference, plus a complete
+        // but undecodable journal line.
+        fs::write(dir.0.join("autosave-9000.md"), "orphan candidate").unwrap();
+        let journal = dir.0.join(AUTOSAVE_JOURNAL_FILE);
+        let mut bytes = fs::read(&journal).unwrap();
+        bytes.extend_from_slice(b"not json at all\n");
+        fs::write(&journal, &bytes).unwrap();
+
+        store.recover().unwrap();
+        assert!(
+            dir.0.join("autosave-9000.md").exists(),
+            "orphan GC must not run while the journal has rejected lines"
+        );
+
+        // Once the journal is clean again, the orphan scan resumes.
+        let clean = String::from_utf8(fs::read(&journal).unwrap())
+            .unwrap()
+            .replace("not json at all\n", "")
+            .into_bytes();
+        fs::write(&journal, clean).unwrap();
+        store.recover().unwrap();
+        assert!(
+            !dir.0.join("autosave-9000.md").exists(),
+            "a clean journal must let true orphans be collected"
+        );
+    }
+
+    #[test]
+    fn record_skips_orphan_gc_while_journal_has_rejected_lines() {
+        // The record path runs the same orphan scan; it must stay fail-closed
+        // too, or the first autosave after a downgrade/mixed-tag journal would
+        // delete snapshots the journal still points at.
+        let dir = TestDir::new("gc-fail-closed-record");
+        let store = AutosaveStore::new(dir.0.clone());
+        store.record(&snapshot("first"), None, 1).unwrap();
+
+        fs::write(dir.0.join("autosave-9000.md"), "orphan candidate").unwrap();
+        let journal = dir.0.join(AUTOSAVE_JOURNAL_FILE);
+        let mut bytes = fs::read(&journal).unwrap();
+        bytes.extend_from_slice(b"not json at all\n");
+        fs::write(&journal, &bytes).unwrap();
+
+        store.record(&snapshot("second"), None, 2).unwrap();
+        assert!(
+            dir.0.join("autosave-9000.md").exists(),
+            "record's orphan GC must not run while the journal has rejected lines"
+        );
+        // The new entry itself still landed.
+        let recovered = store.recover().unwrap().recovered.unwrap();
+        assert_eq!(recovered.document.snapshot().to_string(), "second");
     }
 }

@@ -24,6 +24,13 @@ use crate::MAX_DOCUMENT_BYTES;
 pub const AUTOSAVE_SCHEMA_V1: &str = "rutile.autosave.v1";
 /// Schema tag for the session-restore record.
 pub const SESSION_SCHEMA_V1: &str = "rutile.session.v1";
+/// Pre-rebrand spelling of [`AUTOSAVE_SCHEMA_V1`]. The 2026-08-10
+/// feathermark→rutile rebrand renamed the tag without changing the v1 wire
+/// shape, so decode accepts this alias and normalizes it to the current tag;
+/// encode always writes the current tag.
+pub const LEGACY_AUTOSAVE_SCHEMA_V1: &str = "feathermark.autosave.v1";
+/// Pre-rebrand spelling of [`SESSION_SCHEMA_V1`]; decode-only alias.
+pub const LEGACY_SESSION_SCHEMA_V1: &str = "feathermark.session.v1";
 
 /// Maximum bytes for one encoded autosave journal entry.
 pub const MAX_AUTOSAVE_ENTRY_BYTES: usize = 4 * 1024;
@@ -131,7 +138,12 @@ pub fn encode_autosave_entry(entry: &AutosaveEntryV1) -> Result<Vec<u8>, Session
 }
 
 pub fn decode_autosave_entry(bytes: &[u8]) -> Result<AutosaveEntryV1, SessionError> {
-    let entry: AutosaveEntryV1 = decode_ndjson(bytes, MAX_AUTOSAVE_ENTRY_BYTES, 1)?;
+    let mut entry: AutosaveEntryV1 = decode_ndjson(bytes, MAX_AUTOSAVE_ENTRY_BYTES, 1)?;
+    normalize_legacy_schema(
+        &mut entry.schema,
+        LEGACY_AUTOSAVE_SCHEMA_V1,
+        AUTOSAVE_SCHEMA_V1,
+    );
     validate_autosave_entry(&entry)?;
     Ok(entry)
 }
@@ -142,9 +154,23 @@ pub fn encode_session_state(state: &SessionStateV1) -> Result<Vec<u8>, SessionEr
 }
 
 pub fn decode_session_state(bytes: &[u8]) -> Result<SessionStateV1, SessionError> {
-    let state: SessionStateV1 = decode_ndjson(bytes, MAX_SESSION_STATE_BYTES, 1)?;
+    let mut state: SessionStateV1 = decode_ndjson(bytes, MAX_SESSION_STATE_BYTES, 1)?;
+    normalize_legacy_schema(
+        &mut state.schema,
+        LEGACY_SESSION_SCHEMA_V1,
+        SESSION_SCHEMA_V1,
+    );
     validate_session_state(&state)?;
     Ok(state)
+}
+
+/// Rewrites the pre-rebrand tag alias to the current tag so a decoded record
+/// compares equal to a native one and re-encodes on the current tag. Encode
+/// never sees the alias: validation still accepts only the current tag.
+fn normalize_legacy_schema(schema: &mut String, legacy: &str, current: &str) {
+    if schema == legacy {
+        *schema = current.to_owned();
+    }
 }
 
 fn validate_autosave_entry(entry: &AutosaveEntryV1) -> Result<(), SessionError> {
