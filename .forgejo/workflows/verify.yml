@@ -64,7 +64,9 @@ jobs:
         # xtask-test row (the test stage was expanded to run cargo test -p xtask
         # inline). There is no separate post-gate xtask step: a failure inside
         # the gate is the gate's own run row, never a false-green afterthought.
-        run: bash scripts/ci/portable-gate.sh --stage lint,docs,test --profile "$PROFILE" --job portable
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          bash scripts/ci/portable-gate.sh --stage lint,docs,test --profile "$PROFILE" --job portable
       - name: retain evidence
         if: always()
         uses: https://github.com/actions/upload-artifact@v3  # v3 protocol: this Forgejo lacks the v4 results API (probe-verified)
@@ -95,7 +97,9 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: production build (no test-control, separate target root)
         # Emits gate-result; the clean artifact lands in target/prod/release/.
-        run: bash scripts/ci/portable-gate.sh --stage build --profile "$PROFILE" --job production-build
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          bash scripts/ci/portable-gate.sh --stage build --profile "$PROFILE" --job production-build
       - name: retain clean production binary
         uses: https://github.com/actions/upload-artifact@v3  # v3 protocol: this Forgejo lacks the v4 results API (probe-verified)
         with:
@@ -133,7 +137,9 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           cargo install --locked cargo-deny --version 0.20.2 --locked
       - name: workspace dependency policy (cargo-deny check, deny warnings)
-        run: bash scripts/ci/portable-gate.sh --stage deny --profile "$PROFILE" --job dependency-policy
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          bash scripts/ci/portable-gate.sh --stage deny --profile "$PROFILE" --job dependency-policy
       - name: retain evidence
         if: always()
         uses: https://github.com/actions/upload-artifact@v3  # v3 protocol: this Forgejo lacks the v4 results API (probe-verified)
@@ -164,7 +170,9 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           cargo install --locked cargo-deny --version 0.20.2 --locked
       - name: fuzz crate dependency policy (cargo-deny check, deny warnings)
-        run: bash scripts/ci/portable-gate.sh --stage fuzz-deny --profile "$PROFILE" --job fuzz-dependency-policy
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          bash scripts/ci/portable-gate.sh --stage fuzz-deny --profile "$PROFILE" --job fuzz-dependency-policy
       - name: retain evidence
         if: always()
         uses: https://github.com/actions/upload-artifact@v3  # v3 protocol: this Forgejo lacks the v4 results API (probe-verified)
@@ -198,7 +206,9 @@ jobs:
       - name: bounded fuzz smoke (60s/target)
         # Each of the five fuzz targets runs for max_total_time=60s; the libFuzzer
         # harness is the oracle. Emits one gate-result across all targets.
-        run: bash scripts/ci/portable-gate.sh --stage fuzz --profile "$PROFILE" --job fuzz-smoke
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          bash scripts/ci/portable-gate.sh --stage fuzz --profile "$PROFILE" --job fuzz-smoke
       - name: retain evidence
         if: always()
         uses: https://github.com/actions/upload-artifact@v3  # v3 protocol: this Forgejo lacks the v4 results API (probe-verified)
