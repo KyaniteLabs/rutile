@@ -68,6 +68,10 @@ After this reconciliation they should match.
 - Window ▸ New Tab / Close Tab / Tabs menu share the same projection.
 - Export HTML splices `PublishingPreset::print_style_block()` then
   re-inspects via `ExportPage::from_html`.
+- Tasteroll chance-styling (C8/#87, #91, #104): palette Roll/Re-roll/Reset
+  Design commands drive `TasteState` (seeded roll, per-dimension lock);
+  the macOS shell syncs `TasteState::css()` into the preview host, which
+  injects the custom-property `<style>` before `</head>` (seam tested, #130).
 
 **Linux GTK**
 
@@ -111,6 +115,7 @@ After this reconciliation they should match.
 | #124 | xtask native-smoke stderr assertions print child stdout/stderr on failure |
 | #125 | Living docs reconciled after #122–#124 |
 | #126 | Source-binding evidence tests skip off main instead of failing (fixes `cargo test -p xtask` and PR-run `portable` on feature branches) |
+| #130 | L14 tasteroll CSS-injection seam tests (end-to-end closure) |
 | #128 | CI repair: Colima labels, rustup bootstrap, v3 artifacts, full-URL rust-cache, cargo-fuzz via nightly, Linux compile fixes (native-smoke gate, macOS-fixture package tests, duplicated --locked) |
 
 Audit closeout remains PRs #88–#106 (`docs/audit/2026-08-12-full-codebase-audit.md`,
