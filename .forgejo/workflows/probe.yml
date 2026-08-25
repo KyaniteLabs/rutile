@@ -1,0 +1,35 @@
+name: probe
+on: [push, pull_request]
+jobs:
+  p1-plain-list-heavy:
+    runs-on: [heavy]
+    steps: [{run: "echo ok"}]
+  p2-plain-scalar:
+    runs-on: heavy
+    steps: [{run: "echo ok"}]
+  p3-checkout:
+    runs-on: [heavy]
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo ok
+  p4-rust-cache:
+    runs-on: [heavy]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: echo ok
+  p5-upload-artifact:
+    runs-on: [heavy]
+    steps:
+      - run: "echo hello > f.txt"
+      - uses: actions/upload-artifact@v4
+        with: {name: probe, path: f.txt}
+  p6-timeout:
+    runs-on: [heavy]
+    timeout-minutes: 15
+    steps: [{run: "echo ok"}]
+  p7-env-expression:
+    runs-on: [heavy]
+    env:
+      V: ${{ github.event_name || 'none' }}
+    steps: [{run: "echo $V"}]
