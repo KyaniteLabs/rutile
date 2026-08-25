@@ -1,9 +1,7 @@
 # Rutile Current-State Handoff
 
-> **Status: Current.** Reconciled 2026-08-13 against Forgejo `origin/main`
-> `f569859db41c3096c600485d98ef0f2eb0b239bd` (docs #120). GitHub mirror
-> `KyaniteLabs/rutile` `main` matches that SHA (live API + origin/main
-> ls-tree, not `merged:true`). Historical release and readiness receipts
+> **Status: Current.** Reconciled 2026-08-25 against Forgejo `origin/main`
+> `f32e670` (merges of #122–#124). Historical release and readiness receipts
 > stay in their dated handoffs.
 
 ## BLUF
@@ -14,6 +12,10 @@ on `main` (PRs #108–#118): AdapterCommitId newtype, Linux M8 leftovers,
 publishing print splice, command-palette NSPanel, parked/swapped documents,
 macOS Iced tab strip, fail-closed GUI-stack evidence, unsigned quality-probe
 harness, per-tab autosave inherit, File Open into a tab, and active-tab ink.
+The 2026-08-25 recovery/input fixes (#122–#124) are on `main`: pre-rebrand
+`feathermark.*` state decodes again (snapshot deletion on launch fixed), and
+macOS key dispatch reconciles winit's tracked modifiers with live AppKit
+flags so a desynced ⌘-combo can no longer insert its key as text.
 
 This is **not** a public release. `publication_authorized` remains false.
 Native VoiceOver / idle-soak probes remain `attested: false`. GUI-stack
@@ -27,7 +29,7 @@ shared tab data plane but no GTK tab chrome. Sequence:
 |---|---|
 | Remote (authority) | `git.kyanitelabs.tech:simon/feathermark.git` (Forgejo `origin`) |
 | Branch | `main` |
-| Tip | `f569859` — merge of PR #120 (Linux parity plan). Product tip: #118 `ceed4cd` |
+| Tip | `f32e670` — merge of PR #124; product tip #124 `dc798ba` (via #123 `ba8e245`) |
 | GitHub mirror | `KyaniteLabs/rutile` `main` = same SHA (re-verified after #120) |
 | Workspace / crate version | 0.2.2 |
 | Rust | 1.88.0, edition 2024 |
@@ -47,6 +49,9 @@ After this reconciliation they should match.
 - Last-tab Close Tab is a no-op (menu, palette, strip). File ▸ Close / window
   red button remain the quit path.
 - `AutosaveStore` is cloned onto every slot (`bind_autosave` + New/Open/reseed).
+- Session/autosave decode accepts pre-rebrand `feathermark.*` v1 tags and
+  normalizes them to `rutile.*`; orphan GC refuses to delete snapshots while
+  any journal line is undecodable (#122).
 - File Open uses `adopt_opened_document` (D4): first untitled clean tab
   replaces in place; otherwise park + new tab; duplicate path switches.
 
@@ -54,6 +59,11 @@ After this reconciliation they should match.
 
 - Iced tab strip over `project_tabs` (labels, dirty bullet, last-tab × off).
   Active tab is `INK`; others muted. Focus mode hides the strip.
+- Keyboard dispatch and the editor fall-through use modifiers reconciled with
+  live `+[NSEvent modifierFlags]`; a character whose CMD state winit failed to
+  track is dropped before the editor (#123). The desync *trigger* (suspected:
+  focus transitions around the non-activating palette panel) is an unconfirmed
+  hypothesis — input-injection repro was unavailable.
 - Command palette is a nonactivating `NSPanel` bound to `CommandPalette`.
 - Window ▸ New Tab / Close Tab / Tabs menu share the same projection.
 - Export HTML splices `PublishingPreset::print_style_block()` then
@@ -95,6 +105,10 @@ After this reconciliation they should match.
 | #118 | Active tab painted in full ink |
 | #119 | Living docs reconciled to #108–#118 (S+ README, AGENTS crate names) |
 | #120 | `docs/plan/linux-parity.md` + AGENTS Linux-host rule |
+| #121 | Living docs reconciled after #120 |
+| #122 | Pre-rebrand `feathermark.*` schema tags decode+normalize; orphan GC fail-closed (fixes launch-time snapshot deletion + dead session restore) |
+| #123 | macOS key dispatch reconciles tracked modifiers with live `NSEvent` flags; desynced ⌘-combo characters dropped before the editor (⌘Q stray-`q` leak) |
+| #124 | xtask native-smoke stderr assertions print child stdout/stderr on failure |
 
 Audit closeout remains PRs #88–#106 (`docs/audit/2026-08-12-full-codebase-audit.md`,
 `docs/handoff/2026-08-13-splus-complete.md`).
@@ -111,6 +125,10 @@ Audit closeout remains PRs #88–#106 (`docs/audit/2026-08-12-full-codebase-audi
 | Readiness / publication | Independent verifier and runners unprovisioned |
 | Outline / search / history native chrome | Contracts exist; no dedicated sidebar UI |
 | Local AI | Explicitly deferred |
+| CI ubuntu-latest job set | Pre-existing red on every push/PR: the runner topology cannot fetch `actions/checkout@v4` (see kinocut `docs/CI_RUNNER_TOPOLOGY.md`). #122–#124 merged on the no-new-failures rule (both package jobs green, failing set identical to `main`'s baseline) |
+| xtask evidence-binding tests on PRs | `evidence::tests::*_validates_*_source` require HEAD reachable from `origin/main`, so they fail deterministically on feature-branch checkouts — explains part of PR-run `portable` failures. The load-only native-smoke flake (1-in-4 under back-to-back full suites) did not reproduce in 12× 8-thread runs; assertions now print child stderr (#124) for the next occurrence |
+| Self-hosted macOS act-runner | Binary lived at `/tmp/act_runner` and was purged by periodic cleanup; launchd (`tech.kyanitelabs.act-runner`) is spawn-looping, so `[self-hosted, macos, arm64]` native-smoke jobs queue forever. Reinstall the runner outside `/tmp` |
+| ⌘-modifier desync trigger | #123 fixes the leak correctness-by-construction; the trigger stays an unconfirmed hypothesis pending an input-injection repro |
 
 ## Gate
 
@@ -123,7 +141,11 @@ cargo audit
 ```
 
 These were green on the #115–#117 landings. #118 is a style-only native
-change (macos-shell clippy + rutile-app tests).
+change (macos-shell clippy + rutile-app tests). #122–#124 were green locally
+on 2026-08-25 (full gate + live e2e for #122; red→green helper tests, full
+workspace gate, and isolated-HOME launch for #123; 26/26 + 12× load loop for
+#124) — the Forgejo ubuntu-latest jobs stayed at their pre-existing red
+baseline (see the open table).
 
 Run:
 
