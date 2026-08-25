@@ -1,0 +1,35 @@
+name: probe
+on: [push, pull_request]
+jobs:
+  p16-portable-bisect:
+    runs-on: [heavy]
+    steps:
+      - uses: actions/checkout@v4
+      - name: bootstrap with error reporting
+        shell: bash
+        env:
+          TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          report() {
+            desc=$(tail -c 130 /tmp/probe.log | tr '\n' ' ' | tr -d '"' | tr -d '\\')
+            curl -s -f -X POST -H "Authorization: token ${TOKEN}" -H "Content-Type: application/json" \
+              --data "{\"state\":\"$1\",\"context\":\"p16-bisect\",\"description\":\"$desc\"}" \
+              "https://git.kyanitelabs.tech/api/v1/repos/${REPO}/statuses/${SHA}" >/dev/null || true
+          }
+          : > /tmp/probe.log
+          {
+            echo "== rustup install begin"
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0
+            echo "== cargo env"
+            . "$HOME/.cargo/env"
+            echo "== toolchain components"
+            rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
+            echo "== cargo version"
+            cargo --version
+            echo "== gate begin"
+            bash scripts/ci/portable-gate.sh --stage test --job portable
+            echo "== ALL OK"
+          } >> /tmp/probe.log 2>&1 || { report failure; exit 1; }
+          report success
