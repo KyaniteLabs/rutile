@@ -34,7 +34,11 @@ env:
 jobs:
   # 1. Guard the tag: must be v*, clean, exact commit/tree match.
   tag-guard:
-    runs-on: ubuntu-latest
+    # List-form runs-on: this Forgejo version fails scalar runs-on jobs at
+    # the instance within seconds (never reaching a runner); list form
+    # schedules. heavy/light are the Colima runner's real labels (see
+    # kinocut docs/CI_RUNNER_TOPOLOGY.md).
+    runs-on: [light]
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
       commit: ${{ steps.identity.outputs.commit }}
@@ -159,7 +163,11 @@ jobs:
     # needs: external — signing identity, provisioned runners (G004),
     # trusted-verifier key (G004), G005 provenance generator, and owner approval.
     needs: [tag-guard, release-package]
-    runs-on: ubuntu-latest
+    # List-form runs-on: this Forgejo version fails scalar runs-on jobs at
+    # the instance within seconds (never reaching a runner); list form
+    # schedules. heavy/light are the Colima runner's real labels (see
+    # kinocut docs/CI_RUNNER_TOPOLOGY.md).
+    runs-on: [heavy]
     env:
       # Real externally generated G005 production-provenance record for the
       # exact tagged source. Generated outside CI from the tagged clean tree
@@ -259,7 +267,7 @@ jobs:
         # target/evidence/ the provenance lands at
         # target/evidence/provenance/production-provenance.json.
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: https://github.com/actions/upload-artifact@v3  # v3 protocol: this Forgejo lacks the v4 results API (probe-verified)
         with:
           name: release-evidence-preflight
           path: release/evidence/
@@ -270,7 +278,11 @@ jobs:
   evidence-retention:
     needs: [tag-guard, verify-release, release-package, provenance]
     if: always()
-    runs-on: ubuntu-latest
+    # List-form runs-on: this Forgejo version fails scalar runs-on jobs at
+    # the instance within seconds (never reaching a runner); list form
+    # schedules. heavy/light are the Colima runner's real labels (see
+    # kinocut docs/CI_RUNNER_TOPOLOGY.md).
+    runs-on: [light]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -280,7 +292,7 @@ jobs:
         # Downloads every release-evidence-* artifact (per-kind gate-results,
         # smoke-row receipts, and the production-provenance record from the
         # provenance job) into target/evidence for the finalizer.
-        uses: actions/download-artifact@v4
+        uses: https://github.com/actions/download-artifact@v3  # v3 protocol (see upload note)
         with:
           path: target/evidence
           pattern: release-evidence-*
@@ -302,7 +314,7 @@ jobs:
             --job release-evidence
       - name: retain final release evidence (long retention)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: https://github.com/actions/upload-artifact@v3  # v3 protocol: this Forgejo lacks the v4 results API (probe-verified)
         with:
           name: release-evidence-final
           path: |

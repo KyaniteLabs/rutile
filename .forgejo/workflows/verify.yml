@@ -41,22 +41,35 @@ permissions:
 jobs:
   # --- portable, runner-agnostic gates ---------------------------------------
   portable:
-    runs-on: ubuntu-latest
+    # List-form runs-on: this Forgejo version fails scalar runs-on jobs at
+    # the instance within seconds (never reaching a runner); list form
+    # schedules. heavy/light are the Colima runner's real labels (see
+    # kinocut docs/CI_RUNNER_TOPOLOGY.md).
+    runs-on: [heavy]
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: Swatinem/rust-cache@v2
+      - uses: https://github.com/Swatinem/rust-cache@v2  # full URL: the runner's action mirror lacks it
       - name: bootstrap toolchain
-        run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
+        run: |
+          set -eu
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0
+            . "$HOME/.cargo/env"
+          fi
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: portable gate (fmt + clippy -D warnings + docs + test + xtask-test)
         # portable-gate.sh emits one gate-result whose runs[] includes an
         # xtask-test row (the test stage was expanded to run cargo test -p xtask
         # inline). There is no separate post-gate xtask step: a failure inside
         # the gate is the gate's own run row, never a false-green afterthought.
-        run: bash scripts/ci/portable-gate.sh --stage lint,docs,test --profile "$PROFILE" --job portable
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          bash scripts/ci/portable-gate.sh --stage lint,docs,test --profile "$PROFILE" --job portable
       - name: retain evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: https://github.com/actions/upload-artifact@v3  # v3 protocol: this Forgejo lacks the v4 results API (probe-verified)
         with:
           name: evidence-portable
           path: target/evidence/
@@ -64,18 +77,31 @@ jobs:
           retention-days: 30
 
   production-build:
-    runs-on: ubuntu-latest
+    # List-form runs-on: this Forgejo version fails scalar runs-on jobs at
+    # the instance within seconds (never reaching a runner); list form
+    # schedules. heavy/light are the Colima runner's real labels (see
+    # kinocut docs/CI_RUNNER_TOPOLOGY.md).
+    runs-on: [heavy]
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: Swatinem/rust-cache@v2
+      - uses: https://github.com/Swatinem/rust-cache@v2  # full URL: the runner's action mirror lacks it
       - name: bootstrap toolchain
-        run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
+        run: |
+          set -eu
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0
+            . "$HOME/.cargo/env"
+          fi
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: production build (no test-control, separate target root)
         # Emits gate-result; the clean artifact lands in target/prod/release/.
-        run: bash scripts/ci/portable-gate.sh --stage build --profile "$PROFILE" --job production-build
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          bash scripts/ci/portable-gate.sh --stage build --profile "$PROFILE" --job production-build
       - name: retain clean production binary
-        uses: actions/upload-artifact@v4
+        uses: https://github.com/actions/upload-artifact@v3  # v3 protocol: this Forgejo lacks the v4 results API (probe-verified)
         with:
           name: production-binary
           path: target/prod/release/rutile
@@ -83,7 +109,7 @@ jobs:
           retention-days: 30
       - name: retain evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: https://github.com/actions/upload-artifact@v3  # v3 protocol: this Forgejo lacks the v4 results API (probe-verified)
         with:
           name: evidence-production-build
           path: target/evidence/
@@ -91,20 +117,32 @@ jobs:
           retention-days: 30
 
   dependency-policy:
-    runs-on: ubuntu-latest
+    # List-form runs-on: this Forgejo version fails scalar runs-on jobs at
+    # the instance within seconds (never reaching a runner); list form
+    # schedules. heavy/light are the Colima runner's real labels (see
+    # kinocut docs/CI_RUNNER_TOPOLOGY.md).
+    runs-on: [light]
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: Swatinem/rust-cache@v2
+      - uses: https://github.com/Swatinem/rust-cache@v2  # full URL: the runner's action mirror lacks it
       - name: bootstrap toolchain + cargo-deny (pinned)
         run: |
+          set -eu
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0
+            . "$HOME/.cargo/env"
+          fi
           rustup toolchain install 1.88.0 --profile minimal --no-self-update
-          cargo install --locked cargo-deny --version 0.20.2 --locked
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          cargo install cargo-deny --version 0.20.2 --locked
       - name: workspace dependency policy (cargo-deny check, deny warnings)
-        run: bash scripts/ci/portable-gate.sh --stage deny --profile "$PROFILE" --job dependency-policy
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          bash scripts/ci/portable-gate.sh --stage deny --profile "$PROFILE" --job dependency-policy
       - name: retain evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: https://github.com/actions/upload-artifact@v3  # v3 protocol: this Forgejo lacks the v4 results API (probe-verified)
         with:
           name: evidence-dependency-policy
           path: target/evidence/
@@ -112,20 +150,32 @@ jobs:
           retention-days: 30
 
   fuzz-dependency-policy:
-    runs-on: ubuntu-latest
+    # List-form runs-on: this Forgejo version fails scalar runs-on jobs at
+    # the instance within seconds (never reaching a runner); list form
+    # schedules. heavy/light are the Colima runner's real labels (see
+    # kinocut docs/CI_RUNNER_TOPOLOGY.md).
+    runs-on: [light]
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: Swatinem/rust-cache@v2
+      - uses: https://github.com/Swatinem/rust-cache@v2  # full URL: the runner's action mirror lacks it
       - name: bootstrap toolchain + cargo-deny (pinned)
         run: |
+          set -eu
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0
+            . "$HOME/.cargo/env"
+          fi
           rustup toolchain install 1.88.0 --profile minimal --no-self-update
-          cargo install --locked cargo-deny --version 0.20.2 --locked
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          cargo install cargo-deny --version 0.20.2 --locked
       - name: fuzz crate dependency policy (cargo-deny check, deny warnings)
-        run: bash scripts/ci/portable-gate.sh --stage fuzz-deny --profile "$PROFILE" --job fuzz-dependency-policy
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          bash scripts/ci/portable-gate.sh --stage fuzz-deny --profile "$PROFILE" --job fuzz-dependency-policy
       - name: retain evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: https://github.com/actions/upload-artifact@v3  # v3 protocol: this Forgejo lacks the v4 results API (probe-verified)
         with:
           name: evidence-fuzz-dependency-policy
           path: target/evidence/
@@ -133,23 +183,37 @@ jobs:
           retention-days: 30
 
   fuzz-smoke:
-    runs-on: ubuntu-latest
+    # List-form runs-on: this Forgejo version fails scalar runs-on jobs at
+    # the instance within seconds (never reaching a runner); list form
+    # schedules. heavy/light are the Colima runner's real labels (see
+    # kinocut docs/CI_RUNNER_TOPOLOGY.md).
+    runs-on: [heavy]
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: Swatinem/rust-cache@v2
+      - uses: https://github.com/Swatinem/rust-cache@v2  # full URL: the runner's action mirror lacks it
       - name: bootstrap toolchains + cargo-fuzz (pinned)
         run: |
+          set -eu
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0
+            . "$HOME/.cargo/env"
+          fi
           rustup toolchain install 1.88.0 --profile minimal --no-self-update
           rustup toolchain install nightly-2026-07-01 --profile minimal --component llvm-tools-preview
-          cargo install --locked cargo-fuzz --version 0.13.2
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          # cargo-fuzz's tree needs rustc >= 1.91 at install time (cargo-platform
+          # 0.3.3); install under the nightly toolchain this stage already uses.
+          rustup run nightly-2026-07-01 cargo install cargo-fuzz --version 0.13.2 --locked
       - name: bounded fuzz smoke (60s/target)
         # Each of the five fuzz targets runs for max_total_time=60s; the libFuzzer
         # harness is the oracle. Emits one gate-result across all targets.
-        run: bash scripts/ci/portable-gate.sh --stage fuzz --profile "$PROFILE" --job fuzz-smoke
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          bash scripts/ci/portable-gate.sh --stage fuzz --profile "$PROFILE" --job fuzz-smoke
       - name: retain evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: https://github.com/actions/upload-artifact@v3  # v3 protocol: this Forgejo lacks the v4 results API (probe-verified)
         with:
           name: evidence-fuzz-smoke
           path: target/evidence/
@@ -284,12 +348,16 @@ jobs:
       - linux-native-smoke
       - package
     if: always()
-    runs-on: ubuntu-latest
+    # List-form runs-on: this Forgejo version fails scalar runs-on jobs at
+    # the instance within seconds (never reaching a runner); list form
+    # schedules. heavy/light are the Colima runner's real labels (see
+    # kinocut docs/CI_RUNNER_TOPOLOGY.md).
+    runs-on: [light]
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
       - name: merge per-job evidence
-        uses: actions/download-artifact@v4
+        uses: https://github.com/actions/download-artifact@v3  # v3 protocol (see upload note)
         with:
           path: target/evidence
           pattern: evidence-*
@@ -306,7 +374,7 @@ jobs:
             --job evidence-aggregate
       - name: retain final evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: https://github.com/actions/upload-artifact@v3  # v3 protocol: this Forgejo lacks the v4 results API (probe-verified)
         with:
           name: evidence-final
           path: target/evidence/
