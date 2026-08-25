@@ -14,7 +14,7 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           post() {
-            desc=$(grep -a "^    [a-z_:]*" /tmp/probe.log | head -4 | tr '\n' ' ' | cut -c1-138 | tr -d '"' | tr -d '\\')
+            desc=$(grep -a "FAILED" /tmp/probe.log | grep -a "^test " | head -4 | tr '\n' ' ' | cut -c1-138 | tr -d '"' | tr -d '\\')
             curl -s -X POST -H "Authorization: token ${TOKEN}" -H "Content-Type: application/json" \
               --data "{\"state\":\"$1\",\"context\":\"p24-names\",\"description\":\"$desc\"}" \
               "https://git.kyanitelabs.tech/api/v1/repos/${REPO}/statuses/${SHA}" >/dev/null
