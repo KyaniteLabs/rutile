@@ -316,7 +316,12 @@ fn native_smoke_cli_records_the_real_failure_in_gate_json() {
         .unwrap();
 
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("wrapper-failure"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("wrapper-failure"),
+        "expected the wrapper failure on stderr; stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let report: serde_json::Value = serde_json::from_slice(
         &fs::read(gate_report_paths(&evidence).pop().expect("gate report")).unwrap(),
     )
@@ -351,7 +356,12 @@ fn native_smoke_rejects_a_missing_binary_before_creating_evidence() {
         !evidence.exists(),
         "a rejected binary must not leave an evidence directory behind"
     );
-    assert!(String::from_utf8_lossy(&output.stderr).contains("missing-rutile"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("missing-rutile"),
+        "expected the missing-binary failure on stderr; stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -507,7 +517,12 @@ fn native_smoke_fails_closed_when_git_provenance_command_fails() {
 
     assert!(!output.status.success());
     assert!(!launched.exists(), "the smoke child ran without provenance");
-    assert!(String::from_utf8_lossy(&output.stderr).contains("git"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("git"),
+        "expected the git-identity failure on stderr; stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -543,7 +558,12 @@ fn native_smoke_fails_closed_when_git_provenance_identity_is_empty() {
         !launched.exists(),
         "the smoke child ran with an empty identity"
     );
-    assert!(String::from_utf8_lossy(&output.stderr).contains("empty"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("empty"),
+        "expected the empty-identity rejection on stderr; stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -579,7 +599,13 @@ fn native_smoke_rejects_uppercase_git_identity_before_child_launch() {
         !launched.exists(),
         "child ran with schema-invalid provenance"
     );
-    assert!(String::from_utf8_lossy(&output.stderr).contains("git object ID"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("git object ID"),
+        "expected the uppercase-identity rejection on stderr; \
+         stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -612,7 +638,12 @@ fn native_smoke_bounds_git_provenance_output_before_child_launch() {
 
     assert!(!output.status.success());
     assert!(!launched.exists(), "child ran after unbounded git output");
-    assert!(String::from_utf8_lossy(&output.stderr).contains("output limit"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("output limit"),
+        "expected the output-limit failure on stderr; stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
