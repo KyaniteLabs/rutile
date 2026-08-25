@@ -301,3 +301,37 @@ fn find_ci(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .windows(needle.len())
         .position(|w| w.eq_ignore_ascii_case(needle))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::inject_tasteroll_css;
+
+    #[test]
+    fn style_block_lands_before_case_insensitive_head_close() {
+        let page = b"<html><HEAD></HEAD><body><p>doc</p></body></html>";
+        let out = inject_tasteroll_css(page, "--ink: #111;");
+        let text = String::from_utf8_lossy(&out);
+        assert_eq!(
+            text,
+            "<html><HEAD><style>--ink: #111;</style></HEAD><body><p>doc</p></body></html>"
+        );
+    }
+
+    #[test]
+    fn headless_page_prepends_the_style_block() {
+        let out = inject_tasteroll_css(b"<p>no head</p>", "--ink: #111;");
+        let text = String::from_utf8_lossy(&out);
+        assert!(text.starts_with("<style>--ink: #111;</style><p>no head</p>"));
+    }
+
+    #[test]
+    fn page_bytes_are_preserved_outside_the_insertion_point() {
+        let page = b"<html><head></head><body>\xe2\x9c\x93 utf-8 \xff raw</body></html>";
+        let out = inject_tasteroll_css(page, "--a: 0;");
+        let text = String::from_utf8_lossy(&out);
+        assert!(text.contains("</style></head>"));
+        assert!(text.contains("utf-8"));
+        // Byte length grows by exactly the style block.
+        assert_eq!(out.len(), page.len() + "<style>--a: 0;</style>".len());
+    }
+}
