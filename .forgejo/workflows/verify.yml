@@ -41,10 +41,11 @@ permissions:
 jobs:
   # --- portable, runner-agnostic gates ---------------------------------------
   portable:
-    # Routed to the Colima runner's real label — `ubuntu-latest` matches no
-    # runner (only a default docker label on a Docker-less host, which fails
-    # the job at container setup). See kinocut docs/CI_RUNNER_TOPOLOGY.md.
-    runs-on: heavy
+    # List-form runs-on: this Forgejo version fails scalar runs-on jobs at
+    # the instance within seconds (never reaching a runner); list form
+    # schedules. heavy/light are the Colima runner's real labels (see
+    # kinocut docs/CI_RUNNER_TOPOLOGY.md).
+    runs-on: [heavy]
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
@@ -67,10 +68,11 @@ jobs:
           retention-days: 30
 
   production-build:
-    # Routed to the Colima runner's real label — `ubuntu-latest` matches no
-    # runner (only a default docker label on a Docker-less host, which fails
-    # the job at container setup). See kinocut docs/CI_RUNNER_TOPOLOGY.md.
-    runs-on: heavy
+    # List-form runs-on: this Forgejo version fails scalar runs-on jobs at
+    # the instance within seconds (never reaching a runner); list form
+    # schedules. heavy/light are the Colima runner's real labels (see
+    # kinocut docs/CI_RUNNER_TOPOLOGY.md).
+    runs-on: [heavy]
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
@@ -97,10 +99,11 @@ jobs:
           retention-days: 30
 
   dependency-policy:
-    # Routed to the Colima runner's real label — `ubuntu-latest` matches no
-    # runner (only a default docker label on a Docker-less host, which fails
-    # the job at container setup). See kinocut docs/CI_RUNNER_TOPOLOGY.md.
-    runs-on: light
+    # List-form runs-on: this Forgejo version fails scalar runs-on jobs at
+    # the instance within seconds (never reaching a runner); list form
+    # schedules. heavy/light are the Colima runner's real labels (see
+    # kinocut docs/CI_RUNNER_TOPOLOGY.md).
+    runs-on: [light]
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
@@ -121,10 +124,11 @@ jobs:
           retention-days: 30
 
   fuzz-dependency-policy:
-    # Routed to the Colima runner's real label — `ubuntu-latest` matches no
-    # runner (only a default docker label on a Docker-less host, which fails
-    # the job at container setup). See kinocut docs/CI_RUNNER_TOPOLOGY.md.
-    runs-on: light
+    # List-form runs-on: this Forgejo version fails scalar runs-on jobs at
+    # the instance within seconds (never reaching a runner); list form
+    # schedules. heavy/light are the Colima runner's real labels (see
+    # kinocut docs/CI_RUNNER_TOPOLOGY.md).
+    runs-on: [light]
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
@@ -145,10 +149,11 @@ jobs:
           retention-days: 30
 
   fuzz-smoke:
-    # Routed to the Colima runner's real label — `ubuntu-latest` matches no
-    # runner (only a default docker label on a Docker-less host, which fails
-    # the job at container setup). See kinocut docs/CI_RUNNER_TOPOLOGY.md.
-    runs-on: heavy
+    # List-form runs-on: this Forgejo version fails scalar runs-on jobs at
+    # the instance within seconds (never reaching a runner); list form
+    # schedules. heavy/light are the Colima runner's real labels (see
+    # kinocut docs/CI_RUNNER_TOPOLOGY.md).
+    runs-on: [heavy]
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
@@ -299,10 +304,11 @@ jobs:
       - linux-native-smoke
       - package
     if: always()
-    # Routed to the Colima runner's real label — `ubuntu-latest` matches no
-    # runner (only a default docker label on a Docker-less host, which fails
-    # the job at container setup). See kinocut docs/CI_RUNNER_TOPOLOGY.md.
-    runs-on: light
+    # List-form runs-on: this Forgejo version fails scalar runs-on jobs at
+    # the instance within seconds (never reaching a runner); list form
+    # schedules. heavy/light are the Colima runner's real labels (see
+    # kinocut docs/CI_RUNNER_TOPOLOGY.md).
+    runs-on: [light]
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }

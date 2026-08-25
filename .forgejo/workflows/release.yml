@@ -34,10 +34,11 @@ env:
 jobs:
   # 1. Guard the tag: must be v*, clean, exact commit/tree match.
   tag-guard:
-    # Routed to the Colima runner's real label — `ubuntu-latest` matches no
-    # runner (only a default docker label on a Docker-less host, which fails
-    # the job at container setup). See kinocut docs/CI_RUNNER_TOPOLOGY.md.
-    runs-on: light
+    # List-form runs-on: this Forgejo version fails scalar runs-on jobs at
+    # the instance within seconds (never reaching a runner); list form
+    # schedules. heavy/light are the Colima runner's real labels (see
+    # kinocut docs/CI_RUNNER_TOPOLOGY.md).
+    runs-on: [light]
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
       commit: ${{ steps.identity.outputs.commit }}
@@ -162,10 +163,11 @@ jobs:
     # needs: external — signing identity, provisioned runners (G004),
     # trusted-verifier key (G004), G005 provenance generator, and owner approval.
     needs: [tag-guard, release-package]
-    # Routed to the Colima runner's real label — `ubuntu-latest` matches no
-    # runner (only a default docker label on a Docker-less host, which fails
-    # the job at container setup). See kinocut docs/CI_RUNNER_TOPOLOGY.md.
-    runs-on: heavy
+    # List-form runs-on: this Forgejo version fails scalar runs-on jobs at
+    # the instance within seconds (never reaching a runner); list form
+    # schedules. heavy/light are the Colima runner's real labels (see
+    # kinocut docs/CI_RUNNER_TOPOLOGY.md).
+    runs-on: [heavy]
     env:
       # Real externally generated G005 production-provenance record for the
       # exact tagged source. Generated outside CI from the tagged clean tree
@@ -276,10 +278,11 @@ jobs:
   evidence-retention:
     needs: [tag-guard, verify-release, release-package, provenance]
     if: always()
-    # Routed to the Colima runner's real label — `ubuntu-latest` matches no
-    # runner (only a default docker label on a Docker-less host, which fails
-    # the job at container setup). See kinocut docs/CI_RUNNER_TOPOLOGY.md.
-    runs-on: light
+    # List-form runs-on: this Forgejo version fails scalar runs-on jobs at
+    # the instance within seconds (never reaching a runner); list form
+    # schedules. heavy/light are the Colima runner's real labels (see
+    # kinocut docs/CI_RUNNER_TOPOLOGY.md).
+    runs-on: [light]
     steps:
       - uses: actions/checkout@v4
         with:
