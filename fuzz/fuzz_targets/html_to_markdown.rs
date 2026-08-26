@@ -39,7 +39,7 @@ fuzz_target!(|input: &[u8]| {
     );
 
     // The Markdown must render safely through the existing pipeline.
-    let Ok(rendered) = render_markdown(&markdown, 1) else {
+    let Ok(rendered) = render_markdown(&markdown, rutile_types::Revision::new(1)) else {
         return;
     };
     let body = rendered.body.to_ascii_lowercase();
