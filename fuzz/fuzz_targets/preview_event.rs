@@ -9,14 +9,15 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
     let loaded_revision = u64::from_le_bytes(prefix);
-    if let Ok(event) = decode_preview_event(&data[8..], loaded_revision) {
+    let revision_arg = rutile_types::Revision::new(loaded_revision);
+    if let Ok(event) = decode_preview_event(&data[8..], revision_arg) {
         let revision = match &event {
             PreviewEventV1::BridgeReady { revision }
             | PreviewEventV1::Painted { revision, .. }
             | PreviewEventV1::Scroll { revision, .. }
             | PreviewEventV1::LinkActivated { revision, .. } => *revision,
         };
-        assert_eq!(revision, loaded_revision);
+        assert_eq!(revision, revision_arg);
         if let PreviewEventV1::Scroll { source_start, .. } = event {
             assert!(source_start <= MAX_DOCUMENT_BYTES);
         } else if let PreviewEventV1::LinkActivated { target, .. } = event {

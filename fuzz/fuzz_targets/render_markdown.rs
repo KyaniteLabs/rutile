@@ -16,12 +16,13 @@ fuzz_target!(|input: &[u8]| {
     let Ok(source) = std::str::from_utf8(input) else {
         return;
     };
-    let Ok(rendered) = render_markdown(source, 17) else {
+    let revision = rutile_types::Revision::new(17);
+    let Ok(rendered) = render_markdown(source, revision) else {
         return;
     };
     assert!(rendered.body.len() <= MAX_GENERATED_BODY_BYTES);
     assert!(rendered.page.len() <= MAX_RENDERED_PAGE_BYTES);
-    validate_source_blocks(source, 17, &rendered.blocks).unwrap();
+    validate_source_blocks(source, revision, &rendered.blocks).unwrap();
     inspect_html(&rendered.body, false);
     inspect_html(&rendered.page, true);
 });

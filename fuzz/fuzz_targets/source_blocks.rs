@@ -9,8 +9,9 @@ fuzz_target!(|input: &[u8]| {
     let Ok(source) = std::str::from_utf8(input) else {
         return;
     };
-    let blocks = build_source_blocks(source, 23).unwrap();
-    validate_source_blocks(source, 23, &blocks).unwrap();
+    let revision = rutile_types::Revision::new(23);
+    let blocks = build_source_blocks(source, revision).unwrap();
+    validate_source_blocks(source, revision, &blocks).unwrap();
     for window in blocks.windows(2) {
         assert!(window[0].start <= window[1].start);
         assert!(window[0].end <= window[1].start);

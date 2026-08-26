@@ -17,6 +17,6 @@ fuzz_target!(|input: &[u8]| {
     let _ = ExportPage::from_html(html.to_owned());
 
     // The render path must also stay panic-free for a fixed, benign source.
-    let request = ExportRequest::new(1, None).unwrap();
+    let request = ExportRequest::new(rutile_types::Revision::new(1), None).unwrap();
     let _ = render_export_page("# Hello\n\nworld.", &request);
 });

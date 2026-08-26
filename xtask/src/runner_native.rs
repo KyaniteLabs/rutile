@@ -511,6 +511,17 @@ mod tests {
         (measured, pins, uid)
     }
 
+    /// Tempdir whose full ancestor chain satisfies the measured-probe policy
+    /// (no group/other write bits). The default TMPDIR is /tmp (1777) on
+    /// Linux, which the fail-closed chain validation rightly rejects — these
+    /// tests therefore root under $HOME, whose chain is owner-controlled on
+    /// both dev hosts and CI containers.
+    fn probe_tempdir() -> tempfile::TempDir {
+        let home =
+            std::env::var_os("HOME").expect("tests need HOME for a policy-clean probe chain");
+        tempfile::tempdir_in(std::path::PathBuf::from(home)).unwrap()
+    }
+
     #[cfg(target_os = "linux")]
     fn linux_test_probe(root: &Path) -> path_policy::MeasuredProbe {
         let installed_root = root.join("installed");
@@ -611,7 +622,7 @@ mod tests {
 
     #[test]
     fn measured_probe_rejects_symlink_hardlink_writable_and_hash_substitution() {
-        let root = tempfile::tempdir().unwrap();
+        let root = probe_tempdir();
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o755)).unwrap();
         let canonical_root = root.path().canonicalize().unwrap();
         let probe = canonical_root.join("probe");
@@ -753,7 +764,7 @@ mod tests {
     #[test]
     fn root_replay_cache_persists_and_rejects_duplicate_request_tuple() {
         use crate::runner::protocol::ProbePurpose;
-        let root = tempfile::tempdir().unwrap();
+        let root = probe_tempdir();
         let path = root.path().join("replay-cache-v1");
         replay::check_and_record(&path, [1; 32], ProbePurpose::Enroll, [2; 32], unsafe {
             libc::geteuid()
@@ -863,7 +874,7 @@ mod tests {
     fn macos_immutable_copy_posix_spawn_rejects_replacement_races() {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
-        let root = tempfile::tempdir().unwrap();
+        let root = probe_tempdir();
         let root = root.path().canonicalize().unwrap();
         let installed_root = root.join("installed");
         let execution_root = root.join("run");
@@ -921,7 +932,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_native_probe_hang_hits_total_deadline_and_is_reaped() {
-        let root = tempfile::tempdir().unwrap();
+        let root = probe_tempdir();
         let root = root.path().canonicalize().unwrap();
         let execution_root = root.join("run");
         fs::create_dir(&execution_root).unwrap();
@@ -952,7 +963,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_native_probe_stdout_flood_is_bounded_and_reaped() {
-        let root = tempfile::tempdir().unwrap();
+        let root = probe_tempdir();
         let root = root.path().canonicalize().unwrap();
         let execution_root = root.join("run");
         fs::create_dir(&execution_root).unwrap();
@@ -983,7 +994,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_native_probe_stderr_flood_is_bounded_and_reaped() {
-        let root = tempfile::tempdir().unwrap();
+        let root = probe_tempdir();
         let root = root.path().canonicalize().unwrap();
         let execution_root = root.join("run");
         fs::create_dir(&execution_root).unwrap();
@@ -1014,7 +1025,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_native_probe_normal_success_returns_output_and_reaps() {
-        let root = tempfile::tempdir().unwrap();
+        let root = probe_tempdir();
         let root = root.path().canonicalize().unwrap();
         let execution_root = root.join("run");
         fs::create_dir(&execution_root).unwrap();
@@ -1049,7 +1060,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_native_probe_invalid_exit_is_reaped() {
-        let root = tempfile::tempdir().unwrap();
+        let root = probe_tempdir();
         let root = root.path().canonicalize().unwrap();
         let execution_root = root.join("run");
         fs::create_dir(&execution_root).unwrap();
@@ -1078,7 +1089,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_native_probe_hang_hits_total_deadline_and_is_reaped() {
-        let root = tempfile::tempdir().unwrap();
+        let root = probe_tempdir();
         let root = root.path().canonicalize().unwrap();
         let measured = linux_test_probe(&root);
         let pid_path = root.join("hung-child.pid");
@@ -1102,7 +1113,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_native_probe_stdout_flood_is_bounded_and_reaped() {
-        let root = tempfile::tempdir().unwrap();
+        let root = probe_tempdir();
         let root = root.path().canonicalize().unwrap();
         let measured = linux_test_probe(&root);
         let pid_path = root.join("stdout-flood-child.pid");
@@ -1126,7 +1137,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_native_probe_stderr_flood_is_bounded_and_reaped() {
-        let root = tempfile::tempdir().unwrap();
+        let root = probe_tempdir();
         let root = root.path().canonicalize().unwrap();
         let measured = linux_test_probe(&root);
         let pid_path = root.join("stderr-flood-child.pid");
@@ -1150,7 +1161,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_native_probe_normal_success_returns_output_and_reaps() {
-        let root = tempfile::tempdir().unwrap();
+        let root = probe_tempdir();
         let root = root.path().canonicalize().unwrap();
         let measured = linux_test_probe(&root);
         let pid_path = root.join("successful-child.pid");
@@ -1178,7 +1189,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_native_probe_invalid_exit_is_reaped() {
-        let root = tempfile::tempdir().unwrap();
+        let root = probe_tempdir();
         let root = root.path().canonicalize().unwrap();
         let measured = linux_test_probe(&root);
         let pid_path = root.join("invalid-child.pid");
