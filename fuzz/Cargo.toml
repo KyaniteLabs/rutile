@@ -9,9 +9,9 @@ license = "MIT"
 cargo-fuzz = true
 
 [dependencies]
-rutile-core = { path = "../crates/rutile-core", version = "=0.2.2" }
-rutile-protocol = { path = "../crates/rutile-protocol", version = "=0.2.2" }
-rutile-types = { path = "../crates/rutile-types", version = "=0.2.2" }
+rutile-core = { path = "../crates/rutile-core", version = "=0.2.3" }
+rutile-protocol = { path = "../crates/rutile-protocol", version = "=0.2.3" }
+rutile-types = { path = "../crates/rutile-types", version = "=0.2.3" }
 html-escape = "=0.2.13"
 libfuzzer-sys = "=0.4.10"
 

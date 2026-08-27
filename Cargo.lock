@@ -2204,7 +2204,7 @@ checksum = "d4a5ff6bcca6c4867b1c4fd4ef63e4db7436ef363e0ad7531d1558856bae64f4"
 
 [[package]]
 name = "linux-gtk-wry-spike"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "gtk",
  "rutile-protocol",
@@ -2269,7 +2269,7 @@ dependencies = [
 
 [[package]]
 name = "macos-iced-wry-spike"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "iced_renderer",
  "iced_widget",
@@ -2281,7 +2281,7 @@ dependencies = [
 
 [[package]]
 name = "macos-open-events-spike"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "iced_winit",
  "rutile-app",
@@ -3387,7 +3387,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "rutile-app"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "getrandom 0.3.3",
  "gtk",
@@ -3411,7 +3411,7 @@ dependencies = [
 
 [[package]]
 name = "rutile-core"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "blake3",
  "fs2",
@@ -3427,7 +3427,7 @@ dependencies = [
 
 [[package]]
 name = "rutile-protocol"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "rutile-types",
  "serde",
@@ -3437,7 +3437,7 @@ dependencies = [
 
 [[package]]
 name = "rutile-spike-support"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "rutile-protocol",
  "rutile-types",
@@ -3445,7 +3445,7 @@ dependencies = [
 
 [[package]]
 name = "rutile-types"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "html-escape",
  "serde",
@@ -5350,7 +5350,7 @@ checksum = "b9cc00251562a284751c9973bace760d86c0276c471b4be569fe6b068ee97a56"
 
 [[package]]
 name = "xtask"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "clap",
  "ed25519-dalek",

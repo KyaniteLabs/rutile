@@ -1,6 +1,6 @@
 [package]
 name = "xtask"
-version = "0.2.2"
+version = "0.2.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -40,4 +40,4 @@ toml.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 trybuild = "=1.0.104"
-rutile-types = { path = "../crates/rutile-types", version = "=0.2.2" }
+rutile-types = { path = "../crates/rutile-types", version = "=0.2.3" }
