@@ -63,9 +63,10 @@ After this reconciliation they should match.
   `+[NSEvent modifierFlags]` (#123 + #134; live-instrumented: tracked was
   correct while the live read returns post-event idle inside the callback),
   any CMD-held character is dropped before the editor, and Cmd+Q mirrors
-  File ▸ Close. The stray-`q` defect is closed by live repro; one follow-up
-  remains: a windowless lingering process observed once after Cmd+Q on a
-  dirty document.
+  the window close button exactly (#136: dirty documents get the native
+  accessible close alert; clean ones save session state and exit). The
+  stray-`q` defect and the quit flow are closed by live repro (System
+  Events injection).
 - Command palette is a nonactivating `NSPanel` bound to `CommandPalette`.
 - Window ▸ New Tab / Close Tab / Tabs menu share the same projection.
 - Export HTML splices `PublishingPreset::print_style_block()` then
@@ -122,6 +123,8 @@ After this reconciliation they should match.
 | #132 | Last two red CI jobs fixed (probe-test /tmp chain, fuzz-target Revision drift) |
 | #133 | Docs: full closure + release-preflight policy record |
 | #134 | Cmd-combo editor leak closed by live repro (union modifiers, Cmd+Q, fail-closed byte_at) |
+| #135 | Docs: live-repro closure |
+| #136 | Dirty Cmd+Q presents the native close alert (production), pseudo path is smoke-only |
 | #128 | CI repair: Colima labels, rustup bootstrap, v3 artifacts, full-URL rust-cache, cargo-fuzz via nightly, Linux compile fixes (native-smoke gate, macOS-fixture package tests, duplicated --locked) |
 
 Audit closeout remains PRs #88–#106 (`docs/audit/2026-08-12-full-codebase-audit.md`,
