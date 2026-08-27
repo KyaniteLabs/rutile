@@ -8,3 +8,7 @@
 /fuzz/artifacts/
 /fuzz/coverage/
 .todos/
+
+# Operator scratch (never commit)
+.claude/
+.scratch/
