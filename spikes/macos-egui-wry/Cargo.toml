@@ -1,6 +1,6 @@
 [package]
 name = "macos-egui-wry-spike"
-version = "0.2.2"
+version = "0.2.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -15,4 +15,4 @@ macos-egui = []
 test-control = []
 
 [dependencies]
-rutile-spike-support = { path = "../rutile-spike-support", version = "=0.2.2" }
+rutile-spike-support = { path = "../rutile-spike-support", version = "=0.2.3" }

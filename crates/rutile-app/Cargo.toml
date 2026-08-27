@@ -1,6 +1,6 @@
 [package]
 name = "rutile-app"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -16,9 +16,9 @@ macos-shell = ["dep:iced_renderer", "dep:iced_widget", "dep:iced_winit", "dep:ob
 test-control = []
 
 [dependencies]
-rutile-core = { path = "../rutile-core", version = "=0.2.2" }
-rutile-protocol = { path = "../rutile-protocol", version = "=0.2.2" }
-rutile-types = { path = "../rutile-types", version = "=0.2.2" }
+rutile-core = { path = "../rutile-core", version = "=0.2.3" }
+rutile-protocol = { path = "../rutile-protocol", version = "=0.2.3" }
+rutile-types = { path = "../rutile-types", version = "=0.2.3" }
 getrandom = "=0.3.3"
 serde = { version = "=1.0.220", features = ["derive"] }
 serde_json = "=1.0.140"

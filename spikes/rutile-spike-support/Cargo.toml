@@ -1,10 +1,10 @@
 [package]
 name = "rutile-spike-support"
-version = "0.2.2"
+version = "0.2.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-rutile-protocol = { path = "../../crates/rutile-protocol", version = "=0.2.2" }
-rutile-types = { path = "../../crates/rutile-types", version = "=0.2.2" }
+rutile-protocol = { path = "../../crates/rutile-protocol", version = "=0.2.3" }
+rutile-types = { path = "../../crates/rutile-types", version = "=0.2.3" }
