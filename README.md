@@ -10,7 +10,7 @@ Rutile is a lightweight native Markdown editor written in Rust. It combines an i
 
 ## TL;DR
 
-Rutile is a local-first native Markdown editor: typed Rust core, Iced/AppKit on macOS, GTK3 on Linux, sanitized live preview, no Electron. Workspace version **0.2.2** on Forgejo `main`. Not a public release.
+Rutile is a local-first native Markdown editor: typed Rust core, Iced/AppKit on macOS, GTK3 on Linux, sanitized live preview, no Electron. Current release: **0.2.3 (preview tier)** — macOS packages with provenance records and release-authority-signed publication authorizations in [Releases](https://github.com/KyaniteLabs/rutile/releases). Linux packages follow the full tag ceremony.
 
 ## Who it's for
 
@@ -20,7 +20,12 @@ People who want a small native writing app they can build and run locally — wr
 
 ### Is this ready to publish?
 
-No. `publication_authorized` is false. Historical 0.2.0 packages are quarantined. Do not redistribute them.
+Partially — deliberately. 0.2.3 ships at the **preview tier**: every artifact
+carries a reproducible-build provenance record and an ed25519 release-authority
+signature over that exact artifact. The full production tier additionally
+requires the independent-verifier readiness ceremony (`publication_authorized`
+stays false until then). Historical 0.2.0 packages remain quarantined; do not
+redistribute them.
 
 ### Does it have tabs?
 
