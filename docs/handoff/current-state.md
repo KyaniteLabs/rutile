@@ -59,11 +59,13 @@ After this reconciliation they should match.
 
 - Iced tab strip over `project_tabs` (labels, dirty bullet, last-tab × off).
   Active tab is `INK`; others muted. Focus mode hides the strip.
-- Keyboard dispatch and the editor fall-through use modifiers reconciled with
-  live `+[NSEvent modifierFlags]`; a character whose CMD state winit failed to
-  track is dropped before the editor (#123). The desync *trigger* (suspected:
-  focus transitions around the non-activating palette panel) is an unconfirmed
-  hypothesis — input-injection repro was unavailable.
+- Keyboard dispatch unions winit's tracked modifiers with live
+  `+[NSEvent modifierFlags]` (#123 + #134; live-instrumented: tracked was
+  correct while the live read returns post-event idle inside the callback),
+  any CMD-held character is dropped before the editor, and Cmd+Q mirrors
+  File ▸ Close. The stray-`q` defect is closed by live repro; one follow-up
+  remains: a windowless lingering process observed once after Cmd+Q on a
+  dirty document.
 - Command palette is a nonactivating `NSPanel` bound to `CommandPalette`.
 - Window ▸ New Tab / Close Tab / Tabs menu share the same projection.
 - Export HTML splices `PublishingPreset::print_style_block()` then
@@ -118,6 +120,8 @@ After this reconciliation they should match.
 | #130 | L14 tasteroll CSS-injection seam tests (end-to-end closure) |
 | #131 | Docs: tasteroll closure |
 | #132 | Last two red CI jobs fixed (probe-test /tmp chain, fuzz-target Revision drift) |
+| #133 | Docs: full closure + release-preflight policy record |
+| #134 | Cmd-combo editor leak closed by live repro (union modifiers, Cmd+Q, fail-closed byte_at) |
 | #128 | CI repair: Colima labels, rustup bootstrap, v3 artifacts, full-URL rust-cache, cargo-fuzz via nightly, Linux compile fixes (native-smoke gate, macOS-fixture package tests, duplicated --locked) |
 
 Audit closeout remains PRs #88–#106 (`docs/audit/2026-08-12-full-codebase-audit.md`,
