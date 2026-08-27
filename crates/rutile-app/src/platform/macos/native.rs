@@ -2317,6 +2317,21 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
                 self.run_save(event_loop);
                 return;
             }
+            // Cmd+Q mirrors File > Close: a dirty document demands the close
+            // decision first; a clean one saves session state and exits.
+            if command
+                && !shift
+                && matches!(key_event.logical_key, Key::Character(ref key) if key.eq_ignore_ascii_case("q"))
+            {
+                if self.session.app_state().dirty() {
+                    self.pending_close = true;
+                    self.sync_window_title();
+                } else {
+                    self.save_session_on_exit();
+                    event_loop.exit();
+                }
+                return;
+            }
             if command
                 && matches!(key_event.logical_key, Key::Character(ref key) if key.eq_ignore_ascii_case("r"))
             {
@@ -2381,7 +2396,6 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
             event: key_event, ..
         } = &event
             && command_character_leaks_to_editor(
-                self.modifiers,
                 effective,
                 &key_event.logical_key,
                 key_event.state == ElementState::Pressed,
@@ -3536,19 +3550,21 @@ fn run_dirty_close_alert() -> Result<CloseDialogAction, MacError> {
     Ok(close_dialog_action(alert.runModal()))
 }
 
-/// Authoritative modifier state at key-event time.
+/// Union of winit's tracked modifiers and the live AppKit flags.
 ///
-/// winit's `ModifiersChanged` tracking can desync from reality after focus
-/// transitions involving non-activating panels (the command palette): the
-/// 2026-08-23 usage forensics show a ⌘Q that reached the editor as a bare
-/// `q` and was inserted as text while the AppKit menu still quit. The live
-/// AppKit read is authoritative when it succeeds; the tracked state is the
-/// fallback so a provider failure can never silently empty the modifiers.
+/// Instrumented live (2026-08-25, System Events injection with per-event
+/// logging): winit's tracked state was CORRECT for a Cmd+K, while
+/// `+[NSEvent modifierFlags]` read inside the asynchronous winit callback
+/// returned the post-event idle state — an override-style merge would clear
+/// real modifiers and defeat both dispatch and the editor guard. The union
+/// can only add bits: tracked alone reproduces historical behavior, live
+/// alone still rescues a genuine tracking miss, and neither source can
+/// silence the other.
 pub(super) fn effective_modifiers(
     tracked: ModifiersState,
     live: Option<ModifiersState>,
 ) -> ModifiersState {
-    live.unwrap_or(tracked)
+    tracked | live.unwrap_or_default()
 }
 
 /// Live event-time modifiers from AppKit. `+[NSEvent modifierFlags]` reports
@@ -3573,18 +3589,19 @@ pub(super) fn live_modifiers() -> Option<ModifiersState> {
     Some(state)
 }
 
-/// True only in the desync state: AppKit says CMD is down, winit's tracked
-/// state says it is not, and the event is a pressed character key. That is
-/// the signature of a ⌘-combo winit failed to track; the editor must never
-/// see it as plain text. Outside the mismatch the fall-through keeps its
-/// historical behavior, preserving editor-side ⌘-bindings.
+/// True for any pressed character key with CMD held. Live reproduction
+/// (2026-08-25, System Events keystroke injection): an unbound Cmd+K fell
+/// through dispatch into the iced editor, which inserted a literal `k`
+/// into the document even with tracked and live modifiers in agreement —
+/// so a modifier-mismatch guard was insufficient. The editor must never
+/// receive CMD-combo characters as text; app-side dispatch owns every
+/// bound combo before this guard runs.
 pub(super) fn command_character_leaks_to_editor(
-    tracked: ModifiersState,
     effective: ModifiersState,
     key: &Key,
     pressed: bool,
 ) -> bool {
-    pressed && effective.super_key() && !tracked.super_key() && matches!(key, Key::Character(_))
+    pressed && effective.super_key() && matches!(key, Key::Character(_))
 }
 
 #[cfg(test)]
@@ -3607,10 +3624,15 @@ mod tests {
     }
 
     #[test]
-    fn effective_modifiers_prefers_the_live_appkit_truth() {
-        // The desync case: winit tracked nothing, AppKit says CMD is down.
-        // Dispatch must see CMD so ⌘S/⌘Q behave; the editor must see CMD so
-        // the character is not inserted as plain text.
+    fn effective_modifiers_unions_tracked_and_live() {
+        // Tracked correct, live stale (instrumented live repro: live reads
+        // the post-event idle state inside winit's callback): the union must
+        // keep the real modifier.
+        assert_eq!(
+            effective_modifiers(command_only(), Some(ModifiersState::empty())),
+            command_only()
+        );
+        // Tracked missed it, live sees it: the union rescues the combo.
         assert_eq!(
             effective_modifiers(ModifiersState::empty(), Some(command_only())),
             command_only()
@@ -3629,39 +3651,25 @@ mod tests {
     }
 
     #[test]
-    fn desynced_command_character_is_flagged_as_a_leak() {
+    fn command_characters_never_reach_the_editor_as_text() {
         let q = Key::Character("q".into());
-        // Desync: tracked empty, AppKit CMD down, pressed character.
-        assert!(command_character_leaks_to_editor(
-            ModifiersState::empty(),
-            command_only(),
-            &q,
-            true
-        ));
-        // Agreement (normal ⌘-combo): never flagged, so editor-side
-        // ⌘-bindings keep their historical fall-through.
+        // Tracked/live mismatch or agreement: any CMD-held character is a
+        // leak (live repro 2026-08-25: iced inserted an unbound Cmd+K as
+        // literal text with modifiers in agreement).
+        assert!(command_character_leaks_to_editor(command_only(), &q, true));
+        // Plain typing must keep flowing.
         assert!(!command_character_leaks_to_editor(
-            command_only(),
-            command_only(),
-            &q,
-            true
-        ));
-        // No command anywhere: plain typing.
-        assert!(!command_character_leaks_to_editor(
-            ModifiersState::empty(),
             ModifiersState::empty(),
             &q,
             true
         ));
         // Releases and non-character keys never leak.
         assert!(!command_character_leaks_to_editor(
-            ModifiersState::empty(),
             command_only(),
             &q,
             false
         ));
         assert!(!command_character_leaks_to_editor(
-            ModifiersState::empty(),
             command_only(),
             &Key::Named(NamedKey::Enter),
             true

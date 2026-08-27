@@ -52,7 +52,22 @@ impl LineByteIndex {
             .starts
             .get(line)
             .ok_or_else(|| EditorError::Platform("Iced cursor line is outside mirror".into()))?;
-        let line_end = self.starts.get(line + 1).copied().unwrap_or(self.len);
+        // Fail closed: a mirror updated mid-edit can transiently hold starts
+        // for the newer text and bytes for the older one; slicing that mix
+        // panicked at quit (live repro 2026-08-25: byte index 21 out of
+        // bounds on the 20-byte pre-edit document). Clamp and reject instead
+        // of crashing — the caller degrades to a selection-less save.
+        if start > self.len {
+            return Err(EditorError::Platform(
+                "Iced cursor mirror start is outside mirror".into(),
+            ));
+        }
+        let line_end = self
+            .starts
+            .get(line + 1)
+            .copied()
+            .unwrap_or(self.len)
+            .min(self.len);
         let line_text = &self.text[start..line_end];
         match line_text.char_indices().nth(column) {
             Some((byte_off, _)) => start
