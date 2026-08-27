@@ -20,11 +20,11 @@ pub const MACOS_PACKAGE_LABEL: &str = "local-unnotarized-macos-arm64";
 pub const LINUX_PACKAGE_LABEL: &str = "linux-x86_64-unverified-wayland";
 
 pub const MACOS_APP_NAME: &str = "Rutile.app";
-pub const MACOS_ZIP_NAME: &str = "Rutile-0.2.2-macos-arm64.app.zip";
-pub const MACOS_DMG_NAME: &str = "Rutile-0.2.2-macos-arm64.dmg";
+pub const MACOS_ZIP_NAME: &str = "Rutile-0.2.3-macos-arm64.app.zip";
+pub const MACOS_DMG_NAME: &str = "Rutile-0.2.3-macos-arm64.dmg";
 
 pub const LINUX_ARCHIVE_DIR_NAME: &str = "Rutile-linux-x86_64";
-pub const LINUX_ARCHIVE_NAME: &str = "Rutile-0.2.2-linux-x86_64.tar.zst";
+pub const LINUX_ARCHIVE_NAME: &str = "Rutile-0.2.3-linux-x86_64.tar.zst";
 pub const LINUX_DEB_NAME: &str = "rutile_0.2.2_amd64.deb";
 pub const LINUX_RPM_NAME: &str = "rutile-0.2.2-1.x86_64.rpm";
 
