@@ -2317,18 +2317,29 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
                 self.run_save(event_loop);
                 return;
             }
-            // Cmd+Q mirrors File > Close: a dirty document demands the close
-            // decision first; a clean one saves session state and exits.
+            // Cmd+Q mirrors the window close button exactly: a dirty
+            // document gets the native accessible close alert (production)
+            // or the keyboard pseudo-decision path (smoke); a clean one
+            // saves session state and exits.
             if command
                 && !shift
                 && matches!(key_event.logical_key, Key::Character(ref key) if key.eq_ignore_ascii_case("q"))
             {
-                if self.session.app_state().dirty() {
-                    self.pending_close = true;
-                    self.sync_window_title();
-                } else {
+                if !self.session.app_state().dirty() {
                     self.save_session_on_exit();
                     event_loop.exit();
+                    return;
+                }
+                if self.smoke {
+                    self.pending_close = true;
+                    self.sync_window_title();
+                    return;
+                }
+                match run_dirty_close_alert() {
+                    Ok(decision) => {
+                        self.execute_close_decision(event_loop, decision);
+                    }
+                    Err(error) => self.surface_error(error.to_string()),
                 }
                 return;
             }
