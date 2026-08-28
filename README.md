@@ -43,7 +43,7 @@ Read `AGENTS.md` and `docs/handoff/current-state.md` before changing code. Froze
 
 ## Current status
 
-The workspace version is **Rutile 0.2.2** on `main`. The last public-facing tag is still **`v0.2.0`**. Local-beta 0.2.0 packages exist for macOS arm64 and Linux x86_64, but a 2026-07-12 post-release audit found distribution blockers: the Linux packages contain `test-control` behavior and both platform binaries embed builder paths. **Do not redistribute those artifacts.** They are historical evidence, not production-safe packages.
+The workspace version is **Rutile 0.2.3** on `main`. The last public-facing tag is still **`v0.2.2`**. Local-beta 0.2.0 packages exist for macOS arm64 and Linux x86_64, but a 2026-07-12 post-release audit found distribution blockers: the Linux packages contain `test-control` behavior and both platform binaries embed builder paths. **Do not redistribute those artifacts.** They are historical evidence, not production-safe packages.
 
 macOS now has in-window tabs, a command-palette NSPanel, and print-preset export splice. Linux shares that data plane but does not paint a tab strip. GUI-stack unification is blocked. Quality probes can be emitted unsigned with `attested: false`.
 

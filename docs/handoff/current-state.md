@@ -1,12 +1,13 @@
 # Rutile Current-State Handoff
 
-> **Status: Current.** Reconciled 2026-08-25 against Forgejo `origin/main`
-> `f32e670` (merges of #122–#124). Historical release and readiness receipts
-> stay in their dated handoffs.
+> **Status: Current.** Reconciled 2026-08-27 against Forgejo `origin/main`
+> `d727952` (version/tip sync to 0.2.3; the 2026-08-25 reconcile covered
+> #122–#124, #125–#143 have landed since). Historical release and readiness
+> receipts stay in their dated handoffs.
 
 ## BLUF
 
-Rutile 0.2.2 on `main` is a local-first native Markdown editor. The 33-finding
+Rutile 0.2.3 on `main` is a local-first native Markdown editor. The 33-finding
 audit is closed (PRs #88–#106). The same-day table-stakes follow-up is also
 on `main` (PRs #108–#118): AdapterCommitId newtype, Linux M8 leftovers,
 publishing print splice, command-palette NSPanel, parked/swapped documents,
@@ -29,9 +30,9 @@ shared tab data plane but no GTK tab chrome. Sequence:
 |---|---|
 | Remote (authority) | `git.kyanitelabs.tech:simon/feathermark.git` (Forgejo `origin`) |
 | Branch | `main` |
-| Tip | `f32e670` — merge of PR #124; product tip #124 `dc798ba` (via #123 `ba8e245`) |
-| GitHub mirror | `KyaniteLabs/rutile` `main` = same SHA (re-verified after #120) |
-| Workspace / crate version | 0.2.2 |
+| Tip | `d727952` — merge of PR #143; product tip #136 `07f0094` (docs #137–#138, #143 and release/tooling #139–#142 since) |
+| GitHub mirror | `KyaniteLabs/rutile` `main` = same SHA (re-verified 2026-08-27) |
+| Workspace / crate version | 0.2.3 |
 | Rust | 1.88.0, edition 2024 |
 | Frozen files | `crates/rutile-core/src/render.rs`, `security.rs`, `crates/rutile-types/src/safe_link.rs` |
 

@@ -1,6 +1,6 @@
 # Rutile Architecture
 
-> **Status: Current.** Verified against `main` `f569859` on 2026-08-13 (product tip still #118 `ceed4cd`; #119–#120 are docs). Product and technical naming are unified as Rutile (crates, the `rutile` binary, the `rutile://` scheme, and bundle identifiers). Workspace version is **0.2.2**.
+> **Status: Current as of 2026-08-13** (verified against `main` `f569859`; product tip still #118 `ceed4cd`; #119–#120 are docs); version synced 2026-08-27 to 0.2.3 (tip now `d727952`). Product and technical naming are unified as Rutile (crates, the `rutile` binary, the `rutile://` scheme, and bundle identifiers). Workspace version is **0.2.3**.
 
 ## BLUF
 

@@ -1,8 +1,9 @@
 # Rutile 0.2 macOS Baseline Ledger
 
-Status: **updated 2026-08-13** against `main` `f569859` (product tip `ceed4cd`). Feature-by-feature
-truth of the current macOS product (0.2.2). Scratch roadmap issues under
-`.scratch/` may still say `open`; this ledger is the checked-in truth.
+Status: **updated 2026-08-13** against `main` `f569859` (product tip `ceed4cd`); version synced
+2026-08-27 to 0.2.3 (tip `d727952`). Feature-by-feature truth of the current macOS
+product (0.2.3). Scratch roadmap issues under `.scratch/` may still say `open`;
+this ledger is the checked-in truth.
 
 ## Present (shipped, tested)
 
