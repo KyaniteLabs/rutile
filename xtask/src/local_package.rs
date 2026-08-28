@@ -25,8 +25,8 @@ pub const MACOS_DMG_NAME: &str = "Rutile-0.2.3-macos-arm64.dmg";
 
 pub const LINUX_ARCHIVE_DIR_NAME: &str = "Rutile-linux-x86_64";
 pub const LINUX_ARCHIVE_NAME: &str = "Rutile-0.2.3-linux-x86_64.tar.zst";
-pub const LINUX_DEB_NAME: &str = "rutile_0.2.2_amd64.deb";
-pub const LINUX_RPM_NAME: &str = "rutile-0.2.2-1.x86_64.rpm";
+pub const LINUX_DEB_NAME: &str = "rutile_0.2.3_amd64.deb";
+pub const LINUX_RPM_NAME: &str = "rutile-0.2.3-1.x86_64.rpm";
 
 /// License declared in every package manifest and SBOM. Derived from the
 /// xtask crate's `CARGO_PKG_LICENSE` (which inherits `MIT` from

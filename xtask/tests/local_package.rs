@@ -784,7 +784,7 @@ fn create_dummy_output_if_needed(plan: &xtask::local_package::CommandPlan) {
                     let def = pair[1].to_string_lossy();
                     def.strip_prefix("_topdir ").map(|topdir| {
                         std::path::PathBuf::from(topdir)
-                            .join("RPMS/x86_64/rutile-0.2.2-1.x86_64.rpm")
+                            .join("RPMS/x86_64/rutile-0.2.3-1.x86_64.rpm")
                     })
                 })
         }
@@ -871,8 +871,8 @@ fn run_local_package_macos_fails_closed_until_archive_traversal_is_supported() {
     assert_eq!(calls[3].0, "hdiutil");
 
     assert!(!output.join("_staging").exists());
-    assert!(output.join("Rutile-0.2.2-macos-arm64.app.zip").is_file());
-    assert!(output.join("Rutile-0.2.2-macos-arm64.dmg").is_file());
+    assert!(output.join("Rutile-0.2.3-macos-arm64.app.zip").is_file());
+    assert!(output.join("Rutile-0.2.3-macos-arm64.dmg").is_file());
 }
 
 #[test]
@@ -903,9 +903,9 @@ fn run_local_package_linux_fails_closed_until_archive_traversal_is_supported() {
     assert_eq!(calls[3].0, "rpmbuild");
 
     assert!(!output.join("_staging").exists());
-    assert!(output.join("Rutile-0.2.2-linux-x86_64.tar.zst").is_file());
-    assert!(output.join("rutile_0.2.2_amd64.deb").is_file());
-    assert!(output.join("rutile-0.2.2-1.x86_64.rpm").is_file());
+    assert!(output.join("Rutile-0.2.3-linux-x86_64.tar.zst").is_file());
+    assert!(output.join("rutile_0.2.3_amd64.deb").is_file());
+    assert!(output.join("rutile-0.2.3-1.x86_64.rpm").is_file());
 }
 
 #[test]
@@ -936,9 +936,9 @@ fn run_local_package_linux_ubuntu_omits_rpm_tooling_and_artifact() {
     assert_eq!(calls[2].0, "dpkg-deb");
 
     assert!(!output.join("_staging").exists());
-    assert!(output.join("Rutile-0.2.2-linux-x86_64.tar.zst").is_file());
-    assert!(output.join("rutile_0.2.2_amd64.deb").is_file());
-    assert!(!output.join("rutile-0.2.2-1.x86_64.rpm").exists());
+    assert!(output.join("Rutile-0.2.3-linux-x86_64.tar.zst").is_file());
+    assert!(output.join("rutile_0.2.3_amd64.deb").is_file());
+    assert!(!output.join("rutile-0.2.3-1.x86_64.rpm").exists());
 }
 
 #[test]
@@ -970,7 +970,7 @@ fn linux_manifest_packaged_executable_hash_is_computed_from_candidate_not_build_
     // read_hash_bound_candidate enforces equality, but the code must compute
     // packaged_executable_sha256 via sha256_regular_file(&candidate) so the
     // binding chain remains correct if build_input semantics ever diverge.
-    let deb_manifest_path = output.join("rutile_0.2.2_amd64.deb.manifest-v1.json");
+    let deb_manifest_path = output.join("rutile_0.2.3_amd64.deb.manifest-v1.json");
     assert!(deb_manifest_path.is_file(), "deb manifest should exist");
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(&deb_manifest_path).unwrap()).unwrap();
@@ -1222,7 +1222,7 @@ fn json_receipt_hashes_bind_to_artifact_bytes() {
 
     let error = run_local_package(request, &executor).unwrap_err();
     assert!(error.to_string().contains("unsupported_archive"));
-    let json = fs::read_to_string(output.join("Rutile-0.2.2-macos-arm64.app.zip.manifest-v1.json"))
+    let json = fs::read_to_string(output.join("Rutile-0.2.3-macos-arm64.app.zip.manifest-v1.json"))
         .unwrap();
     assert!(json.contains(&sha256(&bytes)));
     assert!(json.contains(&valid_source_commit()));
