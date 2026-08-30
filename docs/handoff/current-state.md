@@ -124,6 +124,8 @@ After this reconciliation they should match.
 | #132 | Last two red CI jobs fixed (probe-test /tmp chain, fuzz-target Revision drift) |
 | #133 | Docs: full closure + release-preflight policy record |
 | #134 | Cmd-combo editor leak closed by live repro (union modifiers, Cmd+Q, fail-closed byte_at) |
+| #136 | Dirty Cmd+Q presents the native close alert |
+| #139–#143 | 0.2.3 bump, artifact names, policy pin, G005 record, launch README flip |
 | #135 | Docs: live-repro closure |
 | #136 | Dirty Cmd+Q presents the native close alert (production), pseudo path is smoke-only |
 | #128 | CI repair: Colima labels, rustup bootstrap, v3 artifacts, full-URL rust-cache, cargo-fuzz via nightly, Linux compile fixes (native-smoke gate, macOS-fixture package tests, duplicated --locked) |
@@ -140,7 +142,7 @@ Audit closeout remains PRs #88–#106 (`docs/audit/2026-08-12-full-codebase-audi
 | Parked-tab journal identity | Shared autosave journal; recovery is still highest-sequence, not one snapshot per tab |
 | GUI-stack unification | iced crates.io max 0.14.0 (objc2 0.5.x); wry 0.56.1 still objc2 0.6.x |
 | Quality native probes | Harness exists; no physical GUI attestation |
-| Readiness / publication | Independent verifier and runners unprovisioned. **0.2.3 recommended** — see `docs/handoff/release-candidate-0.2.3.md` (data-integrity fixes #122/#134/#136; blocked only on the owner authority gate). Release pipeline fails closed at provenance by design: `xtask release-preflight` requires the externally provisioned release-authority key material and owner approval; `publication_authorized` stays false. No v* tag is pushed without that material |
+| Readiness / publication | **0.2.3 PREVIEW TIER PUBLISHED 2026-08-26**: github.com/KyaniteLabs/rutile public; signed artifacts at releases/tag/v0.2.3-preview; product page kyanitelabs.tech/rutile. Full production tier still needs the 5-runner fleet + independent verifier (board rows RUT-D1..D5). **0.2.3 recommended** — see `docs/handoff/release-candidate-0.2.3.md` (data-integrity fixes #122/#134/#136; blocked only on the owner authority gate). Release pipeline fails closed at provenance by design: `xtask release-preflight` requires the externally provisioned release-authority key material and owner approval; `publication_authorized` stays false. No v* tag is pushed without that material |
 | Outline / search / history native chrome | Contracts exist; no dedicated sidebar UI |
 | Local AI | Explicitly deferred |
 | CI container jobs — fully repaired (#128 + #132) | #128 made the container jobs run at all (labels, rustup, v3 artifacts, full-URL rust-cache, cargo-fuzz via nightly). #132 fixed the two remaining reds, both code rot that was invisible because the jobs never ran: the five linux probe tests rooted under 1777 /tmp which the fail-closed path policy rejects (now under $HOME), and six fuzz-target call sites predating the `Revision` newtype. Both fixes reproduced red and validated green in an ubuntu:24.04 container on the dev host. Remaining known queue behavior: heavy jobs serialize behind the shared runner (kinocut CI shares it); native-smoke jobs still show eternal pendings inside concluded runs (Forgejo queue quirk) || xtask evidence-binding tests on PRs | RESOLVED by #126: the source-binding tests skip with a note when HEAD is not main-reachable (full validation still runs on main checkouts). The load-only native-smoke flake (1-in-4 under back-to-back full suites) did not reproduce in 12× 8-thread runs; assertions now print child stderr (#124) for the next occurrence |
