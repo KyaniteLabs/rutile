@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-10  
 **Branch:** `feat/feathermark-build`  
-**Worktree:** `/Users/simongonzalezdecruz/workspaces/feathermark/.worktrees/feathermark-build`  
+**Worktree:** `~/workspaces/feathermark/.worktrees/feathermark-build`  
 **Release commit:** `6a47ef8` — `release: package FeatherMark local beta artifacts`  
 **Source commit for artifacts:** `1fd504996666d1d95cbc520e084c9e15f1ccc763`
 
@@ -91,7 +91,7 @@ All artifacts are in the hosts' `target/package-final/` directories.
 ### macOS
 
 ```bash
-cd /Users/simongonzalezdecruz/workspaces/feathermark/.worktrees/feathermark-build
+cd ~/workspaces/feathermark/.worktrees/feathermark-build
 
 git checkout 6a47ef8
 
@@ -195,7 +195,7 @@ You are picking up the FeatherMark local beta branch.
 
 Current state:
 - Branch: feat/feathermark-build
-- Worktree: /Users/simongonzalezdecruz/workspaces/feathermark/.worktrees/feathermark-build
+- Worktree: ~/workspaces/feathermark/.worktrees/feathermark-build
 - Release commit: 6a47ef8
 - Source commit for beta artifacts: 1fd504996666d1d95cbc520e084c9e15f1ccc763
 
