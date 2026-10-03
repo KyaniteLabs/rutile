@@ -2333,6 +2333,31 @@ impl LinuxProductSession {
         self.core.app().restore_session(state)
     }
 
+    /// Whether a restored selection / viewport may be applied to the editor.
+    ///
+    /// Session state is advisory and may have been written against a different
+    /// (longer) revision of the file, so both offsets are validated against the
+    /// current document length and UTF-8 char boundaries before use. This
+    /// mirrors the macOS shell's `apply_session_restore_parts`, which degrades to
+    /// a notice instead of handing the adapter an out-of-range offset.
+    pub fn restored_view_is_applicable(
+        &self,
+        selection: Option<Selection>,
+        top_visible_byte: Option<usize>,
+    ) -> bool {
+        let text = self.core.snapshot().to_string();
+        let len = self.core.document().len_bytes();
+        let selection_ok = selection.is_none_or(|selection| {
+            selection.anchor <= len
+                && selection.head <= len
+                && text.is_char_boundary(selection.anchor)
+                && text.is_char_boundary(selection.head)
+        });
+        let viewport_ok =
+            top_visible_byte.is_none_or(|top| top <= len && text.is_char_boundary(top));
+        selection_ok && viewport_ok
+    }
+
     // --- Wave 2-C: durable notices + shared open/mirror/autosave bus --------
 
     /// Borrows the active durable notices (LNX-001/LNX-002). Notices persist in
@@ -4310,7 +4335,23 @@ fn build_window(
                     started,
                 );
                 if let Some(selection) = restore.selection {
-                    if let Err(error) = editor_adapter.borrow().set_selection(selection) {
+                    // Session offsets are advisory: they may have been written
+                    // against a longer revision. Validate before applying, and
+                    // degrade to a visible notice rather than handing the
+                    // adapter an out-of-range or non-boundary offset.
+                    let applicable = session
+                        .borrow()
+                        .restored_view_is_applicable(restore.selection, restore.top_visible_byte);
+                    if !applicable {
+                        session.borrow_mut().core.surface_notice(
+                            NoticeSeverity::Warning,
+                            "Session selection could not be restored",
+                            format!(
+                                "selection {selection:?} outside document length {}",
+                                session.borrow().core.document().len_bytes()
+                            ),
+                        );
+                    } else if let Err(error) = editor_adapter.borrow().set_selection(selection) {
                         eprintln!(
                             "rutile: set_selection failed after restore; view resyncs on next render: {error}"
                         );

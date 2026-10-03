@@ -228,6 +228,76 @@ fn session_state_round_trips_through_the_store() {
     std::fs::remove_dir_all(directory).unwrap();
 }
 
+/// A persisted session selection that no longer fits the document must be
+/// refused, not applied. The macOS shell validates the restored selection and
+/// viewport against the loaded document length and UTF-8 char boundaries
+/// (`macos.rs` `apply_session_restore_parts`); the GTK shell applied them raw,
+/// so a session written against a longer revision of the file could hand the
+/// adapter an out-of-range or non-boundary offset. This pins the Linux side to
+/// the same rule.
+#[test]
+fn session_restore_refuses_a_selection_outside_the_document() {
+    let directory = std::env::temp_dir().join(format!(
+        "rutile-linux-restore-bounds-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let file = directory.join("note.md");
+
+    let mut session = LinuxProductSession::new().unwrap();
+    session
+        .bind_autosave(AutosaveStore::new(directory.clone()))
+        .unwrap();
+    session.replace_all("héllo", 0).unwrap();
+    session.save_as(&file).unwrap();
+
+    // Case 1 — out of range. "héllo" is 6 bytes, so 999 is past the end. A
+    // session written against a longer revision produces exactly this.
+    let out_of_range = Selection {
+        anchor: 999,
+        head: 999,
+    };
+    let state = session.capture_session_state(5_000, Some(out_of_range), Some(999), None);
+    let restored = session.restore_session(&state);
+    assert!(
+        !session.restored_view_is_applicable(restored.selection, restored.top_visible_byte),
+        "an out-of-range selection/viewport must not be applied"
+    );
+
+    // Case 2 — selection IN range but NOT on a UTF-8 char boundary. Offset 2
+    // lands inside the two-byte 'é'. `top_visible_byte` is deliberately a
+    // VALID offset (0) so this case can only be rejected by the selection
+    // boundary check — passing a bad viewport here would let the viewport
+    // check mask a regression in the selection check.
+    let mid_codepoint = Selection { anchor: 2, head: 3 };
+    let len = "héllo".len();
+    assert!(2 <= len, "offset 2 must be in range for this test to bite");
+    let state = session.capture_session_state(5_000, Some(mid_codepoint), Some(0), None);
+    let restored = session.restore_session(&state);
+    assert!(
+        !session.restored_view_is_applicable(restored.selection, restored.top_visible_byte),
+        "an in-range but non-char-boundary SELECTION must not be applied"
+    );
+
+    // Case 2b — viewport IN range but NOT on a char boundary, with a VALID
+    // selection. Isolates the viewport boundary check the same way.
+    let state =
+        session.capture_session_state(5_000, Some(Selection { anchor: 1, head: 3 }), Some(2), None);
+    let restored = session.restore_session(&state);
+    assert!(
+        !session.restored_view_is_applicable(restored.selection, restored.top_visible_byte),
+        "an in-range but non-char-boundary VIEWPORT must not be applied"
+    );
+
+    // Case 3 — genuinely valid, must remain applicable.
+    assert!(
+        session.restored_view_is_applicable(Some(Selection { anchor: 1, head: 3 }), Some(0)),
+        "an in-range boundary-aligned selection must remain applicable"
+    );
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
 #[test]
 fn product_session_edits_through_the_bounded_renderer_and_stages_preview() {
     let mut session = LinuxProductSession::new().unwrap();
