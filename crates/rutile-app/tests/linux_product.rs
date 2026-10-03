@@ -341,6 +341,128 @@ fn save_without_polling_preserves_external_changes() {
     std::fs::remove_dir_all(directory).unwrap();
 }
 
+/// The Linux key table is hand-rolled next to the native widgets, which is how
+/// it drifted from `actions::DEFAULT_CATALOG` on the macOS side. Pin it to the
+/// registry so the two cannot disagree again.
+#[test]
+fn linux_format_shortcuts_match_the_shared_catalog() {
+    use gtk::gdk::keys::constants as keys;
+    use rutile_app::actions::DEFAULT_CATALOG;
+    use rutile_app::platform::linux_gtk::linux_format_command;
+
+    // (registry command id, registry key string, shift) -> the FormatCommand
+    // the shell must run. The registry stores logical key names, so the table
+    // is keyed by name and resolved through `linux_format_command`.
+    let expected = [
+        ("format.bold", "b", false, FormatCommand::ToggleBold),
+        ("format.italic", "i", false, FormatCommand::ToggleItalic),
+        (
+            "format.link",
+            "k",
+            false,
+            FormatCommand::InsertLink { url: None },
+        ),
+        ("format.code", "e", false, FormatCommand::ToggleCodeSpan),
+        (
+            "format.code-block",
+            "c",
+            true,
+            FormatCommand::ToggleCodeBlock,
+        ),
+        ("format.heading", "h", true, FormatCommand::CycleHeading),
+        ("format.quote", "q", true, FormatCommand::ToggleQuote),
+        (
+            "format.bullet-list",
+            "u",
+            true,
+            FormatCommand::ToggleBulletList,
+        ),
+        (
+            "format.numbered-list",
+            "o",
+            true,
+            FormatCommand::ToggleOrderedList,
+        ),
+        (
+            "format.checklist",
+            "l",
+            true,
+            FormatCommand::ToggleChecklist,
+        ),
+    ];
+
+    // Map the registry's logical key name onto the GTK keyval the shell sees.
+    let keyval = |name: &str| -> gtk::gdk::keys::Key {
+        match name {
+            "b" => keys::b,
+            "c" => keys::c,
+            "e" => keys::e,
+            "h" => keys::h,
+            "i" => keys::i,
+            "k" => keys::k,
+            "l" => keys::l,
+            "o" => keys::o,
+            "q" => keys::q,
+            "u" => keys::u,
+            other => panic!("unexpected catalog key {other}"),
+        }
+    };
+
+    for (id, name, shift, want) in expected {
+        let descriptor = DEFAULT_CATALOG
+            .iter()
+            .find(|descriptor| descriptor.id.0 == id)
+            .unwrap_or_else(|| panic!("{id} must exist in the shared catalog"));
+        let shortcut = descriptor
+            .shortcut
+            .unwrap_or_else(|| panic!("{id} must declare a shortcut"));
+        assert_eq!(
+            shortcut.key, name,
+            "{id}: registry key disagrees with the Linux table"
+        );
+        assert_eq!(
+            shortcut.modifiers.shift, shift,
+            "{id}: registry shift modifier disagrees with the Linux table"
+        );
+        assert_eq!(
+            linux_format_command(keyval(name), shift),
+            Some(want),
+            "{id}: Linux resolves this shortcut to the wrong FormatCommand"
+        );
+    }
+}
+
+/// Save As to a target that is not already open must still inspect the target
+/// for an unobserved external edit. The pre-save conflict check used to live
+/// inside the `open_document_at(...)` branch, so a fresh path skipped it
+/// entirely and overwrote another writer's disk content without a decision.
+#[test]
+fn save_as_to_a_new_path_still_refuses_an_unobserved_external_edit() {
+    let directory = std::env::temp_dir().join(format!(
+        "rutile-linux-save-as-preflight-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let target = directory.join("fresh-target.md");
+    std::fs::write(&target, "someone else's content").unwrap();
+
+    let mut session = LinuxProductSession::new().unwrap();
+    session.replace_all("my draft", 1).unwrap();
+
+    assert!(
+        session.save_as(&target).is_err(),
+        "Save As to a new path must demand a conflict decision, not overwrite"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&target).unwrap(),
+        "someone else's content",
+        "the other writer's disk bytes must survive"
+    );
+    assert_eq!(session.source(), "my draft", "local draft must survive");
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
 #[test]
 fn session_detects_and_resolves_external_file_changes_through_the_reducer() {
     let directory =

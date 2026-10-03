@@ -282,7 +282,10 @@ mod chrome_transition_tests {
                 .expect("recovery dialog must be visible");
             dialog.response(gtk::ResponseType::DeleteEvent);
         });
-        assert_eq!(prompt_recover(&window), RecoveryDecision::Quit);
+        // Dismissing the window is not consent to quit. It fails closed to
+        // `Pending`, which preserves the store and skips the checkpoint that
+        // would otherwise overwrite the pending drafts.
+        assert_eq!(prompt_recover(&window), RecoveryDecision::Pending);
         assert_eq!(
             before,
             recovery_bytes(),
@@ -292,9 +295,19 @@ mod chrome_transition_tests {
             recovery_decision(gtk::ResponseType::No),
             RecoveryDecision::Discard
         );
+        // The explicit "Quit" button still quits.
         assert_eq!(
             recovery_decision(gtk::ResponseType::Cancel),
             RecoveryDecision::Quit
+        );
+        // Any other response fails closed rather than being read as consent.
+        assert_eq!(
+            recovery_decision(gtk::ResponseType::DeleteEvent),
+            RecoveryDecision::Pending
+        );
+        assert_eq!(
+            recovery_decision(gtk::ResponseType::Close),
+            RecoveryDecision::Pending
         );
         let buffer = sourceview4::Buffer::builder().max_undo_levels(0).build();
         let adapter = Rc::new(RefCell::new(GtkSourceEditorAdapter::new(&buffer)));
@@ -1660,6 +1673,25 @@ impl LinuxProductSession {
             self.inspect_external_change(0)?;
             if self.has_external_conflict() {
                 return Err("File changed on disk; resolve the conflict before saving".into());
+            }
+        } else if self.core.dirty() {
+            // The target is not an open document, so `inspect_external_change`
+            // (which reads the active document's path) cannot see it. Load the
+            // target directly and refuse to overwrite a file that already
+            // exists with content we did not read: an unobserved external edit
+            // must demand a decision on every save path, otherwise Save As to a
+            // fresh path silently destroys another writer's work.
+            if path.exists() {
+                let loaded = self
+                    .file_service
+                    .load(&path, rutile_core::MAX_DOCUMENT_BYTES)
+                    .map_err(|error| error.to_string())?;
+                if loaded.document.len_bytes() > 0 {
+                    self.core
+                        .app_mut()
+                        .reduce(AppMessage::ExternalConflictDetected { disk: loaded.disk });
+                    return Err("File changed on disk; resolve the conflict before saving".into());
+                }
             }
         }
         let revision = self.core.document().revision();
@@ -3819,33 +3851,7 @@ fn build_window(
                 return gtk::glib::Propagation::Stop;
             }
 
-            let command = if !shift {
-                if key == keys::b {
-                    Some(FormatCommand::ToggleBold)
-                } else if key == keys::i {
-                    Some(FormatCommand::ToggleItalic)
-                } else if key == keys::k {
-                    Some(FormatCommand::InsertLink { url: None })
-                } else if key == keys::e {
-                    Some(FormatCommand::ToggleCodeSpan)
-                } else {
-                    None
-                }
-            } else if key == keys::c || key == keys::C {
-                Some(FormatCommand::ToggleCodeBlock)
-            } else if key == keys::h || key == keys::H {
-                Some(FormatCommand::CycleHeading)
-            } else if key == keys::q || key == keys::Q {
-                Some(FormatCommand::ToggleQuote)
-            } else if key == keys::u || key == keys::U {
-                Some(FormatCommand::ToggleBulletList)
-            } else if key == keys::o || key == keys::O {
-                Some(FormatCommand::ToggleOrderedList)
-            } else if key == keys::l || key == keys::L {
-                Some(FormatCommand::ToggleChecklist)
-            } else {
-                None
-            };
+            let command = linux_format_command(key, shift);
 
             if let Some(command) = command {
                 format_action(command);
@@ -4265,7 +4271,17 @@ fn build_window(
                             .borrow_mut()
                             .adopt_recovered(document, elapsed_ms(started))?;
                     }
+                    // No decision was made. Leave the recovery store exactly as
+                    // it is and, critically, skip the checkpoint below:
+                    // writing one here would overwrite the pending drafts
+                    // with the current (empty) workspace and destroy them.
+                    (_, RecoveryDecision::Pending) => {}
                     _ => {}
+                }
+                if decision != RecoveryDecision::Pending {
+                    session
+                        .borrow_mut()
+                        .checkpoint_workspace(unix_millis(), false)?;
                 }
                 session
                     .borrow_mut()
@@ -4766,18 +4782,70 @@ fn stain_source(buffer: &sourceview4::Buffer) {
     }
 }
 
+/// Resolve a GTK key event to a shared [`FormatCommand`].
+///
+/// The table mirrors `actions::DEFAULT_CATALOG`, which is the single source of
+/// truth for format shortcuts. `linux_format_command_matches_catalog` pins the
+/// two together so this hand-rolled table cannot silently drift from the
+/// registry the way the macOS table did.
+pub fn linux_format_command(key: gtk::gdk::keys::Key, shift: bool) -> Option<FormatCommand> {
+    // `Key` derefs to its u32 keyval. The shifted variants also accept the
+    // uppercase keyval so Caps Lock / Shift-modified keyvals resolve identically.
+    let raw = *key;
+    let lower = |lower: gtk::gdk::keys::Key| {
+        let lower = *lower;
+        raw == lower || raw == u32::from(char::from_u32(lower).unwrap_or('\0').to_ascii_uppercase())
+    };
+    if !shift {
+        if key == keys::b {
+            Some(FormatCommand::ToggleBold)
+        } else if key == keys::i {
+            Some(FormatCommand::ToggleItalic)
+        } else if key == keys::k {
+            Some(FormatCommand::InsertLink { url: None })
+        } else if key == keys::e {
+            Some(FormatCommand::ToggleCodeSpan)
+        } else {
+            None
+        }
+    } else if lower(keys::c) {
+        Some(FormatCommand::ToggleCodeBlock)
+    } else if lower(keys::h) {
+        Some(FormatCommand::CycleHeading)
+    } else if lower(keys::q) {
+        Some(FormatCommand::ToggleQuote)
+    } else if lower(keys::u) {
+        Some(FormatCommand::ToggleBulletList)
+    } else if lower(keys::o) {
+        Some(FormatCommand::ToggleOrderedList)
+    } else if lower(keys::l) {
+        Some(FormatCommand::ToggleChecklist)
+    } else {
+        None
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RecoveryDecision {
     Restore,
     Discard,
     Quit,
+    /// No decision was made (window dismissed / Escape / unknown response).
+    ///
+    /// Fails closed: leave the recovery store untouched and keep running
+    /// rather than treating dismissal as consent to quit. Mirrors the macOS
+    /// mapping, where an unrecognised `NSModalResponse` yields `Pending`
+    /// instead of `Quit`.
+    Pending,
 }
 
 fn recovery_decision(response: gtk::ResponseType) -> RecoveryDecision {
     match response {
         gtk::ResponseType::Yes => RecoveryDecision::Restore,
         gtk::ResponseType::No => RecoveryDecision::Discard,
-        _ => RecoveryDecision::Quit,
+        // The explicit "Quit" button, and only that button.
+        gtk::ResponseType::Cancel => RecoveryDecision::Quit,
+        _ => RecoveryDecision::Pending,
     }
 }
 
