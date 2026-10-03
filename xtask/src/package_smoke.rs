@@ -1670,6 +1670,10 @@ mod tests {
 
     /// Build a macOS zip request with the expected executable hash set to the
     /// hash of `binary_contents`.
+    ///
+    /// Every caller is `#[cfg(target_os = "macos")]`, so this helper must carry
+    /// the same gate or it reads as dead code on Linux hosts.
+    #[cfg(target_os = "macos")]
     fn macos_zip_request(
         temp: &Path,
         package_bytes: &[u8],
@@ -1727,6 +1731,9 @@ mod tests {
         }
     }
 
+    /// Sole caller is `#[cfg(target_os = "macos")]`; gate matches so this is not
+    /// dead code on Linux hosts.
+    #[cfg(target_os = "macos")]
     fn failed(code: i32) -> StageOutcome {
         StageOutcome {
             status: StageStatus::Failed,

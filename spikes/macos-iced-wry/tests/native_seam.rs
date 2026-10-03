@@ -1,6 +1,11 @@
 use std::sync::{Arc, Mutex};
 
-use macos_iced_wry_spike::{AppKitMainThread, CANDIDATE, MacShell};
+use macos_iced_wry_spike::{CANDIDATE, MacShell};
+
+// `AppKitMainThread` is only referenced by the `target_os = "macos"` test below,
+// so importing it unconditionally reads as an unused import on other hosts.
+#[cfg(target_os = "macos")]
+use macos_iced_wry_spike::AppKitMainThread;
 
 #[cfg(feature = "macos-iced")]
 use macos_iced_wry_spike::{

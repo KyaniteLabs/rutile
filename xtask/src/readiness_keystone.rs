@@ -732,7 +732,7 @@ fn validate_dirfd(dirfd: &std::os::fd::OwnedFd, require_owner: bool) -> Result<(
             "output parent must be a real directory".into(),
         ));
     }
-    if (stat.st_mode as u32 & 0o022) != 0 {
+    if (stat.st_mode & 0o022) != 0 {
         return Err(KeystoneError::UnsafeParent(
             "output parent path traverses a writable directory".into(),
         ));
