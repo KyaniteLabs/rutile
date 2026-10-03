@@ -44,7 +44,14 @@ evidence_root="${TARGET_DIR}/evidence"
 fuzz_max_total_time="60"
 fuzz_toolchain="nightly-2026-07-01"
 # Auto-discover fuzz targets from fuzz/fuzz_targets/*.rs (sorted for determinism).
-mapfile -t fuzz_targets < <(find "$(dirname "$0")/../../fuzz/fuzz_targets" -name '*.rs' -exec basename {} .rs \; | sort)
+# `mapfile` is bash 4+; macOS ships bash 3.2, where this aborted the whole gate
+# at line 47 before any stage ran. Read the list in a POSIX-portable way so the
+# portable gate runs on both hosts. Same order, same content.
+fuzz_targets=()
+while IFS= read -r _fuzz_target; do
+  [ -n "$_fuzz_target" ] && fuzz_targets+=("$_fuzz_target")
+done < <(find "$(dirname "$0")/../../fuzz/fuzz_targets" -name '*.rs' -exec basename {} .rs \; | sort)
+unset _fuzz_target
 
 usage() {
   cat >&2 <<EOF
@@ -84,10 +91,13 @@ for s in "${stage_list[@]}"; do
   esac
 done
 # De-duplicate while preserving order.
+# The `${arr[@]-}` guard is required for bash 3.2 (macOS): under `set -u` an
+# empty array expansion is "unbound variable" there, and the first iteration
+# always hits an empty `stage_list`.
 stage_list=()
 for s in "${expanded[@]}"; do
   skip=
-  for seen in "${stage_list[@]}"; do [ "$seen" = "$s" ] && skip=1 && break; done
+  for seen in "${stage_list[@]-}"; do [ "$seen" = "$s" ] && skip=1 && break; done
   [ -z "$skip" ] && stage_list+=("$s")
 done
 [ "${#stage_list[@]}" -gt 0 ] || { echo "portable-gate: no stages selected" >&2; exit 2; }
@@ -120,6 +130,25 @@ runner_platform() {
   esac
 }
 runner_arch() { uname -m; }
+
+# Workspace members that cannot compile on the current host.
+#
+# `--workspace` pulls in every member, including the macOS spikes, and
+# `spikes/macos-open-events` hard-enables the `macos-shell` feature on
+# `rutile-app`. On a Linux host that trips the product's own
+# `compile_error!("feature macos-shell requires a macOS target")`, so the
+# portable gate could never pass on Linux — it was red from the day the
+# current spikes joined the workspace. These members are excluded from
+# `--workspace` invocations off-macOS; on a macOS host the list is empty and
+# every member is still linted. Crate names, not paths.
+host_excluded_members() {
+  if [ "$(runner_platform)" = "macos" ]; then
+    return 0
+  fi
+  printf '%s\n' \
+    --exclude macos-open-events-spike \
+    --exclude macos-iced-wry-spike
+}
 runner_name() {
   for v in FORGEJO_RUNNER_NAME RUNNER_NAME HOSTNAME; do
     if [ -n "${!v:-}" ]; then echo "${!v}"; return; fi
@@ -359,13 +388,15 @@ run_deny_stage() {
   record_stage "$label" "$code" "$stage_out" "$stage_err"
 }
 
-for stage in "${stage_list[@]}"; do
+for stage in "${stage_list[@]-}"; do
   case "$stage" in
     fmt)
       run_stage fmt cargo fmt --all --check
       ;;
     clippy)
-      run_stage clippy cargo clippy --locked --workspace --all-targets -- -D warnings
+      # shellcheck disable=SC2046 # word splitting is intended: flags, one per line
+      run_stage clippy cargo clippy --locked --workspace --all-targets \
+        $(host_excluded_members) -- -D warnings
       ;;
     docs)
       run_stage docs cargo doc --locked --no-deps \
@@ -407,7 +438,7 @@ for stage in "${stage_list[@]}"; do
         echo "portable-gate: cargo-fuzz not installed" >&2
         exit 2
       fi
-      for target in "${fuzz_targets[@]}"; do
+      for target in "${fuzz_targets[@]-}"; do
         # -max_total_time bounds each target; the harness is the oracle.
         run_stage "fuzz:${target}" cargo "+$fuzz_toolchain" fuzz run "$target" -- \
           "-max_total_time=${fuzz_max_total_time}"

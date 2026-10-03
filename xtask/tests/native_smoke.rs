@@ -817,7 +817,7 @@ fn native_smoke_source_traces_launch_before_resume_and_resize_request_before_out
         .find("SMOKE_TRACE stage=0 event=launch")
         .expect("launch trace");
     let runner_setup = source
-        .find("ProductRunner::new(session, smoke, display_handle)")
+        .find("ProductRunner::new(session, smoke, display_handle, restore_previous_session)")
         .expect("runner setup");
     let event_loop_resume = source
         .find(".run_app(&mut runner)")
