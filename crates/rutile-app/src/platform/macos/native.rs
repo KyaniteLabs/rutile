@@ -4278,8 +4278,13 @@ fn block_on_ready<F: Future>(future: F) -> Result<F::Output, MacError> {
     }
 }
 
-/// Maps a `⌘`-modified key to its [`FormatCommand`], per the DESIGN-SYSTEM
-/// text-formatting bindings. Returns `None` for non-command or unmapped keys.
+/// Maps a `⌘`-modified key to its [`FormatCommand`].
+///
+/// `actions::DEFAULT_CATALOG` is the single source of truth for format
+/// shortcuts. This table used to be hand-rolled and drifted from that catalog
+/// on 4 of 10 bindings (code-block, quote, bullet-list, checklist) while
+/// claiming `⌘⇧K`, which the catalog does not bind at all. It is now pinned by
+/// `format_command_for_matches_catalog`, so the two cannot disagree again.
 fn format_command_for(key: &Key, command: bool, shift: bool) -> Option<FormatCommand> {
     if !command {
         return None;
@@ -4289,17 +4294,17 @@ fn format_command_for(key: &Key, command: bool, shift: bool) -> Option<FormatCom
     };
     let is = |candidate: &str| text.eq_ignore_ascii_case(candidate);
     if shift {
-        if is("k") {
+        if is("c") {
             Some(FormatCommand::ToggleCodeBlock)
         } else if is("h") {
             Some(FormatCommand::CycleHeading)
-        } else if is("b") {
+        } else if is("q") {
             Some(FormatCommand::ToggleQuote)
-        } else if is("l") {
+        } else if is("u") {
             Some(FormatCommand::ToggleBulletList)
         } else if is("o") {
             Some(FormatCommand::ToggleOrderedList)
-        } else if is("x") {
+        } else if is("l") {
             Some(FormatCommand::ToggleChecklist)
         } else {
             None
@@ -4583,6 +4588,111 @@ pub(super) fn command_character_leaks_to_editor(
 
 #[cfg(test)]
 mod tests {
+    /// The macOS format shortcut table must agree with `DEFAULT_CATALOG`.
+    ///
+    /// This table was hand-rolled and had drifted on 4 of 10 bindings
+    /// (code-block, quote, bullet-list, checklist) while also claiming
+    /// `⌘⇧K`, which the catalog does not bind. This test is the guard that was
+    /// missing: `format_command_for` previously had no coverage at all.
+    #[test]
+    fn format_command_for_matches_catalog() {
+        use super::{Key, format_command_for};
+        use crate::actions::DEFAULT_CATALOG;
+        use rutile_core::FormatCommand;
+
+        // (command id, catalog key, shift) -> the command the shell must run.
+        let expected = [
+            ("format.bold", "b", false, FormatCommand::ToggleBold),
+            ("format.italic", "i", false, FormatCommand::ToggleItalic),
+            (
+                "format.link",
+                "k",
+                false,
+                FormatCommand::InsertLink { url: None },
+            ),
+            ("format.code", "e", false, FormatCommand::ToggleCodeSpan),
+            (
+                "format.code-block",
+                "c",
+                true,
+                FormatCommand::ToggleCodeBlock,
+            ),
+            ("format.heading", "h", true, FormatCommand::CycleHeading),
+            ("format.quote", "q", true, FormatCommand::ToggleQuote),
+            (
+                "format.bullet-list",
+                "u",
+                true,
+                FormatCommand::ToggleBulletList,
+            ),
+            (
+                "format.numbered-list",
+                "o",
+                true,
+                FormatCommand::ToggleOrderedList,
+            ),
+            (
+                "format.checklist",
+                "l",
+                true,
+                FormatCommand::ToggleChecklist,
+            ),
+        ];
+
+        for (id, name, shift, want) in expected {
+            let descriptor = DEFAULT_CATALOG
+                .iter()
+                .find(|descriptor| descriptor.id.0 == id)
+                .unwrap_or_else(|| panic!("{id} must exist in the shared catalog"));
+            let shortcut = descriptor
+                .shortcut
+                .unwrap_or_else(|| panic!("{id} must declare a shortcut"));
+            assert_eq!(
+                shortcut.key, name,
+                "{id}: catalog key disagrees with the macOS table"
+            );
+            assert_eq!(
+                shortcut.modifiers.shift, shift,
+                "{id}: catalog shift modifier disagrees with the macOS table"
+            );
+
+            let key = Key::Character(name.into());
+            assert_eq!(
+                format_command_for(&key, true, shift),
+                Some(want),
+                "{id}: macOS resolves ⌘{}+{} to the wrong FormatCommand",
+                shortcut.key,
+                if shift { "⇧" } else { "" }
+            );
+        }
+    }
+
+    /// Non-⌘ and unmapped keys must resolve to `None` rather than guessing.
+    #[test]
+    fn format_command_for_ignores_non_command_and_unmapped_keys() {
+        use super::{Key, format_command_for};
+        assert_eq!(
+            format_command_for(&Key::Character("b".into()), false, false),
+            None
+        );
+        for key in ["j", "z", "1", " "] {
+            assert_eq!(
+                format_command_for(&Key::Character(key.into()), true, false),
+                None,
+                "{key} must not be bound"
+            );
+        }
+        // Named (non-character) keys never map to a format command.
+        assert_eq!(
+            format_command_for(
+                &Key::Named(iced_winit::winit::keyboard::NamedKey::Enter),
+                true,
+                false
+            ),
+            None
+        );
+    }
+
     #[test]
     fn unknown_conflict_dialog_responses_cancel() {
         use super::{ConflictDialogAction, conflict_dialog_action};
