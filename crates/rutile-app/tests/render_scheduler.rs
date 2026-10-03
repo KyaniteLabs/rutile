@@ -37,6 +37,24 @@ fn debounce_restarts_after_the_latest_edit() {
 }
 
 #[test]
+fn swapping_documents_rejects_old_jobs_even_at_the_same_revision() {
+    let mut scheduler = RenderScheduler::new();
+    scheduler.submit(request(0), 0);
+    let old = scheduler.start_ready(DEBOUNCE_MS).unwrap();
+    scheduler.invalidate_document();
+    scheduler.submit(request(0), 0);
+    let new = scheduler.start_ready(DEBOUNCE_MS).unwrap();
+    assert!(matches!(
+        scheduler.finish(old.execute(), Revision::new(0)),
+        Completion::UnknownJob { .. }
+    ));
+    assert!(matches!(
+        scheduler.finish(new.execute(), Revision::new(0)),
+        Completion::Accepted(_)
+    ));
+}
+
+#[test]
 fn running_job_has_one_replaceable_pending_slot() {
     let mut scheduler = RenderScheduler::new();
     scheduler.submit(request(1), 0);

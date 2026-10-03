@@ -34,6 +34,8 @@ pub const MAX_OPEN_DOCUMENTS: usize = 16;
 /// revision, dirty flag, preview coordination, path, and autosave.
 #[derive(Debug, Clone)]
 pub struct DocumentSlot {
+    pub view: rutile_core::WorkspaceViewState,
+    pub find_bar: Option<crate::document_view::FindBarView>,
     pub revision: Revision,
     pub dirty: bool,
     pub preview: PreviewState,
@@ -49,6 +51,8 @@ pub struct DocumentSlot {
 impl Default for DocumentSlot {
     fn default() -> Self {
         Self {
+            view: rutile_core::WorkspaceViewState::default(),
+            find_bar: None,
             revision: Revision::new(0),
             dirty: false,
             preview: PreviewState::Empty,

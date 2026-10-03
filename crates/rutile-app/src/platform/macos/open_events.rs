@@ -1,9 +1,8 @@
 //! macOS open-event and File-menu delivery through winit's user-event channel.
 //!
-//! winit 0.30.13 registers `WinitApplicationDelegate`; replacing it breaks the
-//! event loop. Second-launch `application:openURLs:` therefore forwards through
-//! [`forward_open_urls`] once URLs are observed (drag/drop, tests, or a future
-//! runtime hook). Cold launch uses CLI args; in-app open uses the panel / File menu.
+//! winit owns `WinitApplicationDelegate`. The native shell adds only its missing
+//! `application:openURLs:` method, preserving winit's lifecycle callbacks. Finder,
+//! drag/drop, recents, and native open controls share [`forward_open_urls`].
 
 use std::sync::{Mutex, OnceLock};
 
@@ -55,8 +54,16 @@ const MASK_CONTROL_COMMAND: isize = (1 << 18) | (1 << 20);
 /// User events delivered to [`ApplicationHandler::user_event`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MacUserEvent {
-    /// One or more file URLs from drag/drop or a future delegate hook.
+    PaletteClose,
+    PaletteActivate {
+        index: usize,
+        query: String,
+    },
+    /// A render completion or preview message needs main-thread processing.
+    Wake,
+    /// One or more file URLs from drag/drop or the AppKit delegate.
     OpenUrls(Vec<String>),
+    OpenRejected(String),
     /// File menu action selected from the `AppKit` menu bar.
     MenuCommand(MacMenuCommand),
 }
@@ -71,6 +78,8 @@ pub enum MacMenuCommand {
     ClearRecents,
     NewTab,
     CloseTab,
+    MoveTabLeft,
+    MoveTabRight,
     /// Switch to the tab at the sender's tag index.
     SwitchTab,
     /// Open the command palette (⇧⌘P).
@@ -88,6 +97,24 @@ pub fn bind_open_proxy(proxy: EventLoopProxy<MacUserEvent>) {
     let _ = OPEN_PROXY.set(proxy);
 }
 
+pub(super) fn wake_event_loop() {
+    if let Some(proxy) = OPEN_PROXY.get() {
+        let _ = proxy.send_event(MacUserEvent::Wake);
+    }
+}
+
+pub(super) fn close_palette() {
+    if let Some(proxy) = OPEN_PROXY.get() {
+        let _ = proxy.send_event(MacUserEvent::PaletteClose);
+    }
+}
+
+pub(super) fn activate_palette_row(index: usize, query: String) {
+    if let Some(proxy) = OPEN_PROXY.get() {
+        let _ = proxy.send_event(MacUserEvent::PaletteActivate { index, query });
+    }
+}
+
 /// Forwards classified open deliveries through the user-event channel.
 pub fn forward_open_urls(urls: Vec<String>) -> Result<(), String> {
     let proxy = OPEN_PROXY
@@ -96,6 +123,12 @@ pub fn forward_open_urls(urls: Vec<String>) -> Result<(), String> {
     proxy
         .send_event(MacUserEvent::OpenUrls(urls))
         .map_err(|error| format!("open proxy send failed: {error:?}"))
+}
+
+pub(super) fn reject_open_delivery(message: &str) {
+    if let Some(proxy) = OPEN_PROXY.get() {
+        let _ = proxy.send_event(MacUserEvent::OpenRejected(message.to_owned()));
+    }
 }
 
 fn forward_menu_command(command: MacMenuCommand) -> Result<(), String> {
@@ -174,6 +207,16 @@ define_class!(
         #[unsafe(method(menuCloseTab:))]
         fn menu_close_tab(&self, _sender: Option<&AnyObject>) {
             dispatch_menu(MacMenuCommand::CloseTab);
+        }
+
+        #[unsafe(method(menuMoveTabLeft:))]
+        fn menu_move_tab_left(&self, _sender: Option<&AnyObject>) {
+            dispatch_menu(MacMenuCommand::MoveTabLeft);
+        }
+
+        #[unsafe(method(menuMoveTabRight:))]
+        fn menu_move_tab_right(&self, _sender: Option<&AnyObject>) {
+            dispatch_menu(MacMenuCommand::MoveTabRight);
         }
 
         #[unsafe(method(menuSwitchTab:))]
@@ -402,6 +445,20 @@ pub fn install_window_menu() -> Result<(), String> {
         close_tab.setAction(Some(sel!(menuCloseTab:)));
     }
     window_menu.addItem(&close_tab);
+
+    for (title, selector) in [
+        ("Move Tab Left", sel!(menuMoveTabLeft:)),
+        ("Move Tab Right", sel!(menuMoveTabRight:)),
+    ] {
+        let item = NSMenuItem::new(mtm);
+        item.setTitle(&NSString::from_str(title));
+        // SAFETY: the retained menu target implements both selectors above.
+        unsafe {
+            item.setTarget(Some(&***target));
+            item.setAction(Some(selector));
+        }
+        window_menu.addItem(&item);
+    }
 
     // Command Palette… (⇧⌘P — capital key equiv adds Shift per AppKit convention).
     let palette = NSMenuItem::new(mtm);

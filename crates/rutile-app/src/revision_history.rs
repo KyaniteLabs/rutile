@@ -15,6 +15,109 @@ use std::collections::VecDeque;
 
 use rutile_types::Revision;
 
+/// Aggregate retained snapshot bytes across the whole workspace. Rope sharing
+/// can use less memory; accounting charges full logical bytes conservatively.
+pub const MAX_HISTORY_BYTES: usize = 64 * 1024 * 1024;
+
+#[derive(Clone)]
+pub struct SnapshotCheckpoint {
+    pub id: u64,
+    pub document_id: rutile_types::DocumentId,
+    pub entry: HistoryEntry,
+    pub snapshot: rutile_core::DocumentSnapshot,
+}
+
+/// Workspace-wide snapshot retention, independent of crash recovery and undo.
+#[derive(Default)]
+pub struct SnapshotHistory {
+    checkpoints: VecDeque<SnapshotCheckpoint>,
+    bytes: usize,
+    next_id: u64,
+}
+
+impl SnapshotHistory {
+    pub fn record(
+        &mut self,
+        document_id: rutile_types::DocumentId,
+        snapshot: rutile_core::DocumentSnapshot,
+        timestamp_ms: u64,
+        source: HistorySource,
+        description: &str,
+    ) -> Result<u64, String> {
+        if let Some(latest) = self
+            .checkpoints
+            .iter_mut()
+            .find(|entry| entry.document_id == document_id)
+            && latest.snapshot.same_content(&snapshot)
+        {
+            latest.entry = HistoryEntry {
+                revision: snapshot.revision,
+                timestamp_ms,
+                description: description.chars().take(120).collect(),
+                source,
+            };
+            latest.snapshot = snapshot;
+            return Ok(latest.id);
+        }
+        let id = self
+            .next_id
+            .checked_add(1)
+            .ok_or("Checkpoint identifiers exhausted")?;
+        let bytes = snapshot.len_bytes();
+        if bytes > MAX_HISTORY_BYTES {
+            return Err("Checkpoint exceeds history budget".into());
+        }
+        while self.checkpoints.len() >= MAX_HISTORY_ENTRIES
+            || self.bytes + bytes > MAX_HISTORY_BYTES
+        {
+            if let Some(old) = self.checkpoints.pop_back() {
+                self.bytes -= old.snapshot.len_bytes();
+            }
+        }
+        self.next_id = id;
+        self.bytes += bytes;
+        self.checkpoints.push_front(SnapshotCheckpoint {
+            id,
+            document_id,
+            entry: HistoryEntry {
+                revision: snapshot.revision,
+                timestamp_ms,
+                description: description.chars().take(120).collect(),
+                source,
+            },
+            snapshot,
+        });
+        Ok(id)
+    }
+
+    pub fn entries(
+        &self,
+        document_id: rutile_types::DocumentId,
+    ) -> impl Iterator<Item = &SnapshotCheckpoint> {
+        self.checkpoints
+            .iter()
+            .filter(move |entry| entry.document_id == document_id)
+    }
+
+    pub fn get(
+        &self,
+        document_id: rutile_types::DocumentId,
+        id: u64,
+    ) -> Option<&SnapshotCheckpoint> {
+        self.entries(document_id).find(|entry| entry.id == id)
+    }
+
+    pub fn remove_document(&mut self, document_id: rutile_types::DocumentId) {
+        self.checkpoints
+            .retain(|entry| entry.document_id != document_id);
+        self.bytes = self
+            .checkpoints
+            .iter()
+            .map(|entry| entry.snapshot.len_bytes())
+            .sum();
+    }
+}
+
 /// Maximum number of history entries retained (bounded).
 pub const MAX_HISTORY_ENTRIES: usize = 100;
 
@@ -124,6 +227,58 @@ impl RevisionHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snapshot_retention_bounds_the_whole_workspace_and_removes_closed_tabs() {
+        let mut history = SnapshotHistory::default();
+        for i in 0..=MAX_HISTORY_ENTRIES {
+            let doc = rutile_core::Document::new(&format!("checkpoint {i}")).unwrap();
+            history
+                .record(
+                    rutile_types::DocumentId::ROOT,
+                    doc.snapshot(),
+                    i as u64,
+                    HistorySource::Manual,
+                    "Manual",
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            history.entries(rutile_types::DocumentId::ROOT).count(),
+            MAX_HISTORY_ENTRIES
+        );
+        assert!(history.get(rutile_types::DocumentId::ROOT, 1).is_none());
+        history.remove_document(rutile_types::DocumentId::ROOT);
+        assert_eq!(history.bytes, 0);
+        for ch in ['a', 'b', 'c', 'd'] {
+            let large =
+                rutile_core::Document::new(&ch.to_string().repeat(rutile_core::MAX_DOCUMENT_BYTES))
+                    .unwrap();
+            let id = history
+                .record(
+                    rutile_types::DocumentId::ROOT,
+                    large.snapshot(),
+                    0,
+                    HistorySource::OnSave,
+                    "Saved",
+                )
+                .unwrap();
+            assert_eq!(
+                history
+                    .record(
+                        rutile_types::DocumentId::ROOT,
+                        large.snapshot(),
+                        1,
+                        HistorySource::OnSave,
+                        "Saved again"
+                    )
+                    .unwrap(),
+                id
+            );
+        }
+        assert_eq!(history.entries(rutile_types::DocumentId::ROOT).count(), 3);
+        assert!(history.bytes <= MAX_HISTORY_BYTES);
+    }
 
     #[test]
     fn new_history_is_empty() {

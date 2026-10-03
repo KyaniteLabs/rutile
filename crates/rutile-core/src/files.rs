@@ -149,45 +149,32 @@ pub struct LocalFileService {
 }
 
 impl LocalFileService {
-    pub const fn new() -> Self {
-        Self {
-            fault: SaveFault::None,
+    /// Resolve the parent directory while preserving the final file name.
+    /// This accepts relative CLI paths and new Save As targets without hiding
+    /// a final-component symlink from the atomic writer's safety checks.
+    pub fn absolute_target(path: &Path) -> Result<PathBuf, FileError> {
+        let name = path.file_name().ok_or(FileError::InvalidTarget)?;
+        let absolute = std::path::absolute(path)?;
+        if absolute
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            Ok(fs::canonicalize(normalized_parent(&absolute))?.join(name))
+        } else {
+            Ok(absolute)
         }
     }
 
-    /// Constructs a deterministic fault-injection service for atomic-save tests.
-    pub const fn with_fault(fault: SaveFault) -> Self {
-        Self { fault }
-    }
-}
-
-impl FileService for LocalFileService {
-    fn load(&self, path: &Path, max: usize) -> Result<LoadedDocument, FileError> {
-        let max = max.min(MAX_DOCUMENT_BYTES);
-        let mut file = File::open(path)?;
-        let read_cap = max.saturating_add(UTF8_BOM.len()).saturating_add(1);
-        let mut bytes = Vec::with_capacity(read_cap.min(64 * 1024));
-        Read::by_ref(&mut file)
-            .take(u64::try_from(read_cap).unwrap_or(u64::MAX))
-            .read_to_end(&mut bytes)?;
-
-        let source = bytes.strip_prefix(UTF8_BOM).unwrap_or(&bytes);
-        if source.len() > max {
-            return Err(FileError::TooLarge { max });
-        }
-        let text = std::str::from_utf8(source).map_err(|_| FileError::InvalidUtf8)?;
-        let document = Document::new(text).map_err(|_| FileError::TooLarge { max })?;
-        let metadata = file.metadata()?;
-        let disk = DiskVersion {
-            digest: blake3::hash(&bytes),
-            modified: metadata.modified()?,
-            len: metadata.len(),
-        };
-
-        Ok(LoadedDocument { document, disk })
+    /// Export uses the same atomic replacement and target protections as Save.
+    pub fn save_export_atomic(&self, path: &Path, page: &crate::ExportPage) -> SaveOutcome {
+        self.save_with_writer(path, |writer| writer.write_all(page.as_html().as_bytes()))
     }
 
-    fn save_atomic(&self, path: &Path, snapshot: &DocumentSnapshot) -> SaveOutcome {
+    fn save_with_writer(
+        &self,
+        path: &Path,
+        write: impl FnOnce(&mut dyn Write) -> io::Result<()>,
+    ) -> SaveOutcome {
         let parent = normalized_parent(path);
         let file_name = match path.file_name() {
             Some(name) => name,
@@ -228,7 +215,7 @@ impl FileService for LocalFileService {
         let mut cleanup = TempCleanup::new(temporary_path.clone());
 
         let mut writer = HashingWriter::new(&mut temporary_file);
-        if let Err(error) = snapshot.write_to(&mut writer) {
+        if let Err(error) = write(&mut writer) {
             return SaveOutcome::NotCommitted {
                 reason: SaveError::Io(error),
             };
@@ -334,6 +321,48 @@ impl FileService for LocalFileService {
                 reason: DurabilityError::Io(error),
             },
         }
+    }
+
+    pub const fn new() -> Self {
+        Self {
+            fault: SaveFault::None,
+        }
+    }
+
+    /// Constructs a deterministic fault-injection service for atomic-save tests.
+    pub const fn with_fault(fault: SaveFault) -> Self {
+        Self { fault }
+    }
+}
+
+impl FileService for LocalFileService {
+    fn load(&self, path: &Path, max: usize) -> Result<LoadedDocument, FileError> {
+        let max = max.min(MAX_DOCUMENT_BYTES);
+        let mut file = File::open(path)?;
+        let read_cap = max.saturating_add(UTF8_BOM.len()).saturating_add(1);
+        let mut bytes = Vec::with_capacity(read_cap.min(64 * 1024));
+        Read::by_ref(&mut file)
+            .take(u64::try_from(read_cap).unwrap_or(u64::MAX))
+            .read_to_end(&mut bytes)?;
+
+        let source = bytes.strip_prefix(UTF8_BOM).unwrap_or(&bytes);
+        if source.len() > max {
+            return Err(FileError::TooLarge { max });
+        }
+        let text = std::str::from_utf8(source).map_err(|_| FileError::InvalidUtf8)?;
+        let document = Document::new(text).map_err(|_| FileError::TooLarge { max })?;
+        let metadata = file.metadata()?;
+        let disk = DiskVersion {
+            digest: blake3::hash(&bytes),
+            modified: metadata.modified()?,
+            len: metadata.len(),
+        };
+
+        Ok(LoadedDocument { document, disk })
+    }
+
+    fn save_atomic(&self, path: &Path, snapshot: &DocumentSnapshot) -> SaveOutcome {
+        self.save_with_writer(path, |writer| snapshot.write_to(writer))
     }
 }
 

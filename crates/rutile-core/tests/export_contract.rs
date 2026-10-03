@@ -243,19 +243,18 @@ fn render_export_page_produces_a_self_contained_themed_document() {
     );
     assert!(html.contains("h1{"), "must style the document title");
     // The geniculated (elbow-bent) signature: a plain gold hairline as the
-    // universal baseline, enhanced to a bent line via a self-contained `data:`
-    // SVG mask wherever CSS masking is supported.
+    // universal baseline, enhanced to a bent line without an image resource.
     assert!(
         html.contains("border-block-end:var(--rule-needle) solid var(--accent)"),
         "must carry the plain-hairline fallback under the title"
     );
     assert!(
-        html.contains("@supports (mask-image:none) or (-webkit-mask-image:none)"),
-        "must gate the geniculated mask behind a masking feature query"
+        html.contains("@supports (clip-path:polygon("),
+        "must gate the geniculated line behind a clipping feature query"
     );
     assert!(
-        html.contains("h1::after") && html.contains("mask-image:url(\"data:image/svg+xml,"),
-        "must draw the geniculated bend via a self-contained data: SVG mask"
+        html.contains("h1::after") && html.contains("clip-path:polygon(") && !html.contains("url("),
+        "must draw the geniculated bend without loading an image"
     );
     assert!(
         html.contains("hr::before"),
@@ -524,4 +523,13 @@ fn export_of_a_normal_document_passes_and_contains_exact_csp() {
         html.contains(&expected),
         "exported document must contain the exact CSP meta; got:\n{html}"
     );
+}
+#[test]
+fn every_public_design_token_affects_the_document_stylesheet() {
+    for token in rutile_core::DESIGN_TOKENS {
+        assert!(
+            rutile_core::DOCUMENT_CSS.contains(&format!("var(--{token}")),
+            "Public design token {token} has no consumer in the document stylesheet"
+        );
+    }
 }

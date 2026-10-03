@@ -1,6 +1,7 @@
 # Outline Navigator (Roadmap 05) — Design Decisions
 
-Status: **locked (contract implemented; native sidebar UI deferred)**. Parent
+Status: **native dialog implemented in both shells; GTK and external macOS
+selection executed. Repeated focus validation remains in progress.** Parent
 issue: `.scratch/rutile-macos-roadmap/issues/05-outline-navigator.md`.
 Blocked by 03 (DONE).
 
@@ -53,14 +54,15 @@ the user scrolls. `next_after`/`prev_before` drive outline-keyboard navigation
 
 ### O7 — Rebuild on render, stale-safe
 
-The outline is rebuilt whenever the renderer accepts a new revision (the shell
-calls `Outline::from_source` with the current source). A heading that no longer
-exists simply disappears on the next rebuild — there is no stale-pointer hazard
-because offsets are recomputed from the same source the renderer used.
+The native navigator calls `Outline::from_source` with the current snapshot
+when opened or filtered. Activation validates that the retained snapshot still
+matches before moving the caret; changed results are rejected.
 
-### O8 — Native sidebar UI deferred
+### O8 — Native bounded navigator
 
-The headless contract (`Outline`, `OutlineEntry`, navigation helpers) is
-implemented and tested here. The visual sidebar (heading tree, click-to-jump,
-active-section highlight, VoiceOver labels) is additive platform work, like the
-visual tab bar and palette panel.
+The command palette opens a native filtered list in each shell. The shared
+`navigation.rs` surface validates document identity, path, revision and snapshot
+contents before installing a source selection and viewport. GTK dialog execution
+and rendered inspection pass; external macOS heading selection also passes.
+A persistent sidebar and active-section highlight
+are separate future UI choices.

@@ -21,6 +21,27 @@ use rutile_core::{
 use rutile_types::{InteractionId, Revision};
 
 #[test]
+fn opening_an_alias_preserves_the_existing_dirty_document() {
+    let directory = std::env::temp_dir().join(format!("rutile-linux-alias-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("original.md");
+    let alias = directory.join("alias.md");
+    std::fs::write(&path, "disk").unwrap();
+    std::os::unix::fs::symlink(&path, &alias).unwrap();
+    let mut session = LinuxProductSession::new().unwrap();
+    session.open(&path, 0).unwrap();
+    session.replace_all("unsaved draft", 10).unwrap();
+    session.open(&alias, 20).unwrap();
+    assert_eq!(session.source(), "unsaved draft");
+    assert_eq!(session.path(), Some(path.as_path()));
+    session.open_via_shared_command(alias, 30);
+    assert_eq!(session.source(), "unsaved draft");
+    assert!(session.dirty());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "disk");
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn format_command_bolds_the_selection_through_the_shared_engine() {
     let mut session = LinuxProductSession::new().unwrap();
     session.replace_all("hello world", 0).unwrap();
@@ -212,7 +233,7 @@ fn product_session_edits_through_the_bounded_renderer_and_stages_preview() {
     let mut session = LinuxProductSession::new().unwrap();
     session.replace_all("# Rutile\n\nHello.", 10).unwrap();
 
-    assert_eq!(session.revision(), 1);
+    assert_eq!(session.revision(), Revision::new(1));
     assert!(session.dirty());
     assert_eq!(session.undo(20).as_deref(), Some(STARTER_DOCUMENT));
     assert_eq!(session.redo(30).as_deref(), Some("# Rutile\n\nHello."));
@@ -223,7 +244,7 @@ fn product_session_edits_through_the_bounded_renderer_and_stages_preview() {
     let NativeRenderOutcome::Navigate { revision, url } = outcome else {
         panic!("the current render must navigate");
     };
-    assert_eq!(revision, 3);
+    assert_eq!(revision, Revision::new(3));
     assert!(url.starts_with("rutile://preview/v1/document/3/"));
     assert_eq!(
         session
@@ -235,7 +256,7 @@ fn product_session_edits_through_the_bounded_renderer_and_stages_preview() {
 }
 
 #[test]
-fn product_session_can_create_save_reopen_and_close() {
+fn product_session_preserves_dirty_duplicate_open_and_can_explicitly_reload() {
     let directory =
         std::env::temp_dir().join(format!("rutile-linux-product-test-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
@@ -248,11 +269,75 @@ fn product_session_can_create_save_reopen_and_close() {
 
     session.replace_all("discarded buffer", 100).unwrap();
     session.open(&path, 200).unwrap();
+    assert_eq!(session.source(), "discarded buffer");
+    assert!(session.dirty());
+    session.reload(201).unwrap();
     assert_eq!(session.source(), "saved from GTK");
     assert!(!session.dirty());
 
     session.close();
     assert!(session.is_closed());
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn stale_same_revision_render_cannot_cross_a_document_open() {
+    let directory = std::env::temp_dir().join(format!(
+        "rutile-linux-render-identity-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let first = directory.join("first.md");
+    let second = directory.join("second.md");
+    std::fs::write(&first, "# First").unwrap();
+    std::fs::write(&second, "# Second").unwrap();
+    let mut session = LinuxProductSession::new().unwrap();
+    session.open(&first, 0).unwrap();
+    let old = session.start_render(100).unwrap();
+    session.open(&second, 101).unwrap();
+    let outcome = session.finish_render(old.execute(), [1; 16]).unwrap();
+    assert!(
+        !matches!(outcome, NativeRenderOutcome::Navigate { .. }),
+        "previous document must not navigate at an equal revision"
+    );
+    assert_eq!(session.source(), "# Second");
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn new_document_refuses_to_replace_a_dirty_buffer() {
+    let mut session = LinuxProductSession::new().unwrap();
+    session.replace_all("unsaved draft", 0).unwrap();
+    assert!(session.new_document(1).is_err());
+    assert_eq!(session.source(), "unsaved draft");
+    assert!(session.dirty());
+}
+
+#[test]
+fn save_without_polling_preserves_external_changes() {
+    let directory = std::env::temp_dir().join(format!(
+        "rutile-linux-save-preflight-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("note.md");
+    std::fs::write(&path, "original").unwrap();
+    let mut session = LinuxProductSession::new().unwrap();
+    session.open(&path, 0).unwrap();
+    session.replace_all("local draft", 1).unwrap();
+    std::fs::write(&path, "external draft").unwrap();
+    assert!(
+        session.save().is_err(),
+        "save must demand a conflict decision"
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "external draft");
+    assert_eq!(session.source(), "local draft");
+    assert!(session.has_external_conflict());
+    session
+        .resolve_external_conflict(ExternalResolution::KeepBuffer, 2)
+        .unwrap();
+    session.save().unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "local draft");
     std::fs::remove_dir_all(directory).unwrap();
 }
 
@@ -341,13 +426,14 @@ fn scroll_sink_script_contains_only_the_typed_delivery() {
 
     let mut host = PreviewHost::new();
     let page = Arc::from(b"<main></main>".as_slice());
-    let render = rutile_protocol::RenderUrl::new(7, [0x22; 16]);
+    let render = rutile_protocol::RenderUrl::new(Revision::new(7), [0x22; 16]);
     let url = format!("rutile://preview{}", render.document_path());
     host.stage_document(render, page).unwrap();
     assert!(host.allow_navigation(&url, rutile_app::preview_host::NavigationKind::AppInitiated));
 
     let mut capture = Capture::default();
-    host.deliver_scroll_to(&mut capture, 7, 12, 9).unwrap();
+    host.deliver_scroll_to(&mut capture, Revision::new(7), 12, InteractionId::new(9))
+        .unwrap();
     let script = capture.0.unwrap();
     assert!(
         script.starts_with(
@@ -360,8 +446,13 @@ fn scroll_sink_script_contains_only_the_typed_delivery() {
 
 #[test]
 fn scroll_controller_owns_revisioned_leases_and_suppresses_echoes() {
-    let mut controller =
-        LinuxScrollController::new(7, 100, [(0, 49, 0), (50, 100, 1)], 41).unwrap();
+    let mut controller = LinuxScrollController::new(
+        Revision::new(7),
+        100,
+        [(0, 49, 0), (50, 100, 1)],
+        InteractionId::new(41),
+    )
+    .unwrap();
     let source = controller
         .source_user(
             60,
@@ -380,7 +471,7 @@ fn scroll_controller_owns_revisioned_leases_and_suppresses_echoes() {
         panic!("source gesture must target preview")
     };
     assert_eq!(source_start, 50);
-    assert_eq!(interaction_id, 41);
+    assert_eq!(interaction_id, InteractionId::new(41));
     assert_eq!(
         controller
             .preview(
@@ -399,7 +490,7 @@ fn scroll_controller_owns_revisioned_leases_and_suppresses_echoes() {
         controller
             .preview(
                 60,
-                999,
+                InteractionId::new(999),
                 true,
                 ScrollClock {
                     monotonic_ms: 200,
@@ -409,9 +500,9 @@ fn scroll_controller_owns_revisioned_leases_and_suppresses_echoes() {
             .unwrap(),
         LinuxScrollDispatch::Source {
             source_start: 50,
-            interaction_id: InteractionId::new(42),
+            interaction_id,
             ..
-        }
+        } if interaction_id == InteractionId::new(42)
     ));
 }
 
@@ -451,8 +542,38 @@ fn gtk_adapter_keeps_one_incremental_mirror_for_one_and_five_mib_edits() {
         assert_eq!(adapter.stats().source_paints, 1);
     }
     assert_gtk_ime_commit_and_stale_preedit();
+    assert_native_replacement_before_acknowledgement();
     assert_generated_source_is_exact_and_read_only();
     assert_programmatic_adjustment_preserves_the_scroll_lease();
+}
+
+fn assert_native_replacement_before_acknowledgement() {
+    let mut document = Document::new("original").unwrap();
+    let buffer = sourceview4::Buffer::builder().max_undo_levels(0).build();
+    let mut adapter = GtkSourceEditorAdapter::new(&buffer);
+    adapter.install_open_snapshot(&document.snapshot()).unwrap();
+    let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let captured = std::rc::Rc::clone(&events);
+    adapter.set_event_sink(Box::new(move |event| captured.borrow_mut().push(event)));
+    buffer.set_text("café");
+    let commits = events.borrow_mut().drain(..).collect::<Vec<_>>();
+    assert_eq!(commits.len(), 2, "GTK replacement emits delete then insert");
+    for event in commits {
+        let EditorEvent::CommitRequested {
+            adapter_commit_id,
+            commit,
+        } = event
+        else {
+            panic!("expected native edit");
+        };
+        let change = apply_editor_commit(&mut document, adapter_commit_id, commit).unwrap();
+        adapter
+            .acknowledge_local_commit(adapter_commit_id, &change)
+            .unwrap();
+    }
+    assert_eq!(document.snapshot().to_string(), "café");
+    assert_eq!(adapter.stats().full_snapshot_installs, 1);
+    assert_eq!(adapter.stats().acknowledgements, 2);
 }
 
 fn assert_programmatic_adjustment_preserves_the_scroll_lease() {
@@ -486,12 +607,17 @@ fn assert_programmatic_adjustment_preserves_the_scroll_lease() {
             }
         });
 
-    let mut controller =
-        LinuxScrollController::new(0, document.len_bytes(), [(0, 4, 0), (5, 105, 1)], 41).unwrap();
+    let mut controller = LinuxScrollController::new(
+        Revision::new(0),
+        document.len_bytes(),
+        [(0, 4, 0), (5, 105, 1)],
+        InteractionId::new(41),
+    )
+    .unwrap();
     let LinuxScrollDispatch::Source { interaction_id, .. } = controller
         .preview(
             50,
-            999,
+            InteractionId::new(999),
             true,
             ScrollClock {
                 monotonic_ms: 1,
@@ -504,7 +630,7 @@ fn assert_programmatic_adjustment_preserves_the_scroll_lease() {
     };
     adapter
         .borrow_mut()
-        .scroll_to_byte(0, 50, interaction_id)
+        .scroll_to_byte(Revision::new(0), 50, interaction_id)
         .unwrap();
     scrolled
         .vadjustment()
@@ -526,7 +652,7 @@ fn assert_programmatic_adjustment_preserves_the_scroll_lease() {
             .unwrap(),
         LinuxScrollDispatch::Suppressed
     );
-    assert_eq!(controller.next_interaction_id(), 42);
+    assert_eq!(controller.next_interaction_id(), InteractionId::new(42));
     window.close();
 }
 

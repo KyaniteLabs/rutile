@@ -67,6 +67,24 @@ pub const fn split_panes(width: u32, height: u32) -> PaneBounds {
     }
 }
 
+pub const fn mode_panes(width: u32, height: u32, mode: crate::app::DocumentMode) -> PaneBounds {
+    match mode {
+        crate::app::DocumentMode::Split => split_panes(width, height),
+        crate::app::DocumentMode::Edit => PaneBounds {
+            source_width: width,
+            preview_x: width,
+            preview_width: 0,
+            height,
+        },
+        crate::app::DocumentMode::View => PaneBounds {
+            source_width: 0,
+            preview_x: 0,
+            preview_width: width,
+            height,
+        },
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct PreviewIpcStats {
     pub accepted: u64,
@@ -451,6 +469,7 @@ impl MacRenderWorker {
                     if completion_tx.send(permit.execute()).is_err() {
                         break;
                     }
+                    open_events::wake_event_loop();
                 }
             })
             .expect("macos render worker thread must start");
@@ -502,6 +521,7 @@ pub struct ProductSession {
     recovered_path: Option<PathBuf>,
     /// Monotonic clock for scheduler debounce (ms since an arbitrary origin).
     render_clock_ms: u64,
+    workspace_autosave: crate::recovery::WorkspaceAutosave,
 }
 
 impl ProductSession {
@@ -511,8 +531,9 @@ impl ProductSession {
     }
 
     pub fn open(path: &Path) -> Result<Self, MacError> {
-        let loaded = LocalFileService::new().load(path, MAX_DOCUMENT_BYTES)?;
-        Self::from_document(loaded.document, Some((path.to_path_buf(), loaded.disk)))
+        let path = LocalFileService::absolute_target(path)?;
+        let loaded = LocalFileService::new().load(&path, MAX_DOCUMENT_BYTES)?;
+        Self::from_document(loaded.document, Some((path, loaded.disk)))
     }
 
     fn from_document(
@@ -541,6 +562,7 @@ impl ProductSession {
             next_scroll_interaction_id: InteractionId::new(1),
             recovered_path: None,
             render_clock_ms: 0,
+            workspace_autosave: crate::recovery::WorkspaceAutosave::default(),
         };
         session.queue_current();
         Ok(session)
@@ -749,6 +771,9 @@ impl ProductSession {
     /// Recoverable save failures reduce `SaveFailed` and return `Err` without
     /// clearing dirty state (MAC-001).
     pub fn request_save(&mut self) -> Result<MacSaveAction, MacError> {
+        if self.core.dirty() {
+            self.ensure_no_external_conflict_before_save()?;
+        }
         let effects = self.core.reduce(AppMessage::SaveRequested);
         let mut action = MacSaveAction::Noop;
         for effect in effects {
@@ -777,6 +802,12 @@ impl ProductSession {
     /// rebind or unexpected dirty-decline), we still atomically save to
     /// honor the explicit user request (L11).
     pub fn request_save_as(&mut self, path: PathBuf) -> Result<(), MacError> {
+        let path = LocalFileService::absolute_target(&path)?;
+        if crate::file_effects::open_document_at(&self.core, &path)
+            == Some(self.core.app().documents().active_id())
+        {
+            self.ensure_no_external_conflict_before_save()?;
+        }
         let effects = self
             .core
             .app_mut()
@@ -795,6 +826,14 @@ impl ProductSession {
     }
 
     fn perform_save_effect(&mut self, path: &Path) -> Result<(), MacError> {
+        if crate::file_effects::open_document_at(&self.core, path)
+            .is_some_and(|id| id != self.core.app().documents().active_id())
+        {
+            return Err(MacError::Core(
+                "This file is already open in another tab; choose a different Save As target"
+                    .into(),
+            ));
+        }
         let outcome = LocalFileService::new().save_atomic(path, &self.core.document().snapshot());
         let revision = self.core.document().revision();
         let path_buf = path.to_path_buf();
@@ -805,6 +844,17 @@ impl ProductSession {
                     path: path_buf,
                     disk,
                 });
+                if let Err(error) = crate::file_effects::record_checkpoint(
+                    &mut self.core,
+                    crate::revision_history::HistorySource::OnSave,
+                    "Saved",
+                ) {
+                    self.core.surface_notice(
+                        NoticeSeverity::Warning,
+                        "Saved, but history checkpoint failed",
+                        error,
+                    );
+                }
                 Ok(())
             }
             rutile_core::SaveOutcome::CommittedDurabilityUnknown { disk, .. } => {
@@ -824,17 +874,20 @@ impl ProductSession {
     }
 
     pub fn reload(&mut self) -> Result<(), MacError> {
-        let path = self
-            .core
-            .app()
-            .path()
-            .map(Path::to_path_buf)
-            .ok_or(MacError::MissingSavePath)?;
-        self.open_document_path(path)
+        crate::file_effects::reload_current(&mut self.core).map_err(MacError::Core)?;
+        self.refresh_preview();
+        Ok(())
     }
 
     /// Wave 2-B: `OpenDocument` → `PerformOpen` → `OpenRequestCompleted`.
     pub fn open_document_path(&mut self, path: PathBuf) -> Result<(), MacError> {
+        let path = LocalFileService::absolute_target(&path)?;
+        let existing = crate::file_effects::open_document_at(&self.core, &path);
+        if let Some(id) = existing {
+            self.core.reduce(AppMessage::SwitchTab { id });
+            self.refresh_preview();
+            return Ok(());
+        }
         let _generation = self.core.begin_open();
         let effects = self.core.reduce(AppMessage::OpenDocument { path });
         self.apply_open_effects(effects)
@@ -851,13 +904,20 @@ impl ProductSession {
             return MacOpenRequest::UnsupportedMulti { count: urls.len() };
         }
         let raw = &urls[0];
-        let path = if let Some(rest) = raw.strip_prefix("file://") {
-            // Percent-decode minimal form: path portion only, no host.
-            let decoded = percent_decode_path(rest);
-            PathBuf::from(decoded)
+        let path = if raw.starts_with("file:") {
+            let Some(path) = url::Url::parse(raw)
+                .ok()
+                .filter(|url| url.query().is_none() && url.fragment().is_none())
+                .and_then(|url| url.to_file_path().ok())
+            else {
+                return MacOpenRequest::Malformed {
+                    reason: "invalid or non-local file URL".into(),
+                };
+            };
+            path
         } else if raw.contains("://") {
             return MacOpenRequest::Malformed {
-                reason: format!("unsupported URL scheme: {raw}"),
+                reason: "unsupported URL scheme".into(),
             };
         } else {
             PathBuf::from(raw)
@@ -911,7 +971,7 @@ impl ProductSession {
                         .map_err(|error| error.to_string());
                     match result {
                         Ok((_revision, path, disk, document)) => {
-                            self.scheduler = RenderScheduler::new();
+                            self.scheduler.invalidate_document();
                             self.scroll = None;
                             let complete = self.core.adopt_opened_document(document, path, disk);
                             for effect in complete {
@@ -942,6 +1002,9 @@ impl ProductSession {
 
     /// Wave 2-B close path: `CloseRequested` → save / quit effects.
     pub fn request_close(&mut self, decision: CloseDecision) -> Result<CloseOutcome, MacError> {
+        if matches!(decision, CloseDecision::Save { .. }) && self.core.dirty() {
+            self.ensure_no_external_conflict_before_save()?;
+        }
         if !self.core.app().dirty() && matches!(decision, CloseDecision::Cancel) {
             return Ok(CloseOutcome::KeepOpen);
         }
@@ -993,7 +1056,7 @@ impl ProductSession {
         )? {
             ExternalChange::Unchanged => Ok(MacExternalOutcome::Unchanged),
             ExternalChange::Reloaded(loaded) => {
-                self.scheduler = RenderScheduler::new();
+                self.scheduler.invalidate_document();
                 self.scroll = None;
                 let revision = loaded.document.revision();
                 for effect in self
@@ -1033,15 +1096,31 @@ impl ProductSession {
         &mut self,
         resolution: ExternalResolution,
     ) -> Result<(), MacError> {
+        if let ExternalResolution::SaveBufferAs(path) = &resolution {
+            let path = LocalFileService::absolute_target(path)?;
+            if crate::file_effects::open_document_at(&self.core, &path).is_some() {
+                return Err(MacError::Core(
+                    "Save a Copy needs a different file that is not open in Rutile".into(),
+                ));
+            }
+        }
+        let conflict = self.core.app().external_conflict().cloned();
         for effect in self
             .core
             .app_mut()
             .reduce(AppMessage::ResolveExternalConflict(resolution))
         {
-            match effect {
-                AppEffect::ReloadExternal { path } => self.open_document_path(path)?,
-                AppEffect::SaveExternalAs { path } => self.request_save_as(path)?,
-                _ => {}
+            let result = match effect {
+                AppEffect::ReloadExternal { .. } => self.reload(),
+                AppEffect::SaveExternalAs { path } => self.request_save_as(path),
+                _ => Ok(()),
+            };
+            if let Err(error) = result {
+                if let Some(disk) = conflict {
+                    self.core
+                        .reduce(AppMessage::ExternalConflictDetected { disk });
+                }
+                return Err(error);
             }
         }
         Ok(())
@@ -1096,6 +1175,14 @@ impl ProductSession {
         selection: Selection,
         command: FormatCommand,
     ) -> Result<FormatApplied, MacError> {
+        if !matches!(command, FormatCommand::SmartEnter) {
+            crate::file_effects::record_checkpoint(
+                &mut self.core,
+                crate::revision_history::HistorySource::BeforeBulk,
+                "Before format",
+            )
+            .map_err(MacError::Core)?;
+        }
         let applied = {
             let (app, document) = self.core.app_and_document_mut();
             app.apply_format_command(document, selection, command)
@@ -1161,6 +1248,12 @@ impl ProductSession {
     /// Replaces every match of the session's query, re-queuing a render when it
     /// edited.
     pub fn replace_all(&mut self, replacement: String) -> Result<ReplaceApplied, MacError> {
+        crate::file_effects::record_checkpoint(
+            &mut self.core,
+            crate::revision_history::HistorySource::BeforeBulk,
+            "Before replace all",
+        )
+        .map_err(MacError::Core)?;
         let applied = {
             let (app, document) = self.core.app_and_document_mut();
             app.replace_all(document, replacement)
@@ -1183,6 +1276,12 @@ impl ProductSession {
         selection: Selection,
         text: &str,
     ) -> Result<InsertApplied, MacError> {
+        crate::file_effects::record_checkpoint(
+            &mut self.core,
+            crate::revision_history::HistorySource::BeforeBulk,
+            "Before paste",
+        )
+        .map_err(MacError::Core)?;
         let applied = {
             let (app, document) = self.core.app_and_document_mut();
             app.insert_text(document, selection, text)
@@ -1204,7 +1303,7 @@ impl ProductSession {
     /// Writes the self-contained export page to `path`.
     pub fn save_html_as(&self, path: &Path) -> Result<(), MacError> {
         let output = self.export_html()?;
-        std::fs::write(path, output.html).map_err(|error| MacError::Native(error.to_string()))
+        crate::file_effects::save_html(&self.core, path, output.html).map_err(MacError::Core)
     }
 
     /// Live word/character/reading-time counts for the status bar.
@@ -1239,6 +1338,45 @@ impl ProductSession {
             .map_err(|error| MacError::Core(error.to_string()))
     }
 
+    pub fn checkpoint_workspace(
+        &mut self,
+        timestamp: u64,
+        clean_exit: bool,
+    ) -> Result<(), MacError> {
+        self.workspace_autosave
+            .checkpoint(&self.core, timestamp, clean_exit)
+            .map_err(MacError::Core)
+    }
+
+    pub fn start_workspace_autosave(&mut self, timestamp: u64) -> Result<(), MacError> {
+        self.workspace_autosave
+            .start(&self.core, timestamp)
+            .map_err(MacError::Core)
+    }
+
+    pub fn recover_workspace(&self) -> Result<Option<rutile_core::RecoveredWorkspace>, MacError> {
+        self.core.app().autosave_store().map_or(Ok(None), |store| {
+            store
+                .recover_workspace()
+                .map_err(|error| MacError::Core(error.to_string()))
+        })
+    }
+
+    pub fn adopt_workspace(
+        &mut self,
+        workspace: &rutile_core::RecoveredWorkspace,
+        preserve_opened_document: bool,
+    ) -> Result<(), MacError> {
+        let notices =
+            crate::recovery::restore_workspace(&mut self.core, workspace, preserve_opened_document)
+                .map_err(MacError::Core)?;
+        self.refresh_preview();
+        for message in notices {
+            self.report_recovery_failure(message);
+        }
+        Ok(())
+    }
+
     /// The original path of the last adopted recovered document, if it had one
     /// (a save-panel default hint after recovery).
     pub fn recovered_path(&self) -> Option<&Path> {
@@ -1252,22 +1390,21 @@ impl ProductSession {
     pub fn adopt_recovered(&mut self, recovered: RecoveredDocument) -> Result<(), MacError> {
         let hint = recovered.entry.document_path.clone().map(PathBuf::from);
         let text = recovered.document.snapshot().to_string();
-        self.scheduler = RenderScheduler::new();
+        self.scheduler.invalidate_document();
         self.scroll = None;
         self.recovered_path = hint;
-        for effect in self.core.reduce(AppMessage::RecoveryAdopted {
+        self.core.reduce(AppMessage::RecoveryAdopted {
             document: recovered,
-        }) {
-            if let AppEffect::ScheduleRender { .. } = effect {
-                self.queue_current();
-            }
-        }
+        });
         self.core
             .set_document(Document::new(&text).map_err(|error| MacError::Core(error.to_string()))?);
         // Sync the AppState slot to the fresh document's revision (0) so
         // subsequent edits aren't rejected as stale by the reducer guard.
         let fresh_revision = self.core.document().revision();
         self.core.app_mut().sync_active_revision(fresh_revision);
+        // Submit only after the recovered rope is installed: both the old
+        // starter document and recovery may have revision zero.
+        self.queue_current();
         Ok(())
     }
 
@@ -1284,9 +1421,33 @@ impl ProductSession {
         &mut self,
         restore: &SessionRestore,
     ) -> Result<MacRestoreReport, MacError> {
+        self.apply_session_restore_parts(restore, true)
+    }
+
+    pub fn apply_session_metadata(
+        &mut self,
+        restore: &SessionRestore,
+    ) -> Result<MacRestoreReport, MacError> {
+        self.apply_session_restore_parts(restore, false)
+    }
+
+    fn apply_session_restore_parts(
+        &mut self,
+        restore: &SessionRestore,
+        restore_files: bool,
+    ) -> Result<MacRestoreReport, MacError> {
         let mut report = MacRestoreReport::default();
         let effects = self.core.reduce(AppMessage::SessionRestored {
             state: SessionStateV1 {
+                open_tabs: restore
+                    .open_tabs
+                    .iter()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .collect(),
+                active_tab: restore
+                    .active_tab
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().into_owned()),
                 schema: rutile_core::SESSION_SCHEMA_V1.to_owned(),
                 v: 1,
                 saved_at_unix_ms: 0,
@@ -1302,19 +1463,14 @@ impl ProductSession {
                     }),
                 top_visible_byte: restore.top_visible_byte.map(|b| b as u64),
                 window: restore.window,
-                recent_files: restore
-                    .last_file
-                    .as_ref()
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .into_iter()
-                    .collect(),
+                recent_files: restore.recent_files.clone(),
             },
         });
-        for effect in effects {
+        for effect in effects.into_iter().filter(|_| restore_files) {
             if let AppEffect::PerformOpen { path } = effect {
                 match LocalFileService::new().load(&path, MAX_DOCUMENT_BYTES) {
                     Ok(loaded) => {
-                        self.scheduler = RenderScheduler::new();
+                        self.scheduler.invalidate_document();
                         self.scroll = None;
                         let complete =
                             self.core
@@ -1342,10 +1498,33 @@ impl ProductSession {
             }
         }
 
+        if restore_files
+            && let Some(path) = restore.active_tab.as_ref().or(restore.last_file.as_ref())
+            && let Some(id) = self.core.app().documents().find_by_path(path)
+        {
+            self.core.reduce(AppMessage::SwitchTab { id });
+            self.refresh_preview();
+        }
+        // Selection / viewport belong only to the requested active document.
+        let active_restored =
+            (!restore_files && restore.last_file.is_none() && self.core.path().is_none())
+                || restore
+                    .active_tab
+                    .as_ref()
+                    .or(restore.last_file.as_ref())
+                    .is_some_and(|path| self.core.path() == Some(path.as_path()));
+        if !active_restored {
+            return Ok(report);
+        }
         // Selection / viewport are advisory and validated against the loaded doc.
+        let restored_text = self.core.snapshot().to_string();
         if let Some(selection) = restore.selection {
             let len = self.core.document().len_bytes();
-            if selection.anchor <= len && selection.head <= len {
+            if selection.anchor <= len
+                && selection.head <= len
+                && restored_text.is_char_boundary(selection.anchor)
+                && restored_text.is_char_boundary(selection.head)
+            {
                 report.selection_applied = true;
             } else {
                 report.notices.push(self.push_degraded_notice(
@@ -1356,7 +1535,7 @@ impl ProductSession {
         }
         if let Some(top) = restore.top_visible_byte {
             let len = self.core.document().len_bytes();
-            if top <= len {
+            if top <= len && restored_text.is_char_boundary(top) {
                 report.viewport_applied = true;
             } else {
                 report.notices.push(self.push_degraded_notice(
@@ -1425,6 +1604,10 @@ impl ProductSession {
             return Ok(true);
         }
         Ok(false)
+    }
+
+    pub(crate) fn has_pending_render(&self) -> bool {
+        self.scheduler.pending_revision().is_some()
     }
 
     /// Poll the background worker; discard stale completions (MAC-007).
@@ -1541,13 +1724,20 @@ impl ProductSession {
         self.core.app().restore_session(state)
     }
 
+    /// A tab swap may have the same revision number but different contents.
+    /// Reset scheduling identity before submitting the newly active document.
+    pub fn refresh_preview(&mut self) {
+        self.scheduler.invalidate_document();
+        self.scroll = None;
+        self.queue_current();
+    }
+
     fn queue_current(&mut self) {
         // Sync the tasteroll content context so TasteRoll uses the current
         // document's seed/type. This is the single chokepoint for all edits.
         let text = self.core.document().snapshot().to_string();
         self.core.app_mut().set_content_context(&text);
-        // L14: sync tasteroll CSS to the preview host so it's injected into
-        // every preview HTML response.
+        // Sync design overrides to the CSP-authorized preview stylesheet.
         if let Ok(mut host) = self.preview_host.lock() {
             host.set_tasteroll_css(self.core.app().taste().css());
         }
@@ -1619,8 +1809,11 @@ mod accessibility;
 mod clipboard;
 #[allow(clippy::pedantic, clippy::nursery)]
 mod editor;
+mod history;
 #[allow(clippy::pedantic, clippy::nursery)]
 mod native;
+mod navigation;
+mod open_delegate;
 #[allow(clippy::pedantic, clippy::nursery)]
 mod open_events;
 #[allow(clippy::pedantic, clippy::nursery)]
@@ -1635,13 +1828,3 @@ pub use open_events::{
     update_recent_documents, update_tabs,
 };
 pub(crate) use palette_panel::sync_palette_panel;
-
-fn percent_decode_path(segment: &str) -> String {
-    url::Url::parse(&format!("file://{segment}"))
-        .ok()
-        .and_then(|url| url.to_file_path().ok())
-        .map_or_else(
-            || segment.to_owned(),
-            |path| path.to_string_lossy().into_owned(),
-        )
-}

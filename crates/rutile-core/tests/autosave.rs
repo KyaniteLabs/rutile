@@ -154,6 +154,38 @@ fn oversize_journal_is_rejected_pre_allocation() {
 }
 
 #[test]
+fn damaged_journal_survives_write_retries_and_recovery() {
+    for damaged_tail in [b"not json\n".as_slice(), b"{\"sequence\":999"] {
+        let dir = TestDir::new("damaged-retry");
+        let store = AutosaveStore::new(dir.0.clone());
+        for tick in 0..rutile_core::AUTOSAVE_RETENTION {
+            store.record(&snap("committed"), None, tick as u64).unwrap();
+        }
+        let journal_path = dir.0.join(rutile_core::AUTOSAVE_JOURNAL_FILE);
+        let mut journal = fs::read(&journal_path).unwrap();
+        journal.extend_from_slice(damaged_tail);
+        fs::write(&journal_path, &journal).unwrap();
+        let protected = dir.0.join("autosave-999.md");
+        fs::write(&protected, "unsaved Unicode: 🪶").unwrap();
+
+        for _ in 0..3 {
+            assert!(store.record(&snap("new edit"), None, 100).is_err());
+            assert_eq!(fs::read(&journal_path).unwrap(), journal);
+            let report = store.recover().unwrap();
+            assert!(!report.rejected.is_empty());
+            assert_eq!(
+                report.recovered.unwrap().document.snapshot().to_string(),
+                "committed"
+            );
+            assert_eq!(
+                fs::read_to_string(&protected).unwrap(),
+                "unsaved Unicode: 🪶"
+            );
+        }
+    }
+}
+
+#[test]
 fn oversize_session_state_is_rejected_pre_allocation() {
     let dir = TestDir::new("oversize-session");
     let store = AutosaveStore::new(dir.0.clone());
@@ -190,6 +222,8 @@ fn relative_and_nul_paths_are_rejected() {
         v: 1,
         saved_at_unix_ms: 1,
         last_file: Some("relative.md".to_owned()),
+        open_tabs: Vec::new(),
+        active_tab: None,
         selection: None,
         top_visible_byte: None,
         window: None,
@@ -206,6 +240,8 @@ fn relative_and_nul_paths_are_rejected() {
         v: 1,
         saved_at_unix_ms: 1,
         last_file: Some("/valid.md".to_owned()),
+        open_tabs: Vec::new(),
+        active_tab: None,
         selection: None,
         top_visible_byte: None,
         window: None,

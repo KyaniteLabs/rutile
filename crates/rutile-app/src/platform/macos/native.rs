@@ -25,8 +25,7 @@ use objc2_app_kit::{
 use objc2_foundation::NSString;
 use rutile_core::{
     ChangeSet, CompositionCancelReason, Counts, EditorAdapter, EditorEvent, FindDirection,
-    FindQuery, FormatCommand, MatchMode, RecoveredDocument, ScrollClock, Selection,
-    SessionWindowV1, html_to_markdown,
+    FindQuery, FormatCommand, MatchMode, ScrollClock, Selection, SessionWindowV1, html_to_markdown,
 };
 use rutile_protocol::{PreviewEventV1, ProtocolError};
 use winit::application::ApplicationHandler;
@@ -44,12 +43,14 @@ use super::{
     AppKitMainThread, AxUiState, EditorVisualReceipt, IcedEditorAdapter, MacError,
     MacExternalOutcome, MacMenuCommand, MacSaveAction, MacScrollDispatch, MacUserEvent,
     PreviewIpcFatal, PreviewIpcIngress, ProductSession, bind_open_proxy, forward_open_urls,
-    install_file_menu_with_actions, install_view_menu, install_window_menu, preview_ipc_channel,
-    split_panes, sync_palette_panel, take_pending_switch, update_recent_documents, update_tabs,
+    install_file_menu_with_actions, install_view_menu, install_window_menu, mode_panes,
+    preview_ipc_channel, sync_palette_panel, take_pending_switch, update_recent_documents,
+    update_tabs,
 };
 use crate::actions::SessionRestore;
-use crate::app::{AppEffect, AppMessage, CloseDecision, CloseOutcome, UserNotice};
+use crate::app::{AppEffect, AppMessage, CloseDecision, CloseOutcome, NoticeSeverity, UserNotice};
 use crate::brand::{PRODUCT_NAME, SOURCE_EDITOR_LABEL, STARTER_DOCUMENT, status_title};
+use crate::document_view::{FindBarView, FindField};
 use crate::preview_host::{
     HostError, NavigationKind, PreviewControlSink, PreviewHost, SchemeRequest, SchemeResponse,
     ScrollDelivery,
@@ -67,6 +68,8 @@ const SMOKE_LIFECYCLE_CYCLES: u64 = 50;
 const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(5);
 /// Debounced disk-version polling for external-change detection (MAC-005).
 const DISK_POLL_INTERVAL: Duration = Duration::from_secs(2);
+
+use crate::recovery::PendingRecovery;
 
 // ---------------------------------------------------------------------------
 // DESIGN-SYSTEM.md "specimen case" app-chrome tokens (committed 2026-07-10).
@@ -95,6 +98,7 @@ pub(super) fn run_native(path: Option<PathBuf>, smoke: bool) -> Result<(), MacEr
     if smoke {
         eprintln!("SMOKE_TRACE stage=0 event=launch");
     }
+    let restore_previous_session = path.is_none();
     let session = match path {
         Some(path) => ProductSession::open(&path)?,
         None => ProductSession::new_in_memory(STARTER_DOCUMENT)?,
@@ -103,15 +107,33 @@ pub(super) fn run_native(path: Option<PathBuf>, smoke: bool) -> Result<(), MacEr
         .build()
         .map_err(|error| MacError::Native(error.to_string()))?;
     bind_open_proxy(event_loop.create_proxy());
+    super::open_delegate::install().map_err(MacError::Native)?;
+    #[cfg(feature = "test-control")]
+    if std::env::var_os("RUTILE_TEST_STATE_DIR").is_some()
+        && let Some(path) = std::env::var_os("RUTILE_TEST_OPEN_DELEGATE_PATH")
+    {
+        super::open_delegate::exercise(Path::new(&path)).map_err(MacError::Native)?;
+    }
     let display_handle = event_loop.owned_display_handle();
-    let mut runner = ProductRunner::new(session, smoke, display_handle)?;
+    let mut runner = ProductRunner::new(session, smoke, display_handle, restore_previous_session)?;
+    #[cfg(feature = "test-control")]
+    if std::env::var_os("RUTILE_TEST_STATE_DIR").is_some() {
+        eprintln!("NATIVE_TRACE runner-ready");
+    }
     event_loop
         .run_app(&mut runner)
         .map_err(|error| MacError::Native(error.to_string()))?;
     runner.finish()
 }
 
+#[cfg(feature = "test-control")]
+mod operator_probe;
+#[cfg(feature = "test-control")]
+mod recovery_probe;
+
 struct ProductRunner {
+    #[cfg(feature = "test-control")]
+    recovery_probe: Option<recovery_probe::RecoveryProbe>,
     webview: Option<WebView>,
     web_context: Option<WebContext>,
     window: Option<Arc<Window>>,
@@ -131,6 +153,7 @@ struct ProductRunner {
     modifiers: ModifiersState,
     smoke: bool,
     smoke_stage: u8,
+    smoke_palette_ready_at: Option<Instant>,
     smoke_path: Option<PathBuf>,
     deadline: Instant,
     failure: Option<String>,
@@ -147,10 +170,15 @@ struct ProductRunner {
     compositor_resume_cycles: u64,
     // Wave 2M shell-integration state.
     find_bar: Option<FindBarView>,
+    displayed_document: (rutile_types::DocumentId, Option<PathBuf>),
     format_commands: Arc<Mutex<VecDeque<FormatCommand>>>,
     tab_commands: Arc<Mutex<VecDeque<TabStripCommand>>>,
     last_autosave: Instant,
-    pending_recovery: Option<RecoveredDocument>,
+    pending_recovery: Option<PendingRecovery>,
+    preserve_opened_document: bool,
+    restore_files_from_session: bool,
+    recovery_read_failed: bool,
+    _workspace_lease: Option<rutile_core::WorkspaceRecoveryLease>,
     pending_restore: Option<SessionRestore>,
     /// Deferred crash-recovery notice captured in the constructor (before the
     /// event loop / window exist), drained into the durable notice reducer once
@@ -168,6 +196,7 @@ impl ProductRunner {
         mut session: ProductSession,
         smoke: bool,
         display_handle: OwnedDisplayHandle,
+        restore_previous_session: bool,
     ) -> Result<Self, MacError> {
         let snapshot = session.snapshot();
         let preview_host = session.preview_host();
@@ -195,6 +224,9 @@ impl ProductRunner {
         // The happy path — recover() Ok(None) first-run — stays silent.
         let mut pending_recovery = None;
         let mut pending_restore = None;
+        let mut restore_files_from_session = true;
+        let mut recovery_read_failed = false;
+        let mut workspace_lease = None;
         let mut pending_recovery_notice = None;
         if !smoke {
             let mut create_dir_or_bind_err: Option<String> = None;
@@ -205,32 +237,57 @@ impl ProductRunner {
                 if let Err(error) = std::fs::create_dir_all(&dir) {
                     create_dir_or_bind_err =
                         Some(format!("could not create autosave dir: {error}"));
+                } else if let Err(error) = rutile_core::AutosaveStore::new(dir.clone())
+                    .acquire_workspace_lease()
+                    .map(|lease| workspace_lease = Some(lease))
+                {
+                    create_dir_or_bind_err =
+                        Some(format!("Recovery store is in use or unavailable: {error}"));
                 } else if let Err(error) = session.bind_autosave(dir) {
                     create_dir_or_bind_err = Some(format!("autosave bind failed: {error}"));
                 } else {
                     // Offer recovery only when the journal holds content that
                     // differs from what actually loaded (otherwise every clean
                     // restart would prompt).
-                    match session.recover() {
-                        Ok(Some(recovered))
-                            if recovered.document.snapshot().to_string() != session.source() =>
-                        {
-                            pending_recovery = Some(recovered);
-                            recover_found = true;
+                    let workspace_exists = match session.recover_workspace() {
+                        Ok(Some(workspace)) => {
+                            if workspace.has_unsaved_changes() || restore_previous_session {
+                                recover_found = workspace.has_unsaved_changes();
+                                pending_recovery = Some(PendingRecovery::Workspace(workspace));
+                            }
+                            true
                         }
-                        Ok(_) => {}
-                        Err(error) => recover_err = Some(error.to_string()),
+                        Ok(None) => false,
+                        Err(error) => {
+                            recover_err = Some(error.to_string());
+                            true
+                        }
+                    };
+                    restore_files_from_session = !workspace_exists;
+                    if !workspace_exists {
+                        match session.recover() {
+                            Ok(Some(recovered))
+                                if recovered.document.snapshot().to_string()
+                                    != session.source() =>
+                            {
+                                pending_recovery = Some(PendingRecovery::Legacy(recovered));
+                                recover_found = true;
+                            }
+                            Ok(_) => {}
+                            Err(error) => recover_err = Some(error.to_string()),
+                        }
                     }
                     // Session restore runs independently of recovery outcome.
                     match session.load_session_state() {
-                        Ok(Some(state)) => {
+                        Ok(Some(state)) if restore_previous_session => {
                             pending_restore = Some(session.restore_session(&state));
                         }
-                        Ok(None) => {}
+                        Ok(_) => {}
                         Err(error) => load_session_err = Some(error.to_string()),
                     }
                 }
             }
+            recovery_read_failed = recover_err.is_some();
             let recover_result = match (recover_found, recover_err.as_deref()) {
                 (_, Some(e)) => Err(e),
                 (true, None) => Ok(Some("recovered")),
@@ -254,6 +311,10 @@ impl ProductRunner {
             };
         }
 
+        let displayed_document = (
+            session.app_state().documents().active_id(),
+            session.path().map(Path::to_path_buf),
+        );
         Ok(Self {
             webview: None,
             last_ax_hash: None,
@@ -271,6 +332,9 @@ impl ProductRunner {
             modifiers: ModifiersState::empty(),
             smoke,
             smoke_stage: 0,
+            smoke_palette_ready_at: None,
+            #[cfg(feature = "test-control")]
+            recovery_probe: recovery_probe::RecoveryProbe::from_env()?,
             smoke_path: smoke.then(|| {
                 std::env::temp_dir().join(format!("rutile-native-smoke-{}.md", std::process::id()))
             }),
@@ -288,10 +352,15 @@ impl ProductRunner {
             visibility_cycles: 0,
             compositor_resume_cycles: 0,
             find_bar: None,
+            displayed_document,
             format_commands,
             tab_commands,
             last_autosave: Instant::now(),
             pending_recovery,
+            preserve_opened_document: !restore_previous_session,
+            restore_files_from_session,
+            recovery_read_failed,
+            _workspace_lease: workspace_lease,
             pending_restore,
             pending_recovery_notice,
             autosave_notice_shown: false,
@@ -324,17 +393,87 @@ impl ProductRunner {
         &mut self,
         event_loop: &ActiveEventLoop,
     ) -> Result<(), MacError> {
+        self.capture_document_view();
+        self.install_document_view(event_loop)
+    }
+
+    fn install_document_view(&mut self, event_loop: &ActiveEventLoop) -> Result<(), MacError> {
+        self.displayed_document = (
+            self.session.app_state().documents().active_id(),
+            self.session.path().map(Path::to_path_buf),
+        );
+        let slot = self.session.app_state().documents().active_slot();
+        let view = slot.view.validated(&self.session.snapshot());
+        self.find_bar = slot.find_bar.clone();
+        self.source_pane.set_find_bar(self.find_bar.clone());
         self.source_pane
             .replace(&self.session.snapshot())
             .map_err(|error| MacError::Core(error.to_string()))?;
+        self.restore_document_view(view);
         self.source_pane.update_counts(self.session.counts());
+        self.session.refresh_preview();
         self.schedule_render()?;
         self.drain_render_completions()?;
         let _ = event_loop;
         Ok(())
     }
 
+    fn capture_document_view(&mut self) {
+        let revision = self.source_pane.editor().revision();
+        let selection = self
+            .source_pane
+            .editor()
+            .current_selection()
+            .ok()
+            .map(|selection| rutile_core::SessionSelectionV1 {
+                anchor: selection.anchor as u64,
+                head: selection.head as u64,
+            });
+        let top_visible_byte = self
+            .source_pane
+            .editor()
+            .top_visible_byte(revision)
+            .ok()
+            .map(|offset| offset as u64);
+        self.session
+            .core_mut()
+            .reduce(AppMessage::DocumentViewChanged {
+                id: self.displayed_document.0,
+                path: self.displayed_document.1.clone(),
+                view: rutile_core::WorkspaceViewState {
+                    selection,
+                    top_visible_byte,
+                },
+                find_bar: self.find_bar.clone(),
+            });
+    }
+
+    fn restore_document_view(&mut self, view: rutile_core::WorkspaceViewState) {
+        let revision = self.session.snapshot().revision;
+        let selection = view
+            .selection
+            .map_or(Selection { anchor: 0, head: 0 }, |selection| Selection {
+                anchor: selection.anchor as usize,
+                head: selection.head as usize,
+            });
+        let _ = self
+            .source_pane
+            .editor_mut()
+            .set_selection(revision, selection);
+        if let Some(top) = view.top_visible_byte {
+            let _ = self.source_pane.editor_mut().scroll_to_byte(
+                revision,
+                top as usize,
+                InteractionId::new(0),
+            );
+        }
+    }
+
     fn handle_open_delivery(&mut self, event_loop: &ActiveEventLoop, urls: Vec<String>) {
+        if self.pending_recovery.is_some() || self.pending_close {
+            self.surface_error("Finish the pending decision, then open the document again");
+            return;
+        }
         let request = ProductSession::classify_open_urls(&urls);
         if let Err(error) = self.session.handle_open_request(request) {
             self.fail(event_loop, error.to_string());
@@ -346,6 +485,34 @@ impl ProductRunner {
         self.sync_window_title();
         self.sync_recent_documents();
         self.sync_tabs();
+        #[cfg(feature = "test-control")]
+        self.finish_open_delegate_probe(event_loop);
+    }
+
+    #[cfg(feature = "test-control")]
+    fn finish_open_delegate_probe(&mut self, event_loop: &ActiveEventLoop) {
+        if std::env::var_os("RUTILE_TEST_STATE_DIR").is_none() {
+            return;
+        }
+        let Some(path) = std::env::var_os("RUTILE_TEST_OPEN_DELEGATE_PATH")
+            .or_else(|| std::env::var_os("RUTILE_TEST_OPEN_DELIVERY_PATH"))
+            .map(PathBuf::from)
+        else {
+            return;
+        };
+        let expected = std::fs::read_to_string(&path).ok();
+        if self.session.path() != Some(path.as_path())
+            || expected.as_deref() != Some(self.session.snapshot().to_string().as_str())
+        {
+            self.fail(
+                event_loop,
+                format!("Native file-open delivery mismatch: expected={path:?} actual={:?} bytes_match={}",
+                    self.session.path(), expected.as_deref() == Some(self.session.snapshot().to_string().as_str())),
+            );
+            return;
+        }
+        eprintln!("DELEGATE_PROBE native_callback=true document_match=true");
+        self.request_window_close(event_loop);
     }
 
     fn handle_menu_command(&mut self, event_loop: &ActiveEventLoop, command: MacMenuCommand) {
@@ -358,15 +525,7 @@ impl ProductRunner {
             MacMenuCommand::Open => self.run_open_panel(event_loop),
             MacMenuCommand::Save => self.run_save(event_loop),
             MacMenuCommand::SaveAs => self.run_save_as_md(event_loop),
-            MacMenuCommand::Close => {
-                if self.session.app_state().dirty() {
-                    self.pending_close = true;
-                    self.sync_window_title();
-                } else {
-                    self.save_session_on_exit();
-                    event_loop.exit();
-                }
-            }
+            MacMenuCommand::Close => self.request_window_close(event_loop),
             MacMenuCommand::ClearRecents => {
                 self.session.core_mut().reduce(AppMessage::ClearRecents);
                 self.sync_recent_documents();
@@ -388,6 +547,27 @@ impl ProductRunner {
                     .core_mut()
                     .reduce(AppMessage::CloseTab { id: active });
                 self.apply_tab_close_effects(event_loop, effects);
+            }
+            MacMenuCommand::MoveTabLeft | MacMenuCommand::MoveTabRight => {
+                let documents = self.session.app_state().documents();
+                let id = documents.active_id();
+                if let Some(index) = documents
+                    .tab_order()
+                    .iter()
+                    .position(|candidate| *candidate == id)
+                {
+                    let to = if command == MacMenuCommand::MoveTabLeft {
+                        index.checked_sub(1)
+                    } else {
+                        (index + 1 < documents.len()).then_some(index + 1)
+                    };
+                    if let Some(to) = to {
+                        self.session
+                            .core_mut()
+                            .reduce(AppMessage::ReorderTab { id, to });
+                        self.sync_tabs();
+                    }
+                }
             }
             MacMenuCommand::SwitchTab => {
                 if let Some(index) = take_pending_switch() {
@@ -423,6 +603,123 @@ impl ProductRunner {
                 });
             }
         }
+        if let Err(error) = self.sync_view_layout() {
+            self.surface_error(error.to_string());
+        }
+    }
+
+    fn sync_view_layout(&mut self) -> Result<(), MacError> {
+        let Some(window) = &self.window else {
+            return Ok(());
+        };
+        let size = window.inner_size();
+        let scale = window.scale_factor();
+        let logical = size.to_logical::<u32>(scale);
+        let mode = self.session.app_state().mode();
+        let panes = mode_panes(logical.width, logical.height, mode);
+        self.source_pane.resize(
+            panes.source_width.max(1),
+            size.width,
+            size.height,
+            scale as f32,
+        );
+        if let Some(webview) = &self.webview {
+            webview
+                .set_visible(mode != crate::app::DocumentMode::Edit)
+                .map_err(|error| MacError::Native(error.to_string()))?;
+            if panes.preview_width > 0 {
+                webview
+                    .set_bounds(preview_bounds(panes))
+                    .map_err(|error| MacError::Native(error.to_string()))?;
+            }
+        }
+        self.sync_tabs();
+        Ok(())
+    }
+
+    fn request_window_close(&mut self, event_loop: &ActiveEventLoop) {
+        if self.pending_recovery.is_some() {
+            // Closing a startup decision leaves its recovery data untouched.
+            event_loop.exit();
+            return;
+        }
+        let original = self.session.app_state().documents().active_id();
+        let original_selection = self.source_pane.editor().current_selection().ok();
+        let dirty = self.session.core().dirty_document_ids();
+        for id in dirty {
+            self.session.core_mut().reduce(AppMessage::SwitchTab { id });
+            if let Err(error) = self.refresh_after_document_swap(event_loop) {
+                self.surface_error(error.to_string());
+                return;
+            }
+            self.sync_tabs();
+            self.sync_window_title();
+            if self.smoke {
+                self.pending_close = true;
+                return;
+            }
+            let decision = match run_dirty_close_alert() {
+                Ok(CloseDialogAction::Discard) => CloseDecision::Discard,
+                Ok(CloseDialogAction::Cancel) => CloseDecision::Cancel,
+                Ok(CloseDialogAction::Save) => {
+                    let untitled_path = if self.session.path().is_none() {
+                        match choose_save_path("Untitled.md") {
+                            Ok(Some(path)) => Some(path),
+                            Ok(None) => {
+                                self.restore_close_focus(event_loop, original);
+                                return;
+                            }
+                            Err(error) => {
+                                self.surface_error(error.to_string());
+                                return;
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    CloseDecision::Save { untitled_path }
+                }
+                Err(error) => {
+                    self.surface_error(error.to_string());
+                    return;
+                }
+            };
+            match self.session.request_close(decision) {
+                Ok(CloseOutcome::Close) => {}
+                Ok(CloseOutcome::KeepOpen) => {
+                    self.restore_close_focus(event_loop, original);
+                    return;
+                }
+                Err(error) => {
+                    self.surface_error(format!("Close cancelled: {error}"));
+                    return;
+                }
+            }
+        }
+        // Discard decisions have not removed buffers: cancelling a later
+        // prompt leaves every earlier unsaved document intact.
+        self.restore_close_focus(event_loop, original);
+        if let Some(selection) = original_selection {
+            let revision = self.session.snapshot().revision;
+            let _ = self
+                .source_pane
+                .editor_mut()
+                .set_selection(revision, selection);
+        }
+        if self.save_session_on_exit() {
+            event_loop.exit();
+        }
+    }
+
+    fn restore_close_focus(&mut self, event_loop: &ActiveEventLoop, id: rutile_types::DocumentId) {
+        self.pending_close = false;
+        self.session.core_mut().reduce(AppMessage::SwitchTab { id });
+        if let Err(error) = self.refresh_after_document_swap(event_loop) {
+            self.surface_error(error.to_string());
+        }
+        self.sync_tabs();
+        self.sync_window_title();
+        self.restore_editor_focus();
     }
 
     fn run_open_panel(&mut self, event_loop: &ActiveEventLoop) {
@@ -436,16 +733,24 @@ impl ProductRunner {
     }
 
     fn run_save(&mut self, event_loop: &ActiveEventLoop) {
-        if self.session.has_external_conflict() {
-            self.surface_error("Resolve the external file conflict before saving");
-            return;
-        }
-        if matches!(
-            self.session.ensure_no_external_conflict_before_save(),
-            Err(MacError::ExternalConflict)
-        ) {
-            self.surface_error("The file changed on disk; resolve the conflict before saving");
-            return;
+        self.capture_document_view();
+        match self.session.inspect_external_change() {
+            Ok(MacExternalOutcome::Reloaded { .. }) => {
+                if let Err(error) = self.install_document_view(event_loop) {
+                    self.surface_error(error.to_string());
+                }
+                self.sync_window_title();
+                return;
+            }
+            Ok(MacExternalOutcome::Unchanged) if !self.session.has_external_conflict() => {}
+            Ok(MacExternalOutcome::Unchanged | MacExternalOutcome::Conflict) => {
+                self.run_conflict_resolution(event_loop);
+                return;
+            }
+            Err(error) => {
+                self.surface_error(format!("Could not check the file before saving: {error}"));
+                return;
+            }
         }
         match self.session.request_save() {
             Ok(MacSaveAction::Completed | MacSaveAction::Noop) => {
@@ -456,22 +761,79 @@ impl ProductRunner {
         }
     }
 
-    fn run_save_as_md(&mut self, _event_loop: &ActiveEventLoop) {
+    fn run_conflict_resolution(&mut self, event_loop: &ActiveEventLoop) {
+        use rutile_core::ExternalResolution;
+        let action = match run_conflict_alert() {
+            Ok(action) => action,
+            Err(error) => {
+                self.surface_error(error.to_string());
+                return;
+            }
+        };
+        let resolution = match action {
+            ConflictDialogAction::Cancel => return,
+            ConflictDialogAction::Reload => ExternalResolution::ReloadDisk,
+            ConflictDialogAction::Keep => ExternalResolution::KeepBuffer,
+            ConflictDialogAction::SaveCopy => match choose_save_path("Recovered copy.md") {
+                Ok(Some(path)) if self.session.path() != Some(path.as_path()) => {
+                    ExternalResolution::SaveBufferAs(path)
+                }
+                Ok(Some(_)) => {
+                    self.surface_error("Choose a different file to preserve both versions");
+                    return;
+                }
+                Ok(None) => return,
+                Err(error) => {
+                    self.surface_error(error.to_string());
+                    return;
+                }
+            },
+        };
+        if let Err(error) = self.session.resolve_external_conflict(resolution) {
+            self.surface_error(format!("Could not resolve the file conflict: {error}"));
+            return;
+        }
+        if let Err(error) = self.refresh_after_document_swap(event_loop) {
+            self.surface_error(error.to_string());
+        }
+        self.sync_window_title();
+        self.sync_tabs();
+        self.sync_recent_documents();
+    }
+
+    fn run_save_as_md(&mut self, event_loop: &ActiveEventLoop) {
         let default = self.session.path().and_then(Path::file_name).map_or_else(
             || "Untitled.md".to_owned(),
             |name| name.to_string_lossy().into_owned(),
         );
         match choose_save_path(&default) {
-            Ok(Some(path)) => match self.session.request_save_as(path) {
-                Ok(()) => self.sync_window_title(),
-                Err(error) => self.surface_error(format!("Save As failed: {error}")),
-            },
+            Ok(Some(path)) => {
+                if let Err(error) = self.save_as_path(path, event_loop) {
+                    self.surface_error(format!("Save As failed: {error}"));
+                }
+            }
             Ok(None) => {}
             Err(error) => self.surface_error(error.to_string()),
         }
     }
 
-    /// The first undismissed reducer notice, if any. This is the single
+    fn save_as_path(
+        &mut self,
+        path: PathBuf,
+        event_loop: &ActiveEventLoop,
+    ) -> Result<(), MacError> {
+        // Capture against the old path before Save As changes the slot identity.
+        // Same-file Save As may also reload a clean document from disk.
+        self.capture_document_view();
+        self.session.request_save_as(path)?;
+        self.install_document_view(event_loop)?;
+        self.sync_window_title();
+        self.sync_tabs();
+        self.sync_recent_documents();
+        Ok(())
+    }
+
+    /// The latest undismissed reducer notice, if any. This is the single
     /// notice that drives both [`Self::active_status`] and the spoken
     /// [`AxAnnouncement`] in [`Self::publish_accessibility`], so the visible
     /// status and `VoiceOver` never disagree about *which* notice is current.
@@ -482,6 +844,7 @@ impl ProductRunner {
             .app_state()
             .notices()
             .iter()
+            .rev()
             .find(|notice| !notice.dismissed)
     }
 
@@ -492,14 +855,16 @@ impl ProductRunner {
     /// [`Self::publish_accessibility`] so the title bar and `VoiceOver` never
     /// disagree.
     fn active_status(&self) -> Option<String> {
-        if let Some(notice) = self.active_notice() {
-            return Some(notice.message.clone());
-        }
         if self.pending_close {
             return Some("Unsaved changes: ⌘S Save · ⌘D Don’t Save · Esc Cancel".to_owned());
         }
         if self.pending_recovery.is_some() {
-            return Some("Recovered unsaved changes: ⌘Y Restore · Esc Dismiss".to_owned());
+            return Some(
+                "Recovered unsaved changes: ⌘Y Restore · Esc Quit and keep drafts".to_owned(),
+            );
+        }
+        if let Some(notice) = self.active_notice() {
+            return Some(format!("{} · Esc dismisses this notice", notice.message));
         }
         if self.session.has_external_conflict() {
             return Some("External change detected: reload or save elsewhere".to_owned());
@@ -550,6 +915,15 @@ impl ProductRunner {
     }
 
     fn prompt_tab_close(&mut self, event_loop: &ActiveEventLoop, id: rutile_types::DocumentId) {
+        // A strip close button can target a background tab. Save must operate
+        // on that document, and the prompt must show which document it affects.
+        self.session.core_mut().reduce(AppMessage::SwitchTab { id });
+        if let Err(error) = self.refresh_after_document_swap(event_loop) {
+            self.surface_error(error.to_string());
+            return;
+        }
+        self.sync_tabs();
+        self.sync_window_title();
         let action = match run_dirty_close_alert() {
             Ok(action) => action,
             Err(error) => {
@@ -706,19 +1080,21 @@ impl ProductRunner {
         }
     }
 
-    fn maybe_poll_external_change(&mut self) {
-        if self.smoke || self.last_disk_poll.elapsed() < DISK_POLL_INTERVAL {
+    fn maybe_poll_external_change(&mut self, event_loop: &ActiveEventLoop) {
+        if self.smoke
+            || self.pending_recovery.is_some()
+            || self.pending_close
+            || self.last_disk_poll.elapsed() < DISK_POLL_INTERVAL
+        {
             return;
         }
         self.last_disk_poll = Instant::now();
+        self.capture_document_view();
         match self.session.inspect_external_change() {
             Ok(MacExternalOutcome::Unchanged) => {}
             Ok(MacExternalOutcome::Reloaded { .. }) => {
-                if let Err(error) = self.source_pane.replace(&self.session.snapshot()) {
-                    eprintln!("rutile: external-reload editor resync failed: {error}");
-                }
-                if let Err(error) = self.schedule_render() {
-                    eprintln!("rutile: external-reload render schedule failed: {error}");
+                if let Err(error) = self.install_document_view(event_loop) {
+                    self.surface_error(format!("Could not display the reloaded file: {error}"));
                 }
                 self.sync_window_title();
             }
@@ -810,6 +1186,8 @@ impl ProductRunner {
             }
         }
         if edited {
+            self.source_pane.update_counts(self.session.counts());
+            self.sync_tabs();
             self.schedule_render()?;
         }
         let _ = event_loop;
@@ -850,11 +1228,24 @@ impl ProductRunner {
         event_loop.exit();
     }
 
-    fn surface_error(&self, message: impl AsRef<str>) {
+    fn surface_error(&mut self, message: impl AsRef<str>) {
+        self.surface_notice(NoticeSeverity::Error, message.as_ref());
+    }
+
+    fn surface_notice(&mut self, severity: NoticeSeverity, message: &str) {
+        if !self.session.app_state().notices().iter().any(|notice| {
+            !notice.dismissed && notice.severity == severity && notice.message == message
+        }) {
+            self.session.core_mut().reduce(AppMessage::SurfaceNotice {
+                severity,
+                message: message.to_owned(),
+                source_error: message.to_owned(),
+            });
+        }
         if let Some(window) = &self.window {
-            window.set_title(&status_title(message.as_ref()));
             window.request_redraw();
         }
+        self.sync_window_title();
     }
 
     fn finish(&mut self) -> Result<(), MacError> {
@@ -985,6 +1376,9 @@ impl ProductRunner {
     /// [`ProductSession::apply_format`]. A clean engine rejection (e.g. an empty
     /// plan) becomes a status message, never a fatal error.
     fn run_format_command(&mut self, event_loop: &ActiveEventLoop, command: FormatCommand) {
+        if self.session.app_state().mode() == crate::app::DocumentMode::View {
+            return;
+        }
         let selection = match self.source_pane.editor().current_selection() {
             Ok(selection) => selection,
             Err(error) => {
@@ -1002,6 +1396,9 @@ impl ProductRunner {
 
     /// Routes Enter to [`ProductSession::smart_enter`].
     fn run_smart_enter(&mut self, event_loop: &ActiveEventLoop) {
+        if self.session.app_state().mode() == crate::app::DocumentMode::View {
+            return;
+        }
         let selection = match self.source_pane.editor().current_selection() {
             Ok(selection) => selection,
             Err(error) => {
@@ -1064,6 +1461,9 @@ impl ProductRunner {
     /// plain-text flavor when HTML is absent or the conversion is rejected
     /// (H-L4-1). Never inserts raw HTML markup.
     fn run_smart_paste(&mut self, event_loop: &ActiveEventLoop) {
+        if self.session.app_state().mode() == crate::app::DocumentMode::View {
+            return;
+        }
         let flavors = ProductSession::read_clipboard_paste_flavors();
         let resolved = match flavors {
             Ok(flavors) => crate::platform::paste::resolve_paste_text(
@@ -1108,7 +1508,10 @@ impl ProductRunner {
         );
         match choose_save_path(&default) {
             Ok(Some(path)) => match self.session.save_html_as(&path) {
-                Ok(()) => self.surface_error(format!("Exported HTML to {}", path.display())),
+                Ok(()) => self.surface_notice(
+                    NoticeSeverity::Info,
+                    &format!("Exported HTML to {}", path.display()),
+                ),
                 Err(error) => self.surface_error(format!("Export failed: {error}")),
             },
             Ok(None) => {}
@@ -1120,7 +1523,7 @@ impl ProductRunner {
     fn run_copy_html(&mut self) {
         match self.session.export_html() {
             Ok(output) => match ProductSession::write_clipboard_html(&output.html) {
-                Ok(()) => self.surface_error("Copied HTML to clipboard"),
+                Ok(()) => self.surface_notice(NoticeSeverity::Info, "Copied HTML to clipboard"),
                 Err(error) => self.surface_error(format!("Copy failed: {error}")),
             },
             Err(error) => self.surface_error(format!("Copy HTML failed: {error}")),
@@ -1320,6 +1723,9 @@ impl ProductRunner {
     }
 
     fn run_replace_current(&mut self, event_loop: &ActiveEventLoop) {
+        if self.session.app_state().mode() == crate::app::DocumentMode::View {
+            return;
+        }
         let replacement = self.find_bar.as_ref().map(|bar| bar.replacement.clone());
         let Some(replacement) = replacement else {
             return;
@@ -1339,6 +1745,9 @@ impl ProductRunner {
     }
 
     fn run_replace_all(&mut self, event_loop: &ActiveEventLoop) {
+        if self.session.app_state().mode() == crate::app::DocumentMode::View {
+            return;
+        }
         let replacement = self.find_bar.as_ref().map(|bar| bar.replacement.clone());
         let Some(replacement) = replacement else {
             return;
@@ -1355,7 +1764,137 @@ impl ProductRunner {
         self.push_find_display();
     }
 
-    fn handle_palette_key(&mut self, key_event: &winit::event::KeyEvent, command: bool) -> bool {
+    fn create_history_checkpoint(&mut self) {
+        if let Err(error) = crate::file_effects::record_checkpoint(
+            self.session.core_mut(),
+            crate::revision_history::HistorySource::Manual,
+            "Manual checkpoint",
+        ) {
+            self.surface_error(error);
+        }
+    }
+
+    fn show_navigator(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        kind: crate::navigation::NavigatorKind,
+    ) {
+        self.capture_document_view();
+        let mut query = String::new();
+        loop {
+            let rows = match self.session.core().navigation_entries(kind, &query) {
+                Ok(rows) => rows,
+                Err(error) => {
+                    self.surface_error(error);
+                    break;
+                }
+            };
+            match super::navigation::choose(kind, &query, &rows) {
+                Ok(super::navigation::Choice::Search(value)) => query = value,
+                Ok(super::navigation::Choice::Navigate(index)) => {
+                    if let Err(error) = self.session.core_mut().activate_navigation(&rows[index]) {
+                        self.surface_error(error);
+                    } else if let Err(error) = self.install_document_view(event_loop) {
+                        self.surface_error(error.to_string());
+                    }
+                    break;
+                }
+                Ok(super::navigation::Choice::Close) => break,
+                Err(error) => {
+                    self.surface_error(error);
+                    break;
+                }
+            }
+        }
+        self.restore_editor_focus();
+    }
+
+    fn show_history(&mut self, event_loop: &ActiveEventLoop) {
+        self.capture_document_view();
+        loop {
+            let checkpoints: Vec<_> = self.session.core().checkpoints().cloned().collect();
+            let current = self.session.core().snapshot().to_string();
+            let editable = self.session.app_state().mode() != crate::app::DocumentMode::View;
+            match super::history::choose(&checkpoints, &current, editable) {
+                Ok(super::history::Choice::Create) => self.create_history_checkpoint(),
+                Ok(super::history::Choice::Restore(id)) => {
+                    let result =
+                        crate::file_effects::checkpoint_timestamp().and_then(|timestamp| {
+                            self.session.core_mut().restore_checkpoint(id, timestamp)
+                        });
+                    match result {
+                        Ok(applied) => {
+                            self.session.refresh_preview();
+                            self.after_shared_edit(
+                                event_loop,
+                                &applied.changes,
+                                applied.selection_after,
+                            );
+                        }
+                        Err(error) => self.surface_error(error),
+                    }
+                    break;
+                }
+                Ok(super::history::Choice::Close) => break,
+                Err(error) => {
+                    self.surface_error(error);
+                    break;
+                }
+            }
+        }
+    }
+
+    fn submit_palette(&mut self, event_loop: &ActiveEventLoop) {
+        let message = self.session.app_state().selected_palette_message();
+        self.session
+            .core_mut()
+            .reduce(AppMessage::CloseCommandPalette);
+        self.sync_palette();
+        if let Some(message) = message {
+            if matches!(message, AppMessage::SaveRequested) {
+                self.run_save(event_loop);
+            } else if matches!(message, AppMessage::CreateHistoryCheckpoint) {
+                self.create_history_checkpoint();
+            } else if matches!(message, AppMessage::ShowHistory) {
+                self.show_history(event_loop);
+            } else if let AppMessage::ShowNavigator { kind } = message {
+                self.show_navigator(event_loop, kind);
+            } else if let AppMessage::FormatRequested { command } = message {
+                self.run_format_command(event_loop, command);
+            } else {
+                let swaps_document = matches!(
+                    message,
+                    AppMessage::NewDocument
+                        | AppMessage::NewTab
+                        | AppMessage::SwitchTab { .. }
+                        | AppMessage::CloseTab { .. }
+                );
+                let changes_theme = matches!(
+                    message,
+                    AppMessage::TasteRoll | AppMessage::TasteReroll | AppMessage::TasteReset
+                );
+                let effects = self.session.core_mut().reduce(message);
+                if swaps_document {
+                    self.apply_tab_close_effects(event_loop, effects);
+                } else if changes_theme {
+                    self.session.refresh_preview();
+                    if let Err(error) = self.render_and_navigate() {
+                        self.surface_error(error.to_string());
+                    }
+                }
+            }
+            if let Err(error) = self.sync_view_layout() {
+                self.surface_error(error.to_string());
+            }
+        }
+    }
+
+    fn handle_palette_key(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        key_event: &winit::event::KeyEvent,
+        command: bool,
+    ) -> bool {
         use winit::keyboard::NamedKey;
 
         match &key_event.logical_key {
@@ -1366,7 +1905,7 @@ impl ProductRunner {
                 true
             }
             Key::Named(NamedKey::Enter) => {
-                self.session.core_mut().reduce(AppMessage::PaletteSubmit);
+                self.submit_palette(event_loop);
                 true
             }
             Key::Named(NamedKey::ArrowDown) => {
@@ -1384,6 +1923,14 @@ impl ProductRunner {
             Key::Named(NamedKey::Backspace) if !command => {
                 let mut query = self.session.app_state().palette().query().to_owned();
                 query.pop();
+                self.session
+                    .core_mut()
+                    .reduce(AppMessage::PaletteQueryChanged { query });
+                true
+            }
+            Key::Named(NamedKey::Space) if !command => {
+                let mut query = self.session.app_state().palette().query().to_owned();
+                query.push(' ');
                 self.session
                     .core_mut()
                     .reduce(AppMessage::PaletteQueryChanged { query });
@@ -1473,14 +2020,19 @@ impl ProductRunner {
     // --- autosave / recovery / session restore ------------------------------
 
     fn maybe_autosave(&mut self) {
-        if self.smoke {
+        if self.smoke || self.pending_recovery.is_some() || self.recovery_read_failed {
             return;
         }
-        if self.session.app_state().dirty() && self.last_autosave.elapsed() >= AUTOSAVE_INTERVAL {
-            if let Err(error) = self.session.autosave_tick(unix_ms_now()) {
+        if self.last_autosave.elapsed() >= AUTOSAVE_INTERVAL {
+            self.capture_document_view();
+            if let Err(error) = self.session.start_workspace_autosave(unix_ms_now()) {
                 self.surface_error(format!("Autosave failed: {error}"));
             }
             self.last_autosave = Instant::now();
+            #[cfg(feature = "test-control")]
+            if std::env::var_os("RUTILE_TEST_STATE_DIR").is_some() {
+                eprintln!("NATIVE_TRACE autosave-tick");
+            }
         }
     }
 
@@ -1488,29 +2040,56 @@ impl ProductRunner {
         let Some(recovered) = self.pending_recovery.take() else {
             return;
         };
-        if let Err(error) = self.session.adopt_recovered(recovered) {
+        let result = match &recovered {
+            PendingRecovery::Legacy(document) => self.session.adopt_recovered(document.clone()),
+            PendingRecovery::Workspace(workspace) => self
+                .session
+                .adopt_workspace(workspace, self.preserve_opened_document),
+        };
+        if let Err(error) = result {
+            self.pending_recovery = Some(recovered);
+            self.surface_error(error.to_string());
+            return;
+        }
+        if let Err(error) = self.install_document_view(event_loop) {
             self.fail(event_loop, error.to_string());
             return;
         }
-        if let Err(error) = self.source_pane.replace(&self.session.snapshot()) {
-            self.fail(event_loop, error.to_string());
-            return;
-        }
-        self.source_pane.update_counts(self.session.counts());
-        if let Err(error) = self.render_and_navigate() {
-            self.fail(event_loop, error.to_string());
-            return;
-        }
+        self.sync_tabs();
         if let Some(window) = &self.window {
             window.set_title(&status_title("Recovered unsaved changes"));
         }
         // The adopted buffer replaced the document; return keyboard focus to
         // the editor so the user can keep typing.
         self.restore_editor_focus();
+        self.apply_restore(event_loop);
     }
 
-    fn dismiss_recovery(&mut self) {
-        self.pending_recovery = None;
+    fn dismiss_recovery(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(pending) = self.pending_recovery.take() else {
+            return;
+        };
+        if let PendingRecovery::Workspace(workspace) = &pending {
+            let clean = crate::recovery::without_drafts(workspace);
+            if let Err(error) = self
+                .session
+                .adopt_workspace(&clean, self.preserve_opened_document)
+            {
+                self.pending_recovery = Some(pending);
+                self.surface_error(error.to_string());
+                return;
+            }
+        }
+        if let Err(error) = self.session.checkpoint_workspace(unix_ms_now(), false) {
+            self.pending_recovery = Some(pending);
+            self.surface_error(format!("Could not dismiss recovery: {error}"));
+            return;
+        }
+        if let Err(error) = self.install_document_view(event_loop) {
+            self.surface_error(error.to_string());
+        }
+        self.sync_tabs();
+        self.apply_restore(event_loop);
         if let Some(window) = &self.window {
             window.set_title(PRODUCT_NAME);
         }
@@ -1543,9 +2122,12 @@ impl ProductRunner {
             CloseDialogAction::Discard => {
                 match self.session.request_close(CloseDecision::Discard) {
                     Ok(CloseOutcome::Close) => {
-                        self.save_session_on_exit();
-                        event_loop.exit();
-                        true
+                        if self.save_session_on_exit() {
+                            event_loop.exit();
+                            true
+                        } else {
+                            false
+                        }
                     }
                     Ok(CloseOutcome::KeepOpen) => {
                         self.pending_close = false;
@@ -1585,9 +2167,12 @@ impl ProductRunner {
                     .request_close(CloseDecision::Save { untitled_path })
                 {
                     Ok(CloseOutcome::Close) => {
-                        self.save_session_on_exit();
-                        event_loop.exit();
-                        true
+                        if self.save_session_on_exit() {
+                            event_loop.exit();
+                            true
+                        } else {
+                            false
+                        }
                     }
                     Ok(CloseOutcome::KeepOpen) => {
                         self.pending_close = false;
@@ -1605,9 +2190,14 @@ impl ProductRunner {
     }
 
     fn apply_restore(&mut self, event_loop: &ActiveEventLoop) {
-        let Some(restore) = self.pending_restore.take() else {
+        let Some(mut restore) = self.pending_restore.take() else {
             return;
         };
+        if !self.restore_files_from_session {
+            // The atomic workspace owns each tab's newer view positions.
+            restore.selection = None;
+            restore.top_visible_byte = None;
+        }
         if let (Some(window), Some(frame)) = (&self.window, restore.window) {
             let _ =
                 window.request_inner_size(winit::dpi::LogicalSize::new(frame.width, frame.height));
@@ -1615,7 +2205,12 @@ impl ProductRunner {
         }
         let selection = restore.selection;
         let viewport = restore.top_visible_byte;
-        match self.session.apply_session_restore(&restore) {
+        let result = if self.restore_files_from_session {
+            self.session.apply_session_restore(&restore)
+        } else {
+            self.session.apply_session_metadata(&restore)
+        };
+        match result {
             Ok(report) => {
                 if report.opened_last_file {
                     if let Err(error) = self.refresh_after_document_swap(event_loop) {
@@ -1651,9 +2246,10 @@ impl ProductRunner {
         }
     }
 
-    fn save_session_on_exit(&mut self) {
+    fn save_session_on_exit(&mut self) -> bool {
+        self.capture_document_view();
         if self.smoke {
-            return;
+            return true;
         }
         let revision = self.session.snapshot().revision;
         let selection = self.source_pane.editor().current_selection().ok();
@@ -1672,8 +2268,16 @@ impl ProductRunner {
             self.session
                 .capture_session_state(unix_ms_now(), selection, top_visible_byte, window);
         if let Err(error) = self.session.save_session_state(&state) {
-            eprintln!("rutile: session-state save failed: {error}");
+            self.surface_error(format!("Could not finish closing: {error}"));
+            return false;
         }
+        if !self.recovery_read_failed
+            && let Err(error) = self.session.checkpoint_workspace(unix_ms_now(), true)
+        {
+            self.surface_error(format!("Could not finish closing: {error}"));
+            return false;
+        }
+        true
     }
 
     fn process_preview_event(&mut self, event_loop: &ActiveEventLoop, event: PreviewEventV1) {
@@ -1887,10 +2491,49 @@ impl ProductRunner {
             && self.painted_revision == Some(self.session.snapshot().revision)
             && self.source_pane.presented_text == "# Native smoke 🪶\n\nEdited.\n"
         {
+            if let Err(error) = self.verify_smoke_views(event_loop) {
+                self.fail(event_loop, error.to_string());
+                return;
+            }
             if let Err(error) = self.source_pane.visual_receipt() {
                 self.fail(event_loop, error.to_string());
                 return;
             }
+            self.handle_menu_command(event_loop, MacMenuCommand::OpenCommandPalette);
+            self.session
+                .core_mut()
+                .reduce(AppMessage::PaletteQueryChanged {
+                    query: "Reading View".into(),
+                });
+            self.sync_palette();
+            self.smoke_stage = 3;
+            self.smoke_palette_ready_at = Some(Instant::now() + Duration::from_millis(1_500));
+            #[cfg(feature = "test-control")]
+            if let Some(id) = super::palette_panel::smoke_window_id() {
+                eprintln!("SMOKE_PANEL_WINDOW_ID={id}");
+            }
+        } else if self.smoke_stage == 3
+            && self
+                .smoke_palette_ready_at
+                .is_some_and(|ready| Instant::now() >= ready)
+        {
+            self.smoke_palette_ready_at = None;
+            if !super::palette_panel::perform_smoke_click(false) {
+                self.fail(event_loop, "palette has no enabled native result button");
+            }
+        } else if self.smoke_stage == 3
+            && self.session.app_state().mode() == crate::app::DocumentMode::View
+            && !self.session.app_state().palette().is_open()
+        {
+            eprintln!("SMOKE_TRACE event=palette-native-action mode=read");
+            self.handle_menu_command(event_loop, MacMenuCommand::ViewModeSplit);
+            self.handle_menu_command(event_loop, MacMenuCommand::OpenCommandPalette);
+            self.smoke_stage = 4;
+            if !super::palette_panel::perform_smoke_click(true) {
+                self.fail(event_loop, "palette has no native close button");
+            }
+        } else if self.smoke_stage == 4 && !self.session.app_state().palette().is_open() {
+            eprintln!("SMOKE_TRACE event=palette-native-close state=closed");
             let Some(path) = self.smoke_path.clone() else {
                 self.fail(event_loop, "native smoke path is missing");
                 return;
@@ -1911,6 +2554,128 @@ impl ProductRunner {
             }
         }
     }
+
+    fn verify_smoke_views(&mut self, event_loop: &ActiveEventLoop) -> Result<(), MacError> {
+        #[cfg(feature = "test-control")]
+        self.verify_operator_actions(event_loop)?;
+        self.verify_smoke_tab_views(event_loop)?;
+        let before = self.session.snapshot().to_string();
+        if self.source_pane.state.counts != self.session.counts() {
+            return Err(MacError::Native(
+                "status counts are stale after editing".into(),
+            ));
+        }
+        for (command, name, expected) in [
+            (MacMenuCommand::ViewModeEdit, "edit", 1200.0),
+            (MacMenuCommand::ViewModeRead, "read", 1.0),
+            (MacMenuCommand::ViewModeSplit, "split", 600.0),
+        ] {
+            self.handle_menu_command(event_loop, command);
+            if self.source_pane.state.pane_width != expected {
+                return Err(MacError::Native(format!(
+                    "{name} mode did not resize the source pane"
+                )));
+            }
+            self.source_pane.draw_and_present()?;
+            self.source_pane.capture_smoke_frame(name)?;
+            if name == "read" {
+                self.run_smart_enter(event_loop);
+                if self.session.snapshot().to_string() != before {
+                    return Err(MacError::Native(
+                        "reading mode accepted a hidden edit".into(),
+                    ));
+                }
+            }
+            eprintln!("SMOKE_TRACE event=view-mode mode={name} source_width={expected}");
+        }
+        self.source_pane.focus_editor()?;
+        self.source_pane
+            .handle_iced_events(&[core::Event::Keyboard(core::keyboard::Event::KeyPressed {
+                key: core::keyboard::Key::Character("a".into()),
+                modified_key: core::keyboard::Key::Character("a".into()),
+                physical_key: core::keyboard::key::Physical::Code(core::keyboard::key::Code::KeyA),
+                location: core::keyboard::Location::Standard,
+                modifiers: core::keyboard::Modifiers::LOGO,
+                text: None,
+                repeat: false,
+            })])?;
+        let selection = self
+            .source_pane
+            .editor()
+            .current_selection()
+            .map_err(|error| MacError::Core(error.to_string()))?;
+        if selection.anchor.abs_diff(selection.head) != before.len()
+            || self.source_pane.text() != before
+        {
+            return Err(MacError::Native(
+                "select-all shortcut failed or inserted text".into(),
+            ));
+        }
+        eprintln!(
+            "SMOKE_TRACE event=select-all bytes={} text_unchanged=true",
+            before.len()
+        );
+        Ok(())
+    }
+
+    fn verify_smoke_tab_views(&mut self, event_loop: &ActiveEventLoop) -> Result<(), MacError> {
+        let original = self.session.app_state().documents().active_id();
+        let source = self.session.source();
+        let revision = self.session.snapshot().revision;
+        let selection = Selection { anchor: 2, head: 5 };
+        self.source_pane
+            .editor_mut()
+            .set_selection(revision, selection)
+            .map_err(|error| MacError::Core(error.to_string()))?;
+        self.find_bar = Some(FindBarView {
+            query: "smoke".into(),
+            replacement: "replacement".into(),
+            replace_enabled: true,
+            focus: FindField::Replace,
+            status: String::new(),
+        });
+        self.session.core_mut().reduce(AppMessage::NewTab);
+        let new_tab = self.session.app_state().documents().active_id();
+        self.refresh_after_document_swap(event_loop)?;
+        if !self.source_pane.text().is_empty() || self.find_bar.is_some() {
+            return Err(MacError::Native(
+                "new tab inherited another tab's text or find bar".into(),
+            ));
+        }
+        self.session
+            .core_mut()
+            .reduce(AppMessage::SwitchTab { id: original });
+        self.refresh_after_document_swap(event_loop)?;
+        let restored_selection = self
+            .source_pane
+            .editor()
+            .current_selection()
+            .map_err(|error| MacError::Core(error.to_string()))?;
+        if self.source_pane.text() != source
+            || restored_selection != selection
+            || !self
+                .find_bar
+                .as_ref()
+                .is_some_and(|bar| bar.query == "smoke" && bar.replacement == "replacement")
+        {
+            return Err(MacError::Native(format!(
+                "tab switch lost state: text={} selection={restored_selection:?} expected={selection:?} find={:?}",
+                self.source_pane.text() == source,
+                self.find_bar
+                    .as_ref()
+                    .map(|bar| (&bar.query, &bar.replacement))
+            )));
+        }
+        self.session
+            .core_mut()
+            .reduce(AppMessage::CloseTab { id: new_tab });
+        self.close_find();
+        self.sync_tabs();
+        eprintln!(
+            "SMOKE_TRACE event=tab-views text_preserved=true selection_restored=true find_isolated=true"
+        );
+        Ok(())
+    }
 }
 
 /// Stage-zero readiness for the supervised macOS smoke: the flow must not
@@ -1929,11 +2694,37 @@ fn smoke_stage_zero_ready_to_edit(
 impl ApplicationHandler<MacUserEvent> for ProductRunner {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: MacUserEvent) {
         match event {
+            MacUserEvent::PaletteClose => {
+                self.session
+                    .core_mut()
+                    .reduce(AppMessage::CloseCommandPalette);
+                self.sync_palette();
+            }
+            MacUserEvent::PaletteActivate { index, query } => {
+                let palette = self.session.app_state().palette();
+                if self.pending_recovery.is_none()
+                    && !self.pending_close
+                    && palette.is_open()
+                    && palette.query() == query
+                    && index < palette.candidates().len()
+                {
+                    self.session
+                        .core_mut()
+                        .reduce(AppMessage::PaletteSelectIndex { index });
+                    self.submit_palette(event_loop);
+                }
+            }
+            MacUserEvent::Wake => {}
             MacUserEvent::OpenUrls(urls) => self.handle_open_delivery(event_loop, urls),
+            MacUserEvent::OpenRejected(message) => self.surface_error(message),
             MacUserEvent::MenuCommand(command) => self.handle_menu_command(event_loop, command),
         }
     }
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        #[cfg(feature = "test-control")]
+        if std::env::var_os("RUTILE_TEST_STATE_DIR").is_some() {
+            eprintln!("NATIVE_TRACE resumed");
+        }
         if self.window.is_some() {
             return;
         }
@@ -1959,7 +2750,11 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
         }
         let physical = window.inner_size();
         let logical = physical.to_logical::<u32>(window.scale_factor());
-        let panes = split_panes(logical.width, logical.height);
+        let panes = mode_panes(
+            logical.width,
+            logical.height,
+            self.session.app_state().mode(),
+        );
 
         let protocol_host = Arc::clone(&self.preview_host);
         let navigation_host = Arc::clone(&self.preview_host);
@@ -1983,13 +2778,26 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
                         headers: vec![],
                         body: Arc::from([]),
                     });
+                #[cfg(feature = "test-control")]
+                if std::env::var_os("RUTILE_TEST_STATE_DIR").is_some() {
+                    eprintln!(
+                        "NATIVE_TRACE preview-response status={} bytes={}",
+                        response.status,
+                        response.body.len()
+                    );
+                }
                 to_wry_response(response)
             })
             .with_navigation_handler(move |url| {
-                navigation_host
+                let allowed = navigation_host
                     .lock()
                     .map(|mut host| host.allow_navigation(&url, NavigationKind::AppInitiated))
-                    .unwrap_or(false)
+                    .unwrap_or(false);
+                #[cfg(feature = "test-control")]
+                if std::env::var_os("RUTILE_TEST_STATE_DIR").is_some() {
+                    eprintln!("NATIVE_TRACE preview-navigation allowed={allowed}");
+                }
+                allowed
             })
             .with_download_started_handler(move |url, _| {
                 download_host
@@ -2010,6 +2818,7 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
             })
             .with_ipc_handler(move |request| {
                 ipc_ingress.try_push(request.body().clone());
+                super::open_events::wake_event_loop();
             })
             .with_url(&self.initial_url);
 
@@ -2018,7 +2827,13 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
                 self.webview = Some(webview);
                 self.window = Some(window);
                 self.install_file_menu();
-                self.apply_restore(event_loop);
+                #[cfg(feature = "test-control")]
+                if std::env::var_os("RUTILE_TEST_STATE_DIR").is_some() {
+                    eprintln!("NATIVE_TRACE window-ready");
+                }
+                if !matches!(self.pending_recovery, Some(PendingRecovery::Workspace(_))) {
+                    self.apply_restore(event_loop);
+                }
                 // H-L4-2: drain the deferred crash-recovery notice (captured in
                 // the constructor before the window existed) into the durable
                 // notice reducer now that the event loop is live. Once-per-
@@ -2030,16 +2845,22 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
                     self.autosave_notice_shown = true;
                 }
                 let has_recovery = self.pending_recovery.is_some();
+                let needs_confirmation = self
+                    .pending_recovery
+                    .as_ref()
+                    .is_some_and(PendingRecovery::needs_confirmation);
                 if has_recovery && let Some(window) = &self.window {
                     // Always publish the pending-recovery status so the
-                    // keyboard fallback (⌘Y Restore · Esc Dismiss) stays
+                    // keyboard fallback (⌘Y Restore · Esc Quit) stays
                     // discoverable even if the native alert cannot be
                     // presented. Smoke never invokes NSAlert (G003).
                     window.set_title(&status_title(
-                        "Recovered unsaved changes: ⌘Y Restore · Esc Dismiss",
+                        "Recovered unsaved changes: ⌘Y Restore · Esc Quit and keep drafts",
                     ));
                 }
-                if has_recovery && !self.smoke {
+                if has_recovery && !needs_confirmation {
+                    self.adopt_recovery(event_loop);
+                } else if has_recovery && !self.smoke {
                     // Production (G003): present the native accessible AppKit
                     // recovery alert after the window/webview is installed and
                     // session restore has been applied. Restore routes through
@@ -2047,9 +2868,17 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
                     // `dismiss_recovery`. An alert construction/presentation
                     // failure surfaces the error and leaves `pending_recovery`
                     // intact rather than silently dismissing.
-                    match run_recovery_alert() {
+                    #[cfg(feature = "test-control")]
+                    let decision = self
+                        .probe_recovery_decision()
+                        .map_or_else(run_recovery_alert, Ok);
+                    #[cfg(not(feature = "test-control"))]
+                    let decision = run_recovery_alert();
+                    match decision {
                         Ok(RecoveryDialogAction::Restore) => self.adopt_recovery(event_loop),
-                        Ok(RecoveryDialogAction::Dismiss) => self.dismiss_recovery(),
+                        Ok(RecoveryDialogAction::Dismiss) => self.dismiss_recovery(event_loop),
+                        Ok(RecoveryDialogAction::Quit) => self.request_window_close(event_loop),
+                        Ok(RecoveryDialogAction::Pending) => {}
                         Err(error) => self.surface_error(error.to_string()),
                     }
                 }
@@ -2069,33 +2898,15 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
         &mut self,
         event_loop: &ActiveEventLoop,
         _window_id: WindowId,
-        event: WindowEvent,
+        mut event: WindowEvent,
     ) {
         if matches!(&event, WindowEvent::CloseRequested) {
-            if !self.session.app_state().dirty() {
-                self.save_session_on_exit();
-                event_loop.exit();
-                return;
-            }
-            if self.smoke {
-                // Non-blocking automation fallback (G003): smoke keeps the
-                // existing pending-title/keyboard pseudo-decision path and
-                // never invokes NSAlert.
-                self.pending_close = true;
-                self.sync_window_title();
-                return;
-            }
-            // Production (G003): present the native accessible AppKit
-            // dirty-close alert immediately and route the chosen decision
-            // through the reducer-owned close path shared with the smoke
-            // keyboard fallback.
-            match run_dirty_close_alert() {
-                Ok(decision) => {
-                    self.execute_close_decision(event_loop, decision);
-                }
-                Err(error) => self.surface_error(error.to_string()),
-            }
+            self.request_window_close(event_loop);
             return;
+        }
+
+        if matches!(&event, WindowEvent::ThemeChanged(_)) {
+            self.source_pane.request_redraw();
         }
 
         if let WindowEvent::DroppedFile(path) = &event {
@@ -2113,14 +2924,19 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
         {
             let scale_factor = window.scale_factor();
             let logical = size.to_logical::<u32>(scale_factor);
-            let panes = split_panes(logical.width, logical.height);
+            let panes = mode_panes(
+                logical.width,
+                logical.height,
+                self.session.app_state().mode(),
+            );
             self.source_pane.resize(
-                panes.source_width,
+                panes.source_width.max(1),
                 size.width,
                 size.height,
                 scale_factor as f32,
             );
             if let Some(webview) = &self.webview
+                && panes.preview_width > 0
                 && let Err(error) = webview.set_bounds(preview_bounds(panes))
             {
                 self.fail(event_loop, error.to_string());
@@ -2147,6 +2963,7 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
         }
 
         if matches!(&event, WindowEvent::Focused(true))
+            && self.session.app_state().mode() != crate::app::DocumentMode::View
             && let Err(error) = self.source_pane.focus_editor()
         {
             self.fail(event_loop, error.to_string());
@@ -2193,7 +3010,7 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
             }
             let shift = effective_modifiers(self.modifiers, live_modifiers()).shift_key();
 
-            // Crash-recovery prompt (non-smoke): ⌘Y restore · Esc dismiss.
+            // Crash-recovery prompt: ⌘Y restores; Escape quits with drafts intact.
             // While pending, all other key-driven edits and commands are blocked
             // (MAC-004): the only accepted keys are the decision keys.
             if self.pending_recovery.is_some() {
@@ -2207,14 +3024,14 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
                     key_event.logical_key,
                     Key::Named(winit::keyboard::NamedKey::Escape)
                 ) {
-                    self.dismiss_recovery();
+                    self.request_window_close(event_loop);
                     return;
                 }
                 return;
             }
 
             if self.session.app_state().palette().is_open()
-                && self.handle_palette_key(key_event, command)
+                && self.handle_palette_key(event_loop, key_event, command)
             {
                 self.sync_palette();
                 return;
@@ -2226,6 +3043,20 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
             {
                 self.source_pane.request_redraw();
                 return;
+            }
+
+            // Dismiss a durable notice after modal panels have handled Escape.
+            if matches!(
+                key_event.logical_key,
+                Key::Named(winit::keyboard::NamedKey::Escape)
+            ) {
+                if let Some(id) = self.active_notice().map(|notice| notice.id) {
+                    self.session
+                        .core_mut()
+                        .reduce(AppMessage::NoticeDismissed { id });
+                    self.sync_window_title();
+                    return;
+                }
             }
 
             // Open document (⌘O).
@@ -2325,28 +3156,17 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
                 && !shift
                 && matches!(key_event.logical_key, Key::Character(ref key) if key.eq_ignore_ascii_case("q"))
             {
-                if !self.session.app_state().dirty() {
-                    self.save_session_on_exit();
-                    event_loop.exit();
-                    return;
-                }
-                if self.smoke {
-                    self.pending_close = true;
-                    self.sync_window_title();
-                    return;
-                }
-                match run_dirty_close_alert() {
-                    Ok(decision) => {
-                        self.execute_close_decision(event_loop, decision);
-                    }
-                    Err(error) => self.surface_error(error.to_string()),
-                }
+                self.request_window_close(event_loop);
                 return;
             }
             if command
                 && matches!(key_event.logical_key, Key::Character(ref key) if key.eq_ignore_ascii_case("r"))
             {
                 if self.session.path().is_some() {
+                    if self.session.app_state().dirty() {
+                        self.surface_error("Save your changes before reloading the file");
+                        return;
+                    }
                     match self.session.reload() {
                         Ok(()) => {
                             if let Err(error) = self.refresh_after_document_swap(event_loop) {
@@ -2361,6 +3181,9 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
             if command
                 && matches!(key_event.logical_key, Key::Character(ref key) if key.eq_ignore_ascii_case("z"))
             {
+                if self.session.app_state().mode() == crate::app::DocumentMode::View {
+                    return;
+                }
                 let redo = shift;
                 let change = if redo {
                     self.session.redo()
@@ -2368,6 +3191,8 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
                     self.session.undo()
                 };
                 if let Some(change) = change {
+                    self.source_pane.update_counts(self.session.counts());
+                    self.sync_tabs();
                     if let Err(error) = self
                         .source_pane
                         .editor_mut()
@@ -2395,10 +3220,25 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
             return;
         }
 
+        if self.session.app_state().mode() == crate::app::DocumentMode::View {
+            return;
+        }
         let Some(window) = &self.window else {
             return;
         };
         let effective = effective_modifiers(self.modifiers, live_modifiers());
+        // Keep Iced's select-all/copy/cut bindings, but remove their text
+        // payload so a command can never become an ordinary character edit.
+        let editor_shortcut = if let WindowEvent::KeyboardInput { event: key, .. } = &mut event {
+            let allowed = effective.super_key()
+                && matches!(&key.logical_key, Key::Character(value) if matches!(value.to_ascii_lowercase().as_str(), "a" | "c" | "x"));
+            if allowed {
+                key.text = None;
+            }
+            allowed
+        } else {
+            false
+        };
         // Backstop: a pressed character whose CMD state winit failed to track
         // must never reach the editor as plain text. Only the desync mismatch
         // is dropped, so editor-side ⌘-bindings keep their fall-through when
@@ -2406,6 +3246,7 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
         if let WindowEvent::KeyboardInput {
             event: key_event, ..
         } = &event
+            && !editor_shortcut
             && command_character_leaks_to_editor(
                 effective,
                 &key_event.logical_key,
@@ -2477,16 +3318,41 @@ impl ApplicationHandler<MacUserEvent> for ProductRunner {
             self.fail(event_loop, error.to_string());
             return;
         }
+        #[cfg(feature = "test-control")]
+        if let Err(error) = self.advance_recovery_probe(event_loop) {
+            self.fail(event_loop, error.to_string());
+            return;
+        }
+        // Timed smoke steps must advance on timer wakeups too; a quiet preview
+        // need not produce another redraw after the palette delay expires.
+        self.advance_smoke(event_loop);
+        if event_loop.exiting() {
+            return;
+        }
         self.maybe_autosave();
-        self.maybe_poll_external_change();
+        self.maybe_poll_external_change(event_loop);
         self.sync_window_title();
         // Refresh the NSAccessibility tree (CY-A11Y-001) after the title/status
         // is synced so VoiceOver reflects the current document, toolbar, and
         // notice. Runs on the winit main thread, as AppKit requires.
         self.publish_accessibility();
-        if !self.smoke {
-            event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + AUTOSAVE_INTERVAL));
+        if let Err(error) = self.schedule_render() {
+            self.fail(event_loop, error.to_string());
+            return;
         }
+        // A debounced edit needs a timer even when the user stops typing.
+        // Running workers and preview IPC wake the event loop on completion.
+        let delay = if self.session.has_pending_render() || (self.smoke && self.smoke_stage == 3) {
+            Duration::from_millis(crate::render_scheduler::DEBOUNCE_MS)
+        } else {
+            AUTOSAVE_INTERVAL
+        };
+        let wake = Instant::now() + delay;
+        event_loop.set_control_flow(ControlFlow::WaitUntil(if self.smoke {
+            wake.min(self.deadline)
+        } else {
+            wake
+        }));
         if self.smoke && Instant::now() >= self.deadline {
             self.fail(
                 event_loop,
@@ -2535,24 +3401,6 @@ fn to_wry_response(response: SchemeResponse) -> Response<Cow<'static, [u8]>> {
     builder
         .body(Cow::Owned(response.body.to_vec()))
         .expect("typed preview response headers are valid")
-}
-
-/// Which field of the find bar has keyboard focus.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum FindField {
-    Query,
-    Replace,
-}
-
-/// The rendered state of the find/replace bar (a projection of the runner's
-/// live [`crate::actions::FindSession`] plus its editable buffers).
-#[derive(Clone, Debug)]
-struct FindBarView {
-    query: String,
-    replacement: String,
-    replace_enabled: bool,
-    focus: FindField,
-    status: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -2631,6 +3479,36 @@ struct SourceState {
     focused: bool,
 }
 
+struct EditorPalette {
+    ground: (u8, u8, u8),
+    ink: core::Color,
+    muted: core::Color,
+}
+
+fn source_theme(state: &SourceState) -> core::theme::Theme {
+    if state.window.as_ref().and_then(|window| window.theme()) == Some(winit::window::Theme::Dark) {
+        core::theme::Theme::Dark
+    } else {
+        core::theme::Theme::Light
+    }
+}
+
+fn editor_palette(theme: &core::theme::Theme) -> EditorPalette {
+    if theme.extended_palette().is_dark {
+        EditorPalette {
+            ground: (28, 28, 26),
+            ink: core::Color::from_rgb8(233, 226, 214),
+            muted: core::Color::from_rgba8(233, 226, 214, 0.65),
+        }
+    } else {
+        EditorPalette {
+            ground: GROUND_LIGHT,
+            ink: INK,
+            muted: MUTED_INK,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 enum SourceMessage {
     Edit(text_editor::Action),
@@ -2642,28 +3520,30 @@ enum SourceMessage {
 /// Text-only, borderless toolbar button per DESIGN-SYSTEM ("text-only,
 /// borderless buttons, muted ink, needle-underline hover. No icons in chrome").
 fn chrome_button_style(
-    _theme: &core::theme::Theme,
+    theme: &core::theme::Theme,
     status: iced_widget::button::Status,
 ) -> iced_widget::button::Style {
-    chrome_tab_style(status, false)
+    chrome_tab_style(theme, status, false)
 }
 
 fn chrome_active_tab_style(
-    _theme: &core::theme::Theme,
+    theme: &core::theme::Theme,
     status: iced_widget::button::Status,
 ) -> iced_widget::button::Style {
-    chrome_tab_style(status, true)
+    chrome_tab_style(theme, status, true)
 }
 
 fn chrome_tab_style(
+    theme: &core::theme::Theme,
     status: iced_widget::button::Status,
     active: bool,
 ) -> iced_widget::button::Style {
     use iced_widget::button::Status;
+    let palette = editor_palette(theme);
     let text_color = match status {
         Status::Hovered | Status::Pressed => ACCENT_GOLD,
-        _ if active => INK,
-        _ => MUTED_INK,
+        _ if active => palette.ink,
+        _ => palette.muted,
     };
     iced_widget::button::Style {
         background: None,
@@ -2674,16 +3554,17 @@ fn chrome_tab_style(
     }
 }
 
-fn editor_style(_theme: &core::theme::Theme, _status: text_editor::Status) -> text_editor::Style {
+fn editor_style(theme: &core::theme::Theme, _status: text_editor::Status) -> text_editor::Style {
+    let palette = editor_palette(theme);
     text_editor::Style {
         background: core::Background::Color(core::Color::from_rgb8(
-            GROUND_LIGHT.0,
-            GROUND_LIGHT.1,
-            GROUND_LIGHT.2,
+            palette.ground.0,
+            palette.ground.1,
+            palette.ground.2,
         )),
         border: core::Border::default(),
-        placeholder: MUTED_INK,
-        value: INK,
+        placeholder: palette.muted,
+        value: palette.ink,
         selection: SELECTION_GOLD,
     }
 }
@@ -2776,6 +3657,7 @@ impl Program for SourceProgram {
         state: &'a Self::State,
         _window: core::window::Id,
     ) -> core::Element<'a, Self::Message, Self::Theme, Self::Renderer> {
+        let palette = editor_palette(&source_theme(state));
         let mut rows: Vec<core::Element<'a, Self::Message, Self::Theme, Self::Renderer>> =
             Vec::new();
 
@@ -2809,7 +3691,7 @@ impl Program for SourceProgram {
             rows.push(iced_widget::row(buttons).spacing(2).padding([2, 0]).into());
         }
 
-        if state.toolbar_visible {
+        if state.toolbar_visible && !state.focused {
             let mut buttons: Vec<core::Element<'a, Self::Message, Self::Theme, Self::Renderer>> =
                 Vec::new();
             for (label, command) in TOOLBAR_ITEMS {
@@ -2835,7 +3717,7 @@ impl Program for SourceProgram {
             find_lines.push(
                 iced_widget::text(format!("{query_marker} Find: {}", find.query))
                     .size(CHROME_FONT_SIZE)
-                    .color(INK)
+                    .color(palette.ink)
                     .into(),
             );
             if find.replace_enabled {
@@ -2847,14 +3729,14 @@ impl Program for SourceProgram {
                 find_lines.push(
                     iced_widget::text(format!("{replace_marker} Replace: {}", find.replacement))
                         .size(CHROME_FONT_SIZE)
-                        .color(INK)
+                        .color(palette.ink)
                         .into(),
                 );
             }
             find_lines.push(
                 iced_widget::text(find.status.clone())
                     .size(CHROME_FONT_SIZE)
-                    .color(MUTED_INK)
+                    .color(palette.muted)
                     .into(),
             );
             rows.push(
@@ -2888,7 +3770,7 @@ impl Program for SourceProgram {
         rows.push(
             iced_widget::text(status)
                 .size(CHROME_FONT_SIZE)
-                .color(MUTED_INK)
+                .color(palette.muted)
                 .into(),
         );
 
@@ -3295,18 +4177,22 @@ impl IcedSourcePane {
             std::mem::take(&mut self.cache),
             renderer,
         );
-        let theme = <core::theme::Theme as core::theme::Base>::default(core::theme::Mode::Light);
-        let background = core::Color::from_rgb8(GROUND_LIGHT.0, GROUND_LIGHT.1, GROUND_LIGHT.2);
+        let theme = source_theme(&self.state);
+        let palette = editor_palette(&theme);
+        let background =
+            core::Color::from_rgb8(palette.ground.0, palette.ground.1, palette.ground.2);
         interface.draw(
             renderer,
             &theme,
-            &core::renderer::Style { text_color: INK },
+            &core::renderer::Style {
+                text_color: palette.ink,
+            },
             self.cursor,
         );
         self.cache = interface.into_cache();
 
         let pixels = compositor.screenshot(renderer, viewport, background);
-        let background_rgba = [GROUND_LIGHT.0, GROUND_LIGHT.1, GROUND_LIGHT.2, 255];
+        let background_rgba = [palette.ground.0, palette.ground.1, palette.ground.2, 255];
         self.ink_pixels = pixels
             .chunks_exact(4)
             .filter(|pixel| *pixel != background_rgba)
@@ -3328,6 +4214,48 @@ impl IcedSourcePane {
 
     fn visual_receipt(&self) -> Result<EditorVisualReceipt, MacError> {
         EditorVisualReceipt::new(self.presented_frames, self.ink_pixels, self.ime_commits)
+    }
+
+    /// Optional isolated fixture capture; never captures other applications.
+    fn capture_smoke_frame(&mut self, name: &str) -> Result<(), MacError> {
+        use graphics::Compositor as _;
+        use std::io::Write as _;
+        if !cfg!(feature = "test-control") {
+            return Ok(());
+        }
+        let Some(dir) = std::env::var_os("RUTILE_SMOKE_EVIDENCE_DIR") else {
+            return Ok(());
+        };
+        let viewport = self
+            .viewport
+            .as_ref()
+            .ok_or_else(|| MacError::Native("missing viewport".into()))?;
+        let renderer = self
+            .renderer
+            .as_mut()
+            .ok_or_else(|| MacError::Native("missing renderer".into()))?;
+        let compositor = self
+            .compositor
+            .as_mut()
+            .ok_or_else(|| MacError::Native("missing compositor".into()))?;
+        let palette = editor_palette(&source_theme(&self.state));
+        let pixels = compositor.screenshot(
+            renderer,
+            viewport,
+            core::Color::from_rgb8(palette.ground.0, palette.ground.1, palette.ground.2),
+        );
+        let size = viewport.physical_size();
+        let path = PathBuf::from(dir).join(format!("editor-{name}.ppm"));
+        let mut file =
+            std::fs::File::create_new(path).map_err(|error| MacError::Native(error.to_string()))?;
+        write!(file, "P6\n{} {}\n255\n", size.width, size.height)
+            .map_err(|error| MacError::Native(error.to_string()))?;
+        let rgb: Vec<u8> = pixels
+            .chunks_exact(4)
+            .flat_map(|pixel| pixel[..3].iter().copied())
+            .collect();
+        file.write_all(&rgb)
+            .map_err(|error| MacError::Native(error.to_string()))
     }
 
     fn teardown(&mut self) {
@@ -3427,6 +4355,10 @@ fn choose_save_path(default_name: &str) -> Result<Option<PathBuf>, MacError> {
 /// Stable per-user autosave/session directory
 /// (`~/Library/Application Support/Rutile`).
 fn autosave_dir() -> Option<PathBuf> {
+    #[cfg(feature = "test-control")]
+    if let Some(directory) = std::env::var_os("RUTILE_TEST_STATE_DIR") {
+        return Some(PathBuf::from(directory));
+    }
     std::env::var_os("HOME")
         .map(|home| PathBuf::from(home).join("Library/Application Support/Rutile"))
 }
@@ -3453,13 +4385,17 @@ fn unix_ms_now() -> u64 {
 // ---------------------------------------------------------------------------
 
 /// The user's choice on the crash-recovery `NSAlert` (a recovered buffer was
-/// found on launch). "Restore" rehydrates it; "Dismiss" discards it.
+/// found on launch). Discard requires an explicit, labelled choice.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RecoveryDialogAction {
     /// Rehydrate the recovered buffer ("Restore", first button).
     Restore,
-    /// Drop the recovered buffer ("Dismiss", second button).
+    /// Drop the recovered buffer ("Discard Drafts", second button).
     Dismiss,
+    /// Quit with recovery files intact ("Quit", third button / Escape).
+    Quit,
+    /// Unrecognised/modal cancellation leaves the recovery data pending.
+    Pending,
 }
 
 /// The user's choice on the unsaved-changes-on-close `NSAlert`.
@@ -3475,8 +4411,8 @@ enum CloseDialogAction {
 
 /// Exact button ordering for the recovery `NSAlert`. Buttons are added to the
 /// alert in this order, so `NSAlertFirstButtonReturn` ⇒ `RecoveryDialogAction::Restore`
-/// and every other response ⇒ `RecoveryDialogAction::Dismiss`.
-const RECOVERY_DIALOG_BUTTONS: &[&str] = &["Restore", "Dismiss"];
+/// and the second response ⇒ `RecoveryDialogAction::Dismiss`.
+const RECOVERY_DIALOG_BUTTONS: &[&str] = &["Restore", "Discard Drafts", "Quit"];
 
 /// Exact button ordering for the unsaved-changes-on-close `NSAlert`:
 /// `NSAlertFirstButtonReturn` ⇒ `CloseDialogAction::Save`,
@@ -3485,14 +4421,17 @@ const RECOVERY_DIALOG_BUTTONS: &[&str] = &["Restore", "Dismiss"];
 const CLOSE_DIALOG_BUTTONS: &[&str] = &["Save", "Don't Save", "Cancel"];
 
 /// Maps a recovery `NSAlert` response onto `RecoveryDialogAction`. Only the
-/// first button restores; the second button and any unknown / out-of-range code
-/// dismiss — fail-closed against silently clobbering the live buffer with a
-/// stale recovered one.
+/// first button restores and the second dismisses. Unknown responses preserve
+/// both the live buffer and the recovery data until an explicit decision.
 fn recovery_dialog_action(response: NSModalResponse) -> RecoveryDialogAction {
     if response == NSAlertFirstButtonReturn {
         RecoveryDialogAction::Restore
-    } else {
+    } else if response == NSAlertSecondButtonReturn {
         RecoveryDialogAction::Dismiss
+    } else if response.checked_sub(NSAlertFirstButtonReturn) == Some(2) {
+        RecoveryDialogAction::Quit
+    } else {
+        RecoveryDialogAction::Pending
     }
 }
 
@@ -3512,9 +4451,8 @@ fn close_dialog_action(response: NSModalResponse) -> CloseDialogAction {
 
 /// Presents the crash-recovery `NSAlert` on the `AppKit` main thread and projects
 /// its `runModal` response onto `RecoveryDialogAction`. Buttons are added in
-/// `RECOVERY_DIALOG_BUTTONS` order so the first button restores; the "Dismiss"
-/// button is bound to Escape (⎋) so the recovered buffer can be dropped without
-/// leaving the keyboard. A failure to reach the main thread is returned as an
+/// `RECOVERY_DIALOG_BUTTONS` order. Escape quits with drafts intact.
+/// A failure to reach the main thread is returned as an
 /// error — the caller surfaces it and leaves `pending_recovery` intact
 /// (MAC-004 fail-closed) rather than silently restoring or dismissing.
 fn run_recovery_alert() -> Result<RecoveryDialogAction, MacError> {
@@ -3525,25 +4463,53 @@ fn run_recovery_alert() -> Result<RecoveryDialogAction, MacError> {
     alert.setAlertStyle(NSAlertStyle::Warning);
     alert.setMessageText(&NSString::from_str("Recovered unsaved changes"));
     alert.setInformativeText(&NSString::from_str(
-        "A previous session ended with unsaved edits. Restore them now, or \
-         dismiss to keep the current document unchanged.",
+        "Restore the unsaved tabs from your previous session. Discard Drafts \
+         permanently removes those unsaved edits and reopens saved files. \
+         Quit keeps the drafts for your next launch.",
     ));
-    // First button ("Restore") restores; second ("Dismiss") dismisses. The
-    // retained buttons are owned by the alert, so only "Dismiss" is bound —
-    // to Escape (⎋) so the recovered buffer can be dropped from the keyboard.
-    let _ = alert.addButtonWithTitle(&NSString::from_str(RECOVERY_DIALOG_BUTTONS[0]));
-    let dismiss = alert.addButtonWithTitle(&NSString::from_str(RECOVERY_DIALOG_BUTTONS[1]));
-    dismiss.setKeyEquivalent(&NSString::from_str("\u{1b}"));
+    for (index, title) in RECOVERY_DIALOG_BUTTONS.iter().enumerate() {
+        let button = alert.addButtonWithTitle(&NSString::from_str(title));
+        if index == 2 {
+            button.setKeyEquivalent(&NSString::from_str("\u{1b}"));
+        }
+    }
     Ok(recovery_dialog_action(alert.runModal()))
 }
 
-/// Presents the unsaved-changes-on-close `NSAlert` on the `AppKit` main thread
-/// and projects its `runModal` response onto `CloseDialogAction`. Buttons are
-/// added in `CLOSE_DIALOG_BUTTONS` order ("Save", "Don't Save", "Cancel").
-/// "Cancel" and "Don't Save" pick up their standard `AppKit` key equivalents
-/// (Escape / ⌘D) from their native titles, so no equivalent is set here. A
-/// failure to reach the main thread is returned as an error — the caller
-/// surfaces it and leaves the dirty window open rather than dropping changes.
+/// Explicit choices for a file changed outside the editor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConflictDialogAction {
+    Cancel,
+    Reload,
+    Keep,
+    SaveCopy,
+}
+
+fn conflict_dialog_action(response: NSModalResponse) -> ConflictDialogAction {
+    match response.checked_sub(NSAlertFirstButtonReturn) {
+        Some(1) => ConflictDialogAction::Reload,
+        Some(2) => ConflictDialogAction::Keep,
+        Some(3) => ConflictDialogAction::SaveCopy,
+        _ => ConflictDialogAction::Cancel,
+    }
+}
+
+fn run_conflict_alert() -> Result<ConflictDialogAction, MacError> {
+    let mtm = MainThreadMarker::new()
+        .ok_or_else(|| MacError::Native("file conflict alert requires the main thread".into()))?;
+    let alert = NSAlert::new(mtm);
+    alert.setAlertStyle(NSAlertStyle::Warning);
+    alert.setMessageText(&NSString::from_str("This file changed outside Rutile"));
+    alert.setInformativeText(&NSString::from_str("Reload Disk replaces your unsaved edits. Keep Editing preserves your edits and allows the next Save to replace the disk version. Save a Copy preserves both versions."));
+    for title in ["Cancel", "Reload Disk", "Keep Editing", "Save a Copy…"] {
+        let button = alert.addButtonWithTitle(&NSString::from_str(title));
+        if title == "Cancel" {
+            button.setKeyEquivalent(&NSString::from_str("\u{1b}"));
+        }
+    }
+    Ok(conflict_dialog_action(alert.runModal()))
+}
+
 fn run_dirty_close_alert() -> Result<CloseDialogAction, MacError> {
     let mtm = MainThreadMarker::new()
         .ok_or_else(|| MacError::Native("close alert must run on the AppKit main thread".into()))?;
@@ -3617,6 +4583,19 @@ pub(super) fn command_character_leaks_to_editor(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unknown_conflict_dialog_responses_cancel() {
+        use super::{ConflictDialogAction, conflict_dialog_action};
+        for response in [isize::MIN, -1, 0, 999, 1000, 1004, isize::MAX] {
+            assert_eq!(
+                conflict_dialog_action(response),
+                ConflictDialogAction::Cancel
+            );
+        }
+        assert_eq!(conflict_dialog_action(1001), ConflictDialogAction::Reload);
+        assert_eq!(conflict_dialog_action(1002), ConflictDialogAction::Keep);
+        assert_eq!(conflict_dialog_action(1003), ConflictDialogAction::SaveCopy);
+    }
     use super::smoke_stage_zero_ready_to_edit;
     use super::{AxAnnouncementPriority, AxFindField, AxSelection};
     use super::{
@@ -3729,7 +4708,10 @@ mod tests {
     #[test]
     fn recovery_dialog_buttons_have_the_exact_restore_then_dismiss_ordering() {
         // The alert must add "Restore" first so NSAlertFirstButtonReturn ⇒ Restore.
-        assert_eq!(RECOVERY_DIALOG_BUTTONS, ["Restore", "Dismiss"].as_slice());
+        assert_eq!(
+            RECOVERY_DIALOG_BUTTONS,
+            ["Restore", "Discard Drafts", "Quit"].as_slice()
+        );
     }
 
     #[test]
@@ -3752,7 +4734,7 @@ mod tests {
         );
         assert_eq!(
             recovery_dialog_action(objc2_app_kit::NSAlertThirdButtonReturn),
-            RecoveryDialogAction::Dismiss
+            RecoveryDialogAction::Quit
         );
     }
 
@@ -3774,12 +4756,11 @@ mod tests {
 
     #[test]
     fn recovery_dialog_fails_closed_on_an_unknown_response() {
-        // Any code that is not the first button must dismiss, never restore —
-        // restoring an unrecognised choice could clobber the live buffer.
+        // An unrecognised response must neither restore nor delete drafts.
         // 0 is NSModalResponseCancel; -1 and 9999 are out of the alert's range.
-        assert_eq!(recovery_dialog_action(0), RecoveryDialogAction::Dismiss);
-        assert_eq!(recovery_dialog_action(-1), RecoveryDialogAction::Dismiss);
-        assert_eq!(recovery_dialog_action(9999), RecoveryDialogAction::Dismiss);
+        assert_eq!(recovery_dialog_action(0), RecoveryDialogAction::Pending);
+        assert_eq!(recovery_dialog_action(-1), RecoveryDialogAction::Pending);
+        assert_eq!(recovery_dialog_action(9999), RecoveryDialogAction::Pending);
     }
 
     #[test]

@@ -13,7 +13,7 @@ pub const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; script-src 'self'
 
 const CSS_URL: &str = "rutile://preview/v1/assets/preview.css";
 const JS_URL: &str = "rutile://preview/v1/assets/bridge.js";
-const PREVIEW_CSS: &[u8] = b":root{color-scheme:light dark}html{font-family:system-ui,sans-serif}body{margin:0;padding:1.5rem}main{max-width:72ch;margin:auto}pre{overflow:auto}a[role=link]{text-decoration:underline;cursor:pointer}";
+const PREVIEW_CSS: &[u8] = rutile_core::DOCUMENT_CSS.as_bytes();
 const PREVIEW_BRIDGE: &[u8] = br#"(()=>{'use strict';const send=(value)=>window.ipc.postMessage(JSON.stringify(value)+'\n');const revision=Number(document.documentElement.dataset.rutileRevision);let nextInteractionId=1;let programmatic=null;let scrollScheduled=false;const sourceAtViewport=()=>{const y=window.scrollY;let bestStart=0;let bestTop=-Infinity;let bestOrdinal=-1;let ordinal=0;for(const node of document.querySelectorAll('[data-source-start][data-source-revision]')){const nodeRevision=Number(node.dataset.sourceRevision);const start=Number(node.dataset.sourceStart);const top=y+node.getBoundingClientRect().top;if(nodeRevision===revision&&Number.isSafeInteger(start)&&Number.isFinite(top)&&top<=y+1&&(top>bestTop||(top===bestTop&&ordinal>bestOrdinal))){bestStart=start;bestTop=top;bestOrdinal=ordinal;}ordinal+=1;}return bestStart;};const emitScroll=()=>{scrollScheduled=false;const source_start=sourceAtViewport();const interaction_id=programmatic===null?nextInteractionId:programmatic;if(programmatic===null){nextInteractionId=nextInteractionId===Number.MAX_SAFE_INTEGER?1:nextInteractionId+1;}send({type:'scroll',v:1,revision,source_start,interaction_id,user:programmatic===null});programmatic=null;};const scheduleScroll=()=>{if(!scrollScheduled){scrollScheduled=true;requestAnimationFrame(emitScroll);}};const receiveScrollTo=(frame)=>{if(typeof frame!=='string'||new TextEncoder().encode(frame).byteLength>256||!frame.endsWith('\n')||frame.slice(0,-1).includes('\n'))return false;let command;try{command=JSON.parse(frame.slice(0,-1));}catch(_error){return false;}if(command===null||typeof command!=='object'||Array.isArray(command))return false;if(Object.keys(command).sort().join(',')!=='interaction_id,revision,source_start,type,v')return false;if(command.type!=='scroll_to'||command.v!==1||command.revision!==revision||!Number.isSafeInteger(command.source_start)||command.source_start<0||command.source_start>20971520||!Number.isSafeInteger(command.interaction_id)||command.interaction_id<0)return false;const canonical=JSON.stringify({type:'scroll_to',v:1,revision:command.revision,source_start:command.source_start,interaction_id:command.interaction_id})+'\n';if(frame!==canonical)return false;let target=null;let best=-1;for(const node of document.querySelectorAll('[data-source-start][data-source-revision]')){const nodeRevision=Number(node.dataset.sourceRevision);const start=Number(node.dataset.sourceStart);if(nodeRevision===revision&&Number.isSafeInteger(start)&&start<=command.source_start&&start>=best){target=node;best=start;}}if(target===null)return false;programmatic=command.interaction_id;target.scrollIntoView({block:'start'});scheduleScroll();return true;};Object.defineProperty(window,'__rutileReceiveScrollTo',{value:receiveScrollTo,writable:false,configurable:false});window.addEventListener('scroll',scheduleScroll,{passive:true});document.addEventListener('DOMContentLoaded',()=>{send({type:'bridge_ready',v:1,revision});requestAnimationFrame(()=>requestAnimationFrame(()=>send({type:'painted',v:1,revision,frame_seq:2})));});document.addEventListener('click',(event)=>{const link=event.target instanceof Element?event.target.closest('[role="link"][data-rutile-url]'):null;if(link)send({type:'link_activated',v:1,revision,normalized_url:link.dataset.rutileUrl});});})();"#;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -111,7 +111,7 @@ pub struct PreviewHost {
     document: Option<HostedDocument>,
     pending_navigation: Option<String>,
     loaded_revision: Option<Revision>,
-    /// Tasteroll CSS custom-property block to inject into preview HTML (L14).
+    /// Tasteroll CSS custom-property block appended to the allowed CSS asset.
     /// Updated by the platform shell whenever the tasteroll state changes.
     tasteroll_css: Option<String>,
 }
@@ -123,8 +123,8 @@ impl PreviewHost {
     }
 
     /// Set or clear the tasteroll CSS custom-property block (L14).
-    /// When set, the CSS is injected as a `<style>` block into every
-    /// preview HTML response before `</head>`.
+    /// The no-store stylesheet carries the override under the existing CSP;
+    /// document HTML bytes remain unchanged.
     pub fn set_tasteroll_css(&mut self, css: Option<String>) {
         self.tasteroll_css = css;
     }
@@ -162,7 +162,12 @@ impl PreviewHost {
             return SchemeResponse::not_found();
         }
         if request.url == CSS_URL {
-            return response("text/css", false, Arc::from(PREVIEW_CSS));
+            let mut css = PREVIEW_CSS.to_vec();
+            if let Some(theme) = &self.tasteroll_css {
+                css.extend_from_slice(b"\n");
+                css.extend_from_slice(theme.as_bytes());
+            }
+            return response("text/css", false, Arc::from(css));
         }
         if request.url == JS_URL {
             return response("text/javascript", false, Arc::from(PREVIEW_BRIDGE));
@@ -170,12 +175,7 @@ impl PreviewHost {
         if let Some(document) = &self.document
             && request.url == document.exact_url
         {
-            let body = if let Some(css) = &self.tasteroll_css {
-                inject_tasteroll_css(&document.page, css)
-            } else {
-                document.page.clone()
-            };
-            return response("text/html; charset=utf-8", true, body);
+            return response("text/html; charset=utf-8", true, document.page.clone());
         }
         SchemeResponse::not_found()
     }
@@ -282,56 +282,31 @@ fn common_headers(
     headers
 }
 
-/// Injects a `<style>` block containing tasteroll CSS custom properties into
-/// the HTML page, inserting before `</head>` (or prepending if no head).
-fn inject_tasteroll_css(page: &[u8], css: &str) -> Arc<[u8]> {
-    let style_block = format!("<style>{css}</style>");
-    let style_bytes = style_block.as_bytes();
-    let insert_pos = find_ci(page, b"</head>").unwrap_or(0);
-    let mut result = Vec::with_capacity(page.len() + style_bytes.len());
-    result.extend_from_slice(&page[..insert_pos]);
-    result.extend_from_slice(style_bytes);
-    result.extend_from_slice(&page[insert_pos..]);
-    Arc::from(result)
-}
-
-/// Case-insensitive search for `needle` in `haystack`.
-fn find_ci(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|w| w.eq_ignore_ascii_case(needle))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::inject_tasteroll_css;
+    use super::*;
 
     #[test]
-    fn style_block_lands_before_case_insensitive_head_close() {
-        let page = b"<html><HEAD></HEAD><body><p>doc</p></body></html>";
-        let out = inject_tasteroll_css(page, "--ink: #111;");
-        let text = String::from_utf8_lossy(&out);
+    fn themes_use_the_allowed_stylesheet_without_mutating_page_bytes() {
+        let mut host = PreviewHost::new();
+        let render_url = RenderUrl::new(Revision::new(0), [0; 16]);
+        let url = format!("rutile://preview{}", render_url.document_path());
+        let page: Arc<[u8]> =
+            Arc::from(b"<html><head></head><body>document</body></html>".as_slice());
+        host.stage_document(render_url, Arc::clone(&page)).unwrap();
+        host.set_tasteroll_css(Some(":root{--ink:#123456}".into()));
+        let response = host.serve(&SchemeRequest::get(url));
+        assert_eq!(response.body, page);
+        assert!(!CONTENT_SECURITY_POLICY.contains("unsafe-inline"));
+        let response = host.serve(&SchemeRequest::get(CSS_URL));
+        let css = std::str::from_utf8(&response.body).unwrap();
+        assert!(css.starts_with(rutile_core::DOCUMENT_CSS));
+        assert!(css.ends_with(":root{--ink:#123456}"));
+        assert!(!css.contains("url("));
+        host.set_tasteroll_css(None);
         assert_eq!(
-            text,
-            "<html><HEAD><style>--ink: #111;</style></HEAD><body><p>doc</p></body></html>"
+            host.serve(&SchemeRequest::get(CSS_URL)).body.as_ref(),
+            PREVIEW_CSS
         );
-    }
-
-    #[test]
-    fn headless_page_prepends_the_style_block() {
-        let out = inject_tasteroll_css(b"<p>no head</p>", "--ink: #111;");
-        let text = String::from_utf8_lossy(&out);
-        assert!(text.starts_with("<style>--ink: #111;</style><p>no head</p>"));
-    }
-
-    #[test]
-    fn page_bytes_are_preserved_outside_the_insertion_point() {
-        let page = b"<html><head></head><body>\xe2\x9c\x93 utf-8 \xff raw</body></html>";
-        let out = inject_tasteroll_css(page, "--a: 0;");
-        let text = String::from_utf8_lossy(&out);
-        assert!(text.contains("</style></head>"));
-        assert!(text.contains("utf-8"));
-        // Byte length grows by exactly the style block.
-        assert_eq!(out.len(), page.len() + "<style>--a: 0;</style>".len());
     }
 }

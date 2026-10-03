@@ -110,6 +110,11 @@ pub struct DocumentSnapshot {
 }
 
 impl DocumentSnapshot {
+    /// Compares rope contents without flattening either snapshot.
+    pub fn same_content(&self, other: &Self) -> bool {
+        self.rope == other.rope
+    }
+
     pub fn len_bytes(&self) -> usize {
         self.rope.len_bytes()
     }

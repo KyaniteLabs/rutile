@@ -1,0 +1,32 @@
+textview { caret-color: #c9921e; }
+textview.rutile-source { font-family: sans-serif; font-size: 15px; }
+textview text selection { background-color: rgba(201,146,30,0.28); }
+.rutile-shell, .rutile-menubar, .rutile-tabs, .rutile-statusbar, .rutile-toolbar, .rutile-findbar {
+    background-color: #241e19;
+    color: #e9e2d6;
+}
+.rutile-menubar > menuitem { color: #e9e2d6; }
+.rutile-menubar > menuitem:hover { background-color: #332d26; }
+.rutile-tabs { padding: 4px 6px; }
+.rutile-tabs button, .rutile-toolbar button {
+    background-image: none;
+    background-color: transparent;
+    box-shadow: none;
+    color: #e9e2d6;
+    border: 1px solid transparent;
+    border-radius: 2px;
+    padding: 4px 10px;
+}
+.rutile-tabs button:checked {
+    background-color: #332d26;
+    border-color: #6e5f49;
+}
+.rutile-tabs button:hover, .rutile-toolbar button:hover { background-color: #332d26; }
+.rutile-tabs button:disabled { color: #a69b8c; }
+.rutile-statusbar { font-size: 12px; padding: 4px 8px; }
+.rutile-findbar { padding: 6px 8px; }
+.rutile-history list, .rutile-navigator list { background-color: #332d26; color: #e9e2d6; }
+.rutile-history row:selected, .rutile-navigator row:selected { background-color: #4c3a1e; color: #e9e2d6; }
+.rutile-history textview { font-family: sans-serif; font-size: 15px; }
+.rutile-history textview text { background-color: #f6f2e9; color: #241e19; }
+.rutile-history.rutile-dark textview text { background-color: #241e19; color: #e9e2d6; }

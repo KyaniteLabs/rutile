@@ -3,8 +3,8 @@
   Rutile "specimen case" GtkSourceView style scheme (DESIGN-SYSTEM app-chrome).
   Mineral-editorial: quiet gold syntax staining on a smoky-quartz ground. The
   app's entire fire budget is the caret; markdown marks recede into muted gold,
-  content stays full-contrast ink. Dark-tuned; light-mode ground flip deferred to
-  Wave 3.
+  content stays full-contrast ink. This dark palette is the template; the native
+  shell derives the light palette from the shared document ground colors.
 -->
 <style-scheme id="rutile-quartz" _name="Rutile Quartz" version="1.0">
   <author>Rutile</author>

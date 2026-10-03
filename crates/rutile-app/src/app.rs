@@ -183,6 +183,12 @@ pub enum AppMessage {
         path: PathBuf,
     },
     NewTab,
+    DocumentViewChanged {
+        id: DocumentId,
+        path: Option<PathBuf>,
+        view: rutile_core::WorkspaceViewState,
+        find_bar: Option<crate::document_view::FindBarView>,
+    },
     SwitchTab {
         id: DocumentId,
     },
@@ -194,7 +200,19 @@ pub enum AppMessage {
         id: DocumentId,
         decision: CloseDecision,
     },
+    ReorderTab {
+        id: DocumentId,
+        to: usize,
+    },
     // --- Roadmap 06: command palette ---------------------------------------
+    FormatRequested {
+        command: FormatCommand,
+    },
+    CreateHistoryCheckpoint,
+    ShowHistory,
+    ShowNavigator {
+        kind: crate::navigation::NavigatorKind,
+    },
     /// Opens the command palette (clears any previous query).
     OpenCommandPalette,
     /// Closes the command palette.
@@ -209,6 +227,9 @@ pub enum AppMessage {
     PaletteSelectPrev,
     /// Dispatches the selected command and closes the palette.
     PaletteSubmit,
+    PaletteSelectIndex {
+        index: usize,
+    },
     // --- Roadmap 04: reader-first view mode ---------------------------------
     /// Sets the shell-level document view mode (Edit / Split / View).
     SetDocumentMode {
@@ -228,6 +249,14 @@ pub enum AppMessage {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AppEffect {
+    PerformFormat {
+        command: FormatCommand,
+    },
+    CreateHistoryCheckpoint,
+    ShowHistory,
+    ShowNavigator {
+        kind: crate::navigation::NavigatorKind,
+    },
     ScheduleRender {
         revision: Revision,
     },
@@ -407,6 +436,10 @@ impl std::fmt::Debug for AppState {
 }
 
 impl AppState {
+    pub(crate) fn replace_documents(&mut self, documents: DocumentManager) {
+        self.documents = documents;
+    }
+
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -489,6 +522,15 @@ impl AppState {
     #[must_use]
     pub const fn palette(&self) -> &CommandPalette {
         &self.palette
+    }
+
+    /// Resolve without dispatching so the session core can preserve tab ropes.
+    pub fn selected_palette_message(&self) -> Option<AppMessage> {
+        if !self.palette.is_open() {
+            return None;
+        }
+        let id = self.palette.selected_candidate()?.id;
+        (self.registry.lookup(&id)?.message)(self)
     }
 
     /// Projects the open palette for a native panel. `None` when closed.
@@ -588,10 +630,51 @@ impl AppState {
         self.notices.retain(|notice| !notice.dismissed);
     }
 
+    fn document_opened(
+        &mut self,
+        revision: Revision,
+        path: PathBuf,
+        disk: DiskVersion,
+    ) -> Vec<AppEffect> {
+        self.recents.touch(path.clone());
+        let slot = self.documents.active_slot_mut();
+        if slot.path.as_ref() != Some(&path) {
+            slot.view = rutile_core::WorkspaceViewState::default();
+            slot.find = None;
+            slot.find_bar = None;
+        }
+        slot.revision = revision;
+        slot.dirty = false;
+        slot.path = Some(path);
+        slot.saved_disk = Some(disk);
+        slot.external_conflict = None;
+        slot.preview = PreviewState::Waiting { revision };
+        if let Some(find) = slot.find.as_mut() {
+            find.current = None;
+        }
+        vec![AppEffect::ScheduleRender { revision }]
+    }
+
+    fn request_format(&self, command: FormatCommand) -> Vec<AppEffect> {
+        if self.mode == DocumentMode::View {
+            vec![]
+        } else {
+            vec![AppEffect::PerformFormat { command }]
+        }
+    }
+
     pub fn reduce(&mut self, message: AppMessage) -> Vec<AppEffect> {
         match message {
+            AppMessage::CreateHistoryCheckpoint => vec![AppEffect::CreateHistoryCheckpoint],
+            AppMessage::ShowHistory => vec![AppEffect::ShowHistory],
+            AppMessage::ShowNavigator { kind } => vec![AppEffect::ShowNavigator { kind }],
+            AppMessage::FormatRequested { command } => self.request_format(command),
+            AppMessage::ReorderTab { id, to } => self.reorder_tab(id, to),
             AppMessage::NewDocument => {
                 let slot = self.documents.active_slot_mut();
+                slot.view = rutile_core::WorkspaceViewState::default();
+                slot.find = None;
+                slot.find_bar = None;
                 slot.revision = Revision::new(0);
                 slot.dirty = false;
                 slot.path = None;
@@ -608,17 +691,7 @@ impl AppState {
                 revision,
                 path,
                 disk,
-            } => {
-                self.recents.touch(path.clone());
-                let slot = self.documents.active_slot_mut();
-                slot.revision = revision;
-                slot.dirty = false;
-                slot.path = Some(path);
-                slot.saved_disk = Some(disk);
-                slot.external_conflict = None;
-                slot.preview = PreviewState::Waiting { revision };
-                vec![AppEffect::ScheduleRender { revision }]
-            }
+            } => self.document_opened(revision, path, disk),
             AppMessage::DocumentEdited { revision }
                 if revision <= self.documents.active_slot().revision =>
             {
@@ -835,17 +908,21 @@ impl AppState {
                 vec![]
             }
             AppMessage::SessionRestored { state } => {
-                self.documents = DocumentManager::new();
                 self.recents = RecentDocuments::from_strings(
                     &state.recent_files,
                     rutile_core::MAX_RECENT_FILES,
                 );
                 let restore = self.restore_session(&state);
-                if let Some(path) = restore.last_file {
-                    vec![AppEffect::PerformOpen { path }]
+                let paths = if restore.open_tabs.is_empty() {
+                    restore.last_file.into_iter().collect()
                 } else {
-                    vec![]
-                }
+                    restore.open_tabs
+                };
+                paths
+                    .into_iter()
+                    .take(crate::document_manager::MAX_OPEN_DOCUMENTS)
+                    .map(|path| AppEffect::PerformOpen { path })
+                    .collect()
             }
             AppMessage::NoticeDismissed { id } => {
                 self.dismiss_notice(id);
@@ -896,6 +973,20 @@ impl AppState {
             }
             AppMessage::RemoveRecent { path } => {
                 self.recents.remove(&path);
+                vec![]
+            }
+            AppMessage::DocumentViewChanged {
+                id,
+                path,
+                view,
+                find_bar,
+            } => {
+                if let Some(slot) = self.documents.slot_mut(id)
+                    && slot.path == path
+                {
+                    slot.view = view;
+                    slot.find_bar = find_bar;
+                }
                 vec![]
             }
             AppMessage::NewTab => {
@@ -974,18 +1065,16 @@ impl AppState {
                 // current state, close the palette, then forward the message
                 // through the reducer so the transition is exercised exactly
                 // once by the single writer.
-                let dispatch: Option<AppMessage> = {
-                    let id = self.palette.selected_candidate().map(|c| c.id);
-                    id.and_then(|id| {
-                        let desc = self.registry.lookup(&id).copied()?;
-                        (desc.message)(self)
-                    })
-                };
+                let dispatch = self.selected_palette_message();
                 self.palette.close();
                 match dispatch {
                     Some(msg) => self.reduce(msg),
                     None => vec![],
                 }
+            }
+            AppMessage::PaletteSelectIndex { index } => {
+                self.palette.select_index(index);
+                vec![]
             }
             AppMessage::SetDocumentMode { mode } => {
                 self.mode = mode;
@@ -1008,6 +1097,18 @@ impl AppState {
                 vec![]
             }
         }
+    }
+
+    fn reorder_tab(&mut self, id: DocumentId, to: usize) -> Vec<AppEffect> {
+        if let Some(from) = self
+            .documents
+            .tab_order()
+            .iter()
+            .position(|candidate| *candidate == id)
+        {
+            let _ = self.documents.reorder_tab(from, to);
+        }
+        Vec::new()
     }
 
     fn reduce_preview_event(&mut self, event: PreviewEventV1) -> Vec<AppEffect> {
@@ -1363,7 +1464,13 @@ impl AppState {
     /// or `None` when there is nothing to recover / no store is bound.
     pub fn recover(&self) -> Result<Option<RecoveredDocument>, AutosaveError> {
         match &self.documents.active_slot().autosave {
-            Some(store) => Ok(store.recover()?.recovered),
+            Some(store) => {
+                let report = store.recover()?;
+                if report.recovered.is_none() && !report.rejected.is_empty() {
+                    return Err(AutosaveError::InvalidJournal);
+                }
+                Ok(report.recovered)
+            }
             None => Ok(None),
         }
     }
@@ -1428,6 +1535,14 @@ impl AppState {
             top_visible_byte: top_visible_byte.map(|byte| byte as u64),
             window,
             recent_files,
+            open_tabs: self
+                .documents
+                .tab_order()
+                .iter()
+                .filter_map(|id| self.documents.slot(*id)?.path.as_ref())
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect(),
+            active_tab: self.path().map(|path| path.to_string_lossy().into_owned()),
         }
     }
 
@@ -1454,6 +1569,9 @@ impl AppState {
     /// against the loaded document.
     pub fn restore_session(&self, state: &SessionStateV1) -> SessionRestore {
         SessionRestore {
+            recent_files: state.recent_files.clone(),
+            open_tabs: state.open_tabs.iter().map(PathBuf::from).collect(),
+            active_tab: state.active_tab.as_ref().map(PathBuf::from),
             last_file: state.last_file.as_ref().map(PathBuf::from),
             selection: state.selection.map(|selection| Selection {
                 anchor: selection.anchor as usize,

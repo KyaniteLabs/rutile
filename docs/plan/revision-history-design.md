@@ -1,7 +1,8 @@
 # Local Revision History (Roadmap 11) — Design Decisions
 
-Status: **locked (contract implemented in `revision_history.rs`; native
-history UI deferred).** Parent issue:
+Status: **contract retained; bounded snapshots and native comparison dialogs
+implemented in the current local candidate. GTK and external macOS restore/undo
+executed; both comparison panels inspected. Final journey gates remain open.** Parent issue:
 `.scratch/rutile-macos-roadmap/issues/11-local-revision-history.md`.
 Blocked by 03 (LOCKED), 08 (DONE).
 
@@ -25,6 +26,11 @@ Checkpoints are recorded on:
 
 `MAX_HISTORY_ENTRIES = 100`. When the cap is reached, the oldest entry is
 evicted. This bounds memory usage while providing substantial history depth.
+
+The snapshot implementation additionally caps the whole workspace at 100
+entries and 64 MiB of logical document bytes, charging shared ropes at their
+full logical size. Consecutive identical content is deduplicated. Closing a
+document removes its checkpoints; crash recovery remains independent.
 
 ### H4 — No persistent storage in the initial contract
 

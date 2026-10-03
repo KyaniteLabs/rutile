@@ -87,6 +87,8 @@ fn bench_decode_session() {
     // (≈45 KiB encoded). Exercise that floor.
     let long_path = format!("/home/user/{}", "a".repeat(4_080));
     let state = SessionStateV1 {
+        open_tabs: Vec::new(),
+        active_tab: None,
         schema: SESSION_SCHEMA_V1.to_owned(),
         v: 1,
         saved_at_unix_ms: 1_750_000_000_000,

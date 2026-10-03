@@ -37,7 +37,7 @@ use super::PlatformAdapter;
 use crate::actions::{
     ExportOutput, FindSession, FormatApplied, InsertApplied, ReplaceApplied, SessionRestore,
 };
-use crate::app::{AppEffect, AppMessage, AppState, CloseDecision, CloseOutcome};
+use crate::app::{AppEffect, AppMessage, AppState, CloseDecision, CloseOutcome, NoticeSeverity};
 use crate::brand::{PRODUCT_NAME, SOURCE_EDITOR_LABEL, STARTER_DOCUMENT, status_title};
 use crate::preview_host::{
     HostError, NavigationKind, PreviewControlSink, PreviewHost, SchemeRequest, ScrollDelivery,
@@ -46,7 +46,559 @@ use crate::render_scheduler::{
     CompletedRender, Completion, RenderPermit, RenderRequest, RenderScheduler,
 };
 
+mod history;
+mod navigation;
+mod palette;
+#[cfg(feature = "test-control")]
+mod recovery_probe;
+mod tabs;
+mod views;
+
 const APP_ID: &str = "tech.kyanitelabs.rutile";
+type CountsIdentity = (u64, rutile_types::DocumentId, Revision);
+type FindViewCapture = Rc<dyn Fn() -> Option<crate::document_view::FindBarView>>;
+type FindViewProjection = Rc<dyn Fn(Option<crate::document_view::FindBarView>)>;
+
+fn capture_session_view(
+    session: &Rc<RefCell<LinuxProductSession>>,
+    adapter: &Rc<RefCell<GtkSourceEditorAdapter>>,
+) {
+    let mut session = session.borrow_mut();
+    let slot = session.core.app().documents().active_slot();
+    let message = AppMessage::DocumentViewChanged {
+        id: session.core.app().documents().active_id(),
+        path: slot.path.clone(),
+        find_bar: session
+            .find_view_capture
+            .as_ref()
+            .map_or_else(|| slot.find_bar.clone(), |capture| capture()),
+        view: rutile_core::WorkspaceViewState {
+            selection: adapter.borrow().selection().ok().map(|selection| {
+                rutile_core::SessionSelectionV1 {
+                    anchor: selection.anchor as u64,
+                    head: selection.head as u64,
+                }
+            }),
+            top_visible_byte: adapter
+                .borrow()
+                .top_visible_byte(session.revision())
+                .ok()
+                .map(|offset| offset as u64),
+        },
+    };
+    session.core.reduce(message);
+}
+
+fn install_session_view(
+    session: &Rc<RefCell<LinuxProductSession>>,
+    adapter: &Rc<RefCell<GtkSourceEditorAdapter>>,
+) -> Result<(), String> {
+    let snapshot = session.borrow().snapshot();
+    let view = session
+        .borrow()
+        .core
+        .app()
+        .documents()
+        .active_slot()
+        .view
+        .validated(&snapshot);
+    adapter
+        .borrow_mut()
+        .install_open_snapshot(&snapshot)
+        .map_err(|error| error.to_string())?;
+    if let Some(selection) = view.selection {
+        adapter
+            .borrow()
+            .set_selection(Selection {
+                anchor: selection.anchor as usize,
+                head: selection.head as usize,
+            })
+            .map_err(|error| error.to_string())?;
+    }
+    if let Some(offset) = view.top_visible_byte {
+        let id = {
+            let mut session = session.borrow_mut();
+            let id = session.next_scroll_interaction_id;
+            session.next_scroll_interaction_id = InteractionId::new(
+                id.get()
+                    .checked_add(1)
+                    .ok_or("Scroll interaction ids exhausted")?,
+            );
+            id
+        };
+        adapter
+            .borrow_mut()
+            .scroll_to_byte(snapshot.revision, offset as usize, id)
+            .map_err(|error| error.to_string())?;
+    }
+    let (projection, find_bar) = {
+        let session = session.borrow();
+        (
+            session.find_view_projection.clone(),
+            session
+                .core
+                .app()
+                .documents()
+                .active_slot()
+                .find_bar
+                .clone(),
+        )
+    };
+    if let Some(project) = projection {
+        project(find_bar);
+    }
+    Ok(())
+}
+
+fn save_session_path(
+    session: &Rc<RefCell<LinuxProductSession>>,
+    adapter: &Rc<RefCell<GtkSourceEditorAdapter>>,
+    path: &Path,
+) -> Result<(), String> {
+    capture_session_view(session, adapter);
+    let generation = session.borrow().core.document_generation();
+    let result = session.borrow_mut().save_as(path);
+    // Pre-save inspection can reload a clean buffer even if the later write
+    // fails. Project that replacement before reporting the save outcome.
+    if session.borrow().core.document_generation() != generation {
+        install_session_view(session, adapter)?;
+    }
+    result
+}
+
+fn switch_session_tab(
+    session: &Rc<RefCell<LinuxProductSession>>,
+    adapter: &Rc<RefCell<GtkSourceEditorAdapter>>,
+    id: rutile_types::DocumentId,
+    now_ms: u64,
+) -> Result<(), String> {
+    capture_session_view(session, adapter);
+    {
+        let mut session = session.borrow_mut();
+        let effects = session.core.reduce(AppMessage::SwitchTab { id });
+        session.schedule_effects(&effects, now_ms);
+    }
+    install_session_view(session, adapter)
+}
+
+#[cfg(test)]
+mod chrome_transition_tests {
+    use super::*;
+
+    #[test]
+    fn counts_follow_equal_revision_documents_and_notice_dismissal() {
+        gtk::init().unwrap();
+        install_app_css();
+        let application = gtk::Application::new(None, gtk::gio::ApplicationFlags::NON_UNIQUE);
+        application
+            .register(None::<&gtk::gio::Cancellable>)
+            .unwrap();
+        let window = gtk::ApplicationWindow::new(&application);
+        let label = gtk::Label::new(None);
+        let session = Rc::new(RefCell::new(LinuxProductSession::new().unwrap()));
+        let cache = Cell::new(None);
+        let directory =
+            std::env::temp_dir().join(format!("rutile-counts-transition-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let first = directory.join("first.md");
+        let second = directory.join("second.md");
+        std::fs::write(&first, "one").unwrap();
+        std::fs::write(&second, "two words").unwrap();
+        session.borrow_mut().open(&first, 0).unwrap();
+        refresh_window_chrome(&session, &window, &label, &cache, None);
+        assert!(label.text().starts_with("1 words"));
+        session.borrow_mut().open(&second, 1).unwrap();
+        assert_eq!(session.borrow().revision(), Revision::new(0));
+        refresh_window_chrome(&session, &window, &label, &cache, None);
+        assert!(
+            label.text().starts_with("2 words"),
+            "counts must follow document identity"
+        );
+        std::fs::write(&second, "now three words").unwrap();
+        session.borrow_mut().reload(2).unwrap();
+        refresh_window_chrome(&session, &window, &label, &cache, None);
+        assert!(
+            label.text().starts_with("3 words"),
+            "counts must follow same-file reloads"
+        );
+        session
+            .borrow_mut()
+            .report_surface_failure("Save failed", "probe");
+        refresh_window_chrome(&session, &window, &label, &cache, None);
+        let notice = session.borrow().latest_notice().unwrap();
+        assert_eq!(label.text(), notice.message);
+        session.borrow_mut().dismiss_notice(notice.id);
+        refresh_window_chrome(&session, &window, &label, &cache, None);
+        assert!(
+            label.text().starts_with("3 words"),
+            "dismissal must restore counts"
+        );
+        let recovery_dir = directory.join("recovery");
+        std::fs::create_dir_all(&recovery_dir).unwrap();
+        session
+            .borrow_mut()
+            .bind_native_recovery(AutosaveStore::new(recovery_dir.clone()))
+            .unwrap();
+        session
+            .borrow_mut()
+            .replace_all("first unsaved draft", 3)
+            .unwrap();
+        session.borrow_mut().core.reduce(AppMessage::NewTab);
+        session
+            .borrow_mut()
+            .replace_all("second unsaved draft", 4)
+            .unwrap();
+        session
+            .borrow_mut()
+            .checkpoint_workspace(100, false)
+            .unwrap();
+        let pending = crate::recovery::read_pending(&session.borrow().core)
+            .unwrap()
+            .unwrap();
+        assert!(pending.needs_confirmation());
+        let mut concurrent = LinuxProductSession::new().unwrap();
+        assert!(
+            concurrent
+                .bind_native_recovery(AutosaveStore::new(recovery_dir.clone()))
+                .is_err()
+        );
+        let recovery_bytes = || {
+            std::fs::read_dir(&recovery_dir)
+                .unwrap()
+                .map(|entry| {
+                    let path = entry.unwrap().path();
+                    (
+                        path.file_name().unwrap().to_owned(),
+                        std::fs::read(&path).unwrap(),
+                    )
+                })
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        let before = recovery_bytes();
+        gtk::glib::timeout_add_local_once(Duration::from_millis(30), || {
+            let dialog = gtk::Window::list_toplevels()
+                .into_iter()
+                .find_map(|window| window.downcast::<gtk::MessageDialog>().ok())
+                .expect("recovery dialog must be visible");
+            dialog.response(gtk::ResponseType::DeleteEvent);
+        });
+        assert_eq!(prompt_recover(&window), RecoveryDecision::Quit);
+        assert_eq!(
+            before,
+            recovery_bytes(),
+            "closing recovery must preserve every byte"
+        );
+        assert_eq!(
+            recovery_decision(gtk::ResponseType::No),
+            RecoveryDecision::Discard
+        );
+        assert_eq!(
+            recovery_decision(gtk::ResponseType::Cancel),
+            RecoveryDecision::Quit
+        );
+        let buffer = sourceview4::Buffer::builder().max_undo_levels(0).build();
+        let adapter = Rc::new(RefCell::new(GtkSourceEditorAdapter::new(&buffer)));
+        install_session_view(&session, &adapter).unwrap();
+        let tabs = tabs::NativeTabs::new(
+            Rc::clone(&session),
+            Rc::clone(&adapter),
+            &window,
+            Instant::now(),
+            Rc::new(|| {}),
+        );
+        window.add(&tabs.widget);
+        tabs.widget.show_all();
+        let count = session.borrow().core.app().documents().len();
+        tabs.activate_for_test("New Tab");
+        assert_eq!(session.borrow().core.app().documents().len(), count + 1);
+        assert!(session.borrow().source().is_empty());
+        tabs.activate_for_test("first.md");
+        assert_eq!(session.borrow().source(), "one");
+        let first = session.borrow().core.app().documents().active_id();
+        tabs.activate_for_test("Move right");
+        assert_eq!(
+            session.borrow().core.app().documents().tab_order()[1],
+            first
+        );
+        let save_path = directory.join("save-projection.md");
+        verify_palette(&session, &adapter, &window, &tabs);
+        verify_history(&session, &adapter, &window, &tabs);
+        verify_navigation(&session, &adapter, &window, &tabs, &directory);
+        std::fs::write(&save_path, "original").unwrap();
+        let save_session = Rc::new(RefCell::new(LinuxProductSession::new().unwrap()));
+        save_session.borrow_mut().open(&save_path, 0).unwrap();
+        install_session_view(&save_session, &adapter).unwrap();
+        std::fs::write(&save_path, "External café\n").unwrap();
+        save_session_path(&save_session, &adapter, &save_path).unwrap();
+        assert_eq!(save_session.borrow().source(), "External café\n");
+        assert_eq!(
+            buffer
+                .text(&buffer.start_iter(), &buffer.end_iter(), true)
+                .as_deref(),
+            Some("External café\n")
+        );
+        verify_mode_menu(&save_session, &buffer);
+        verify_find_views(&save_session, &adapter);
+        std::fs::remove_dir_all(directory).unwrap();
+        window.close();
+    }
+
+    fn verify_palette(
+        session: &Rc<RefCell<LinuxProductSession>>,
+        adapter: &Rc<RefCell<GtkSourceEditorAdapter>>,
+        window: &gtk::ApplicationWindow,
+        tabs: &Rc<tabs::NativeTabs>,
+    ) {
+        let count = session.borrow().core.app().documents().len();
+        submit_palette_query(session, adapter, window, tabs, "New Tab");
+        assert_eq!(session.borrow().core.app().documents().len(), count + 1);
+        assert!(session.borrow().snapshot().is_empty());
+        assert!(!session.borrow().core.app().palette().is_open());
+        session.borrow_mut().replace_all("café", 0).unwrap();
+        install_session_view(session, adapter).unwrap();
+        adapter
+            .borrow()
+            .set_selection(Selection { anchor: 0, head: 5 })
+            .unwrap();
+        submit_palette_query(session, adapter, window, tabs, "Bold");
+        assert_eq!(session.borrow().source(), "**café**");
+        assert_eq!(
+            adapter.borrow().selection().unwrap(),
+            Selection { anchor: 2, head: 7 }
+        );
+        assert!(session.borrow_mut().undo_change(1).is_some());
+        install_session_view(session, adapter).unwrap();
+        assert_eq!(session.borrow().source(), "café");
+    }
+
+    fn submit_palette_query(
+        session: &Rc<RefCell<LinuxProductSession>>,
+        adapter: &Rc<RefCell<GtkSourceEditorAdapter>>,
+        window: &gtk::ApplicationWindow,
+        tabs: &Rc<tabs::NativeTabs>,
+        query: &'static str,
+    ) {
+        gtk::glib::timeout_add_local_once(Duration::from_millis(30), move || {
+            let dialog = gtk::Window::list_toplevels()
+                .into_iter()
+                .filter_map(|window| window.downcast::<gtk::Dialog>().ok())
+                .find(|window| window.is_visible() && window.title().as_deref() == Some("Commands"))
+                .unwrap();
+            let entry = dialog
+                .content_area()
+                .children()
+                .into_iter()
+                .find_map(|child| child.downcast::<gtk::Entry>().ok())
+                .unwrap();
+            entry.set_text(query);
+            dialog.response(gtk::ResponseType::Accept);
+        });
+        let project: Rc<dyn Fn()> = Rc::new(|| {});
+        palette::show(
+            &OpenSessionHandles {
+                session: Rc::clone(session),
+                editor_adapter: Rc::clone(adapter),
+                window: window.clone(),
+                announcement_bar: gtk::Label::new(None),
+                started: Instant::now(),
+            },
+            tabs,
+            &project,
+        );
+    }
+
+    fn verify_history(
+        session: &Rc<RefCell<LinuxProductSession>>,
+        adapter: &Rc<RefCell<GtkSourceEditorAdapter>>,
+        window: &gtk::ApplicationWindow,
+        tabs: &Rc<tabs::NativeTabs>,
+    ) {
+        submit_palette_query(session, adapter, window, tabs, "history.checkpoint");
+        session.borrow_mut().replace_all("changed 🪶", 2).unwrap();
+        install_session_view(session, adapter).unwrap();
+        gtk::glib::timeout_add_local_once(Duration::from_millis(90), || {
+            let dialog = gtk::Window::list_toplevels()
+                .into_iter()
+                .filter_map(|window| window.downcast::<gtk::Dialog>().ok())
+                .find(|window| {
+                    window.is_visible() && window.title().as_deref() == Some("Session History")
+                })
+                .unwrap();
+            if let Some(path) = std::env::var_os("RUTILE_TEST_HISTORY_SCREENSHOT") {
+                dialog
+                    .window()
+                    .unwrap()
+                    .pixbuf(0, 0, dialog.allocated_width(), dialog.allocated_height())
+                    .unwrap()
+                    .savev(PathBuf::from(path), "png", &[])
+                    .unwrap();
+            }
+            dialog.response(gtk::ResponseType::Accept);
+        });
+        submit_palette_query(session, adapter, window, tabs, "history.show");
+        assert_eq!(session.borrow().source(), "café");
+        let buffer = adapter.borrow().buffer.clone();
+        assert_eq!(
+            buffer
+                .text(&buffer.start_iter(), &buffer.end_iter(), false)
+                .unwrap(),
+            "café"
+        );
+        assert!(session.borrow_mut().undo_change(3).is_some());
+        assert_eq!(session.borrow().source(), "changed 🪶");
+    }
+
+    fn verify_navigation(
+        session: &Rc<RefCell<LinuxProductSession>>,
+        adapter: &Rc<RefCell<GtkSourceEditorAdapter>>,
+        window: &gtk::ApplicationWindow,
+        tabs: &Rc<tabs::NativeTabs>,
+        directory: &Path,
+    ) {
+        let source = "# First\n\nneedle\n\nSecond\n------\n";
+        session.borrow_mut().replace_all(source, 4).unwrap();
+        install_session_view(session, adapter).unwrap();
+        respond_navigation("Outline", 90, None, 1);
+        submit_palette_query(session, adapter, window, tabs, "navigate.outline");
+        assert_eq!(
+            adapter.borrow().selection().unwrap().head,
+            source.find("Second").unwrap()
+        );
+        let target = session.borrow().core.app().documents().active_id();
+        submit_palette_query(session, adapter, window, tabs, "New Tab");
+        respond_navigation("Search Open Documents", 90, Some("needle"), 0);
+        respond_navigation("Search Open Documents", 150, None, 0);
+        submit_palette_query(session, adapter, window, tabs, "navigate.search");
+        assert_eq!(session.borrow().core.app().documents().active_id(), target);
+        let selection = adapter.borrow().selection().unwrap();
+        assert_eq!(&source[selection.anchor..selection.head], "needle");
+        let source_path = directory.join("nav-source.md");
+        let target_path = directory.join("nav-target.md");
+        std::fs::write(&source_path, "[target](nav-target.md)").unwrap();
+        std::fs::write(&target_path, "# Target").unwrap();
+        session.borrow_mut().open(&source_path, 6).unwrap();
+        let source_id = session.borrow().core.app().documents().active_id();
+        session.borrow_mut().open(&target_path, 7).unwrap();
+        install_session_view(session, adapter).unwrap();
+        respond_navigation("Backlinks", 90, None, 0);
+        submit_palette_query(session, adapter, window, tabs, "navigate.backlinks");
+        assert_eq!(
+            session.borrow().core.app().documents().active_id(),
+            source_id
+        );
+        assert_eq!(adapter.borrow().selection().unwrap().head, 0);
+    }
+
+    fn respond_navigation(title: &'static str, delay: u64, query: Option<&'static str>, row: i32) {
+        gtk::glib::timeout_add_local_once(Duration::from_millis(delay), move || {
+            let dialog = gtk::Window::list_toplevels()
+                .into_iter()
+                .filter_map(|window| window.downcast::<gtk::Dialog>().ok())
+                .find(|window| window.is_visible() && window.title().as_deref() == Some(title))
+                .unwrap();
+            if let Some(query) = query {
+                let input = dialog
+                    .content_area()
+                    .children()
+                    .into_iter()
+                    .find_map(|child| child.downcast::<gtk::Entry>().ok())
+                    .unwrap();
+                input.set_text(query);
+                dialog.response(gtk::ResponseType::Other(1));
+            } else {
+                if std::env::var_os("RUTILE_TEST_NAV_SCREENSHOTS").is_some() {
+                    dialog
+                        .window()
+                        .unwrap()
+                        .pixbuf(0, 0, dialog.allocated_width(), dialog.allocated_height())
+                        .unwrap()
+                        .savev(
+                            PathBuf::from(format!("/tmp/rutile-navigation-{title}.png")),
+                            "png",
+                            &[],
+                        )
+                        .unwrap();
+                }
+                let list = find_native_list(dialog.upcast_ref()).unwrap();
+                list.select_row(list.row_at_index(row).as_ref());
+                dialog.response(gtk::ResponseType::Accept);
+            }
+        });
+    }
+
+    fn find_native_list(widget: &gtk::Widget) -> Option<gtk::ListBox> {
+        if let Ok(list) = widget.clone().downcast::<gtk::ListBox>() {
+            return Some(list);
+        }
+        widget
+            .downcast_ref::<gtk::Container>()?
+            .children()
+            .iter()
+            .find_map(find_native_list)
+    }
+
+    fn verify_find_views(
+        session: &Rc<RefCell<LinuxProductSession>>,
+        adapter: &Rc<RefCell<GtkSourceEditorAdapter>>,
+    ) {
+        let container = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let search = gtk::Entry::new();
+        let replace = gtk::Entry::new();
+        bind_find_view(session, &container, &search, &replace);
+        container.show();
+        search.set_text("café");
+        replace.set_text("tea");
+        let first = session.borrow().core.app().documents().active_id();
+        capture_session_view(session, adapter);
+        session.borrow_mut().core.reduce(AppMessage::NewTab);
+        install_session_view(session, adapter).unwrap();
+        assert!(!container.is_visible());
+        assert!(search.text().is_empty());
+        switch_session_tab(session, adapter, first, 0).unwrap();
+        assert!(container.is_visible());
+        assert_eq!(search.text(), "café");
+        assert_eq!(replace.text(), "tea");
+    }
+
+    fn verify_mode_menu(
+        save_session: &Rc<RefCell<LinuxProductSession>>,
+        buffer: &sourceview4::Buffer,
+    ) {
+        let mode_menu = gtk::Menu::new();
+        let editor = sourceview4::View::with_buffer(buffer);
+        let source = gtk::ScrolledWindow::new(gtk::Adjustment::NONE, gtk::Adjustment::NONE);
+        let preview = gtk::Fixed::new();
+        let paned = gtk::Paned::new(gtk::Orientation::Horizontal);
+        views::install_modes(&mode_menu, save_session, &source, &editor, &preview, &paned);
+        let modes = mode_menu.children();
+        modes[2]
+            .clone()
+            .downcast::<gtk::RadioMenuItem>()
+            .unwrap()
+            .set_active(true);
+        assert_eq!(
+            save_session.borrow().core.app().mode(),
+            crate::app::DocumentMode::View
+        );
+        assert!(!source.is_visible());
+        assert!(!editor.is_editable());
+        assert!(preview.is_visible());
+        modes[0]
+            .clone()
+            .downcast::<gtk::RadioMenuItem>()
+            .unwrap()
+            .set_active(true);
+        assert!(source.is_visible());
+        assert!(editor.is_editable());
+        assert!(!preview.is_visible());
+        modes[1]
+            .clone()
+            .downcast::<gtk::RadioMenuItem>()
+            .unwrap()
+            .set_active(true);
+        assert!(source.is_visible() && preview.is_visible());
+    }
+}
 const INITIAL_WIDTH: u32 = 1100;
 const INITIAL_HEIGHT: u32 = 760;
 /// Bounded, debounced external-disk polling cadence (LNX-004). The previous
@@ -91,8 +643,7 @@ pub struct LinuxOpenDelivery {
 pub fn plan_open_delivery(paths: Vec<PathBuf>) -> LinuxOpenDelivery {
     let mut iter = paths.into_iter();
     let primary = iter.next();
-    let extras: Vec<PathBuf> = iter.collect();
-    let ignored_extra_count = extras.len();
+    let ignored_extra_count = iter.count();
     let warning = if ignored_extra_count == 0 {
         None
     } else {
@@ -216,7 +767,7 @@ struct GtkEditorInner {
     next_commit_id: AdapterCommitId,
     next_composition_id: CompositionId,
     pending_native: Option<PendingNativeEdit>,
-    pending_commit: Option<AdapterCommitId>,
+    pending_commits: VecDeque<(AdapterCommitId, Revision)>,
     pending_paint: Option<Revision>,
     composition_tracker: CompositionTracker,
     composition: Option<GtkComposition>,
@@ -281,14 +832,17 @@ impl GtkEditorInner {
                 },
             }
         };
-        self.pending_commit = Some(commit_id);
+        self.pending_commits.push_back((commit_id, self.revision));
+        // GTK can emit selection deletion and insertion in the same event-loop
+        // turn. Later edits refer to the already-mutated native buffer.
+        self.revision = Revision::new(self.revision.get().saturating_add(1));
         self.emit(event);
     }
 }
 
 /// Incremental GTK source adapter. Native insert/delete signals carry exact
 /// byte ranges through a line-byte index; ordinary typing never snapshots or
-/// replaces the whole GtkSourceBuffer.
+/// replaces the whole `GtkSourceBuffer`.
 #[derive(Clone)]
 pub struct GtkSourceEditorAdapter {
     buffer: sourceview4::Buffer,
@@ -304,7 +858,7 @@ impl GtkSourceEditorAdapter {
             next_commit_id: AdapterCommitId::new(0),
             next_composition_id: CompositionId::new(0),
             pending_native: None,
-            pending_commit: None,
+            pending_commits: VecDeque::new(),
             pending_paint: None,
             composition_tracker: CompositionTracker::default(),
             composition: None,
@@ -413,8 +967,7 @@ impl GtkSourceEditorAdapter {
                     .unwrap_or_else(|| {
                         let insert = buffer
                             .get_insert()
-                            .map(|mark| buffer.iter_at_mark(&mark))
-                            .unwrap_or_else(|| buffer.start_iter());
+                            .map_or_else(|| buffer.start_iter(), |mark| buffer.iter_at_mark(&mark));
                         let byte = inner
                             .index
                             .byte_at(insert.line(), insert.line_index())
@@ -426,14 +979,14 @@ impl GtkSourceEditorAdapter {
                 let active = GtkComposition {
                     id: inner.next_composition_id,
                     base_revision: inner.revision,
-                    range: range.clone(),
+                    range,
                 };
                 if let Some(started) = inner.composition_tracker.start(
                     active.id,
                     active.base_revision,
                     active.range.clone(),
                 ) {
-                    inner.composition = Some(active.clone());
+                    inner.composition = Some(active);
                     inner.emit(started);
                 }
             }
@@ -520,11 +1073,10 @@ impl GtkSourceEditorAdapter {
             let head = inner.index.byte_at(end.line(), end.line_index())?;
             return Ok(Selection { anchor, head });
         }
-        let insert = self
-            .buffer
-            .get_insert()
-            .map(|mark| self.buffer.iter_at_mark(&mark))
-            .unwrap_or_else(|| self.buffer.start_iter());
+        let insert = self.buffer.get_insert().map_or_else(
+            || self.buffer.start_iter(),
+            |mark| self.buffer.iter_at_mark(&mark),
+        );
         let byte = inner.index.byte_at(insert.line(), insert.line_index())?;
         Ok(Selection::collapsed(byte))
     }
@@ -569,7 +1121,7 @@ impl EditorAdapter for GtkSourceEditorAdapter {
         inner.index = LineByteIndex::from_text(&text);
         inner.revision = snapshot.revision;
         inner.pending_native = None;
-        inner.pending_commit = None;
+        inner.pending_commits.clear();
         inner.pending_paint = None;
         inner.top_visible_byte = 0;
         inner.pending_programmatic_viewport = None;
@@ -584,13 +1136,15 @@ impl EditorAdapter for GtkSourceEditorAdapter {
         change: &ChangeSet,
     ) -> Result<(), EditorError> {
         let mut inner = self.inner.borrow_mut();
-        if inner.pending_commit != Some(adapter_commit_id) || change.before != inner.revision {
+        if inner.pending_commits.front() != Some(&(adapter_commit_id, change.before)) {
             return Err(EditorError::Platform(
                 "unexpected GTK adapter acknowledgement".to_owned(),
             ));
         }
-        inner.pending_commit = None;
-        inner.revision = change.after;
+        inner.pending_commits.pop_front();
+        if inner.pending_commits.is_empty() {
+            inner.revision = change.after;
+        }
         inner.pending_paint = Some(change.after);
         inner.stats.acknowledgements = inner.stats.acknowledgements.saturating_add(1);
         Ok(())
@@ -602,7 +1156,14 @@ impl EditorAdapter for GtkSourceEditorAdapter {
         _reason: LocalCommitRejection,
         authoritative: &rutile_core::DocumentSnapshot,
     ) -> Result<(), EditorError> {
-        if self.inner.borrow().pending_commit != Some(adapter_commit_id) {
+        if self
+            .inner
+            .borrow()
+            .pending_commits
+            .front()
+            .map(|(id, _)| *id)
+            != Some(adapter_commit_id)
+        {
             return Err(EditorError::Platform(
                 "unexpected GTK adapter rejection".to_owned(),
             ));
@@ -659,7 +1220,6 @@ impl EditorAdapter for GtkSourceEditorAdapter {
     ) -> Result<(), EditorError> {
         self.top_visible_byte(revision)?;
         let mut iterator = self.iter_at_byte(byte)?;
-        self.buffer.place_cursor(&iterator);
         let view = {
             let mut inner = self.inner.borrow_mut();
             inner.pending_programmatic_viewport = Some(ProgrammaticViewport {
@@ -727,7 +1287,7 @@ impl ScrollAnchorView for IdentityScrollAnchor {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LinuxScrollDispatch {
     Preview {
         revision: Revision,
@@ -882,16 +1442,23 @@ impl PlatformAdapter for LinuxGtkAdapter {
 /// callbacks enter through these methods; document, render, file, and preview
 /// authority remain in the shared Rust contracts.
 pub struct LinuxProductSession {
-    /// Sole AppState/Document authority (Wave 2-A DocumentSessionCore).
+    /// Sole AppState/Document authority (Wave 2-A `DocumentSessionCore`).
     core: crate::session_core::DocumentSessionCore,
     scheduler: RenderScheduler,
+    render_identity: (u64, rutile_types::DocumentId),
+    render_wakeup: Option<Rc<dyn Fn()>>,
+    find_view_capture: Option<FindViewCapture>,
+    find_view_projection: Option<FindViewProjection>,
     preview_host: PreviewHost,
+    pending_preview_restore: Option<Revision>,
     generated_source: Option<(Revision, Arc<str>)>,
     scroll: Option<LinuxScrollController>,
     file_service: LocalFileService,
     next_transaction_id: u64,
     next_scroll_interaction_id: InteractionId,
     stats: Cell<LinuxSessionStats>,
+    workspace_autosave: crate::recovery::WorkspaceAutosave,
+    workspace_lease: Option<rutile_core::WorkspaceRecoveryLease>,
     closed: bool,
 }
 
@@ -915,13 +1482,20 @@ impl LinuxProductSession {
         Ok(Self {
             core: crate::session_core::DocumentSessionCore::from_parts(app, document),
             scheduler,
+            render_identity: (0, rutile_types::DocumentId::ROOT),
+            render_wakeup: None,
+            find_view_capture: None,
+            find_view_projection: None,
             preview_host: PreviewHost::new(),
+            pending_preview_restore: None,
             generated_source: None,
             scroll: None,
             file_service: LocalFileService::new(),
             next_transaction_id: 0,
             next_scroll_interaction_id: InteractionId::new(1),
             stats: Cell::new(LinuxSessionStats::default()),
+            workspace_autosave: crate::recovery::WorkspaceAutosave::default(),
+            workspace_lease: None,
             closed: false,
         })
     }
@@ -1030,34 +1604,38 @@ impl LinuxProductSession {
     }
 
     pub fn new_document(&mut self, now_ms: u64) -> Result<(), String> {
-        self.core
-            .set_document(Document::new("").map_err(|error| error.to_string())?);
+        if self.core.dirty() {
+            return Err("Save or close the current document before creating a new document".into());
+        }
         self.closed = false;
         for effect in self.core.reduce(AppMessage::NewDocument) {
             if let AppEffect::ScheduleRender { revision } = effect {
-                self.scheduler
-                    .submit(RenderRequest::new(revision, Arc::from("")), now_ms);
+                self.submit_rope_render(revision, now_ms);
             }
         }
         Ok(())
     }
 
     pub fn open(&mut self, path: &Path, now_ms: u64) -> Result<(), String> {
+        let effects = self.open_effects(path)?;
+        self.schedule_effects(&effects, now_ms);
+        Ok(())
+    }
+
+    fn open_effects(&mut self, path: &Path) -> Result<Vec<AppEffect>, String> {
+        let path = LocalFileService::absolute_target(path).map_err(|error| error.to_string())?;
+        if let Some(id) = crate::file_effects::open_document_at(&self.core, &path) {
+            self.closed = false;
+            return Ok(self.core.reduce(AppMessage::SwitchTab { id }));
+        }
         let loaded = self
             .file_service
-            .load(path, rutile_core::MAX_DOCUMENT_BYTES)
+            .load(&path, rutile_core::MAX_DOCUMENT_BYTES)
             .map_err(|error| error.to_string())?;
         self.closed = false;
-        let revision = loaded.document.revision();
-        for effect in
-            self.core
-                .adopt_opened_document(loaded.document, path.to_path_buf(), loaded.disk)
-        {
-            if let AppEffect::ScheduleRender { revision } = effect {
-                self.submit_rope_render(revision, now_ms);
-            }
-        }
-        Ok(())
+        Ok(self
+            .core
+            .adopt_opened_document(loaded.document, path, loaded.disk))
     }
 
     pub fn save(&mut self) -> Result<(), String> {
@@ -1071,30 +1649,56 @@ impl LinuxProductSession {
     }
 
     pub fn save_as(&mut self, path: &Path) -> Result<(), String> {
+        let path = LocalFileService::absolute_target(path).map_err(|error| error.to_string())?;
+        if let Some(id) = crate::file_effects::open_document_at(&self.core, &path) {
+            if id != self.core.app().documents().active_id() {
+                return Err(
+                    "This file is already open in another tab; choose a different Save As target"
+                        .into(),
+                );
+            }
+            self.inspect_external_change(0)?;
+            if self.has_external_conflict() {
+                return Err("File changed on disk; resolve the conflict before saving".into());
+            }
+        }
         let revision = self.core.document().revision();
-        let path_buf = path.to_path_buf();
         let outcome = self
             .file_service
-            .save_atomic(path, &self.core.document().snapshot());
+            .save_atomic(&path, &self.core.document().snapshot());
         match outcome {
             rutile_core::SaveOutcome::Committed { disk } => {
                 self.core.reduce(AppMessage::SaveCompleted {
                     revision,
-                    path: path_buf,
+                    path,
                     disk,
                 });
+                if let Err(error) = crate::file_effects::record_checkpoint(
+                    &mut self.core,
+                    crate::revision_history::HistorySource::OnSave,
+                    "Saved",
+                ) {
+                    self.core.surface_notice(
+                        NoticeSeverity::Warning,
+                        "Saved, but history checkpoint failed",
+                        error,
+                    );
+                }
             }
             rutile_core::SaveOutcome::CommittedDurabilityUnknown { disk, .. } => {
                 self.core.reduce(AppMessage::SaveDurabilityUnknown {
                     revision,
-                    path: path_buf,
+                    path,
                     disk,
                 });
             }
             rutile_core::SaveOutcome::NotCommitted { reason } => {
                 return Err(reason.to_string());
             }
-        };
+        }
+        if let Some(wake) = &self.render_wakeup {
+            wake();
+        }
         Ok(())
     }
 
@@ -1109,7 +1713,8 @@ impl LinuxProductSession {
                 if self.core.app().path().is_some() {
                     self.save()?;
                 } else {
-                    let path = untitled_path.ok_or("save panel returned no path".to_owned())?;
+                    let path =
+                        untitled_path.ok_or_else(|| "save panel returned no path".to_owned())?;
                     self.save_as(&path)?;
                 }
                 // Durability-unknown saves leave dirty set; keep the window open
@@ -1177,17 +1782,38 @@ impl LinuxProductSession {
         resolution: ExternalResolution,
         now_ms: u64,
     ) -> Result<(), String> {
+        if let ExternalResolution::SaveBufferAs(path) = &resolution {
+            let path =
+                LocalFileService::absolute_target(path).map_err(|error| error.to_string())?;
+            if crate::file_effects::open_document_at(&self.core, &path).is_some() {
+                return Err("Save a Copy needs a different file that is not open in Rutile".into());
+            }
+        }
+        let conflict = self.core.app().external_conflict().cloned();
         for effect in self
             .core
             .app_mut()
             .reduce(AppMessage::ResolveExternalConflict(resolution))
         {
-            match effect {
-                AppEffect::ReloadExternal { path } => self.open(&path, now_ms)?,
-                AppEffect::SaveExternalAs { path } => self.save_as(&path)?,
-                _ => {}
+            let result = match effect {
+                AppEffect::ReloadExternal { .. } => self.reload(now_ms),
+                AppEffect::SaveExternalAs { path } => self.save_as(&path),
+                _ => Ok(()),
+            };
+            if let Err(error) = result {
+                if let Some(disk) = conflict {
+                    self.core
+                        .reduce(AppMessage::ExternalConflictDetected { disk });
+                }
+                return Err(error);
             }
         }
+        Ok(())
+    }
+
+    pub fn reload(&mut self, now_ms: u64) -> Result<(), String> {
+        let effects = crate::file_effects::reload_current(&mut self.core)?;
+        self.schedule_effects(&effects, now_ms);
         Ok(())
     }
 
@@ -1257,7 +1883,7 @@ impl LinuxProductSession {
             Completion::DiscardedStale { revision } => {
                 Ok(NativeRenderOutcome::DiscardedStale { revision })
             }
-            Completion::UnknownJob { id } => Err(format!("unknown render job {id}")),
+            Completion::UnknownJob { .. } => Ok(NativeRenderOutcome::DiscardedUnknown),
         }
     }
 
@@ -1266,6 +1892,12 @@ impl LinuxProductSession {
             .preview_host
             .handle_ipc(bytes)
             .map_err(|error| error.to_string())?;
+        if let rutile_protocol::PreviewEventV1::BridgeReady { revision } = &event {
+            self.pending_preview_restore = Some(*revision);
+            if let Some(wake) = &self.render_wakeup {
+                wake();
+            }
+        }
         Ok(self.core.reduce(AppMessage::PreviewEvent(event)))
     }
 
@@ -1356,10 +1988,26 @@ impl LinuxProductSession {
     }
 
     fn submit_rope_render(&mut self, revision: Revision, now_ms: u64) {
+        let identity = (
+            self.core.document_generation(),
+            self.core.app().documents().active_id(),
+        );
+        if self.render_identity != identity {
+            self.scheduler.invalidate_document();
+            self.preview_host = PreviewHost::new();
+            self.generated_source = None;
+            self.scroll = None;
+            self.render_identity = identity;
+        }
+        self.preview_host
+            .set_tasteroll_css(self.core.app().taste().css());
         let snapshot = self.core.document().snapshot();
         debug_assert_eq!(snapshot.revision, revision);
         self.scheduler
             .submit(RenderRequest::from_snapshot(snapshot), now_ms);
+        if let Some(wake) = &self.render_wakeup {
+            wake();
+        }
         let mut stats = self.stats.get();
         stats.rope_snapshot_render_submissions =
             stats.rope_snapshot_render_submissions.saturating_add(1);
@@ -1396,6 +2044,13 @@ impl LinuxProductSession {
         if self.closed {
             return Err("document session is closed".to_owned());
         }
+        if !matches!(command, FormatCommand::SmartEnter) {
+            crate::file_effects::record_checkpoint(
+                &mut self.core,
+                crate::revision_history::HistorySource::BeforeBulk,
+                "Before format",
+            )?;
+        }
         let applied = {
             let (app, document) = self.core.app_and_document_mut();
             app.apply_format_command(document, selection, command)
@@ -1428,6 +2083,11 @@ impl LinuxProductSession {
         if self.closed {
             return Err("document session is closed".to_owned());
         }
+        crate::file_effects::record_checkpoint(
+            &mut self.core,
+            crate::revision_history::HistorySource::BeforeBulk,
+            "Before paste",
+        )?;
         let applied = {
             let (app, document) = self.core.app_and_document_mut();
             app.insert_text(document, selection, text)
@@ -1501,6 +2161,11 @@ impl LinuxProductSession {
         replacement: String,
         now_ms: u64,
     ) -> Result<ReplaceApplied, String> {
+        crate::file_effects::record_checkpoint(
+            &mut self.core,
+            crate::revision_history::HistorySource::BeforeBulk,
+            "Before replace all",
+        )?;
         let applied = {
             let (app, document) = self.core.app_and_document_mut();
             app.replace_all(document, replacement)
@@ -1525,7 +2190,7 @@ impl LinuxProductSession {
     /// Writes the export page to `path` for the Save-as-HTML gesture.
     pub fn save_html(&self, path: &Path, title: Option<String>) -> Result<(), String> {
         let output = self.export_html(title)?;
-        std::fs::write(path, output.html).map_err(|error| error.to_string())
+        crate::file_effects::save_html(&self.core, path, output.html)
     }
 
     // --- counts -------------------------------------------------------------
@@ -1541,6 +2206,33 @@ impl LinuxProductSession {
             .app_mut()
             .bind_autosave(store)
             .map_err(|error| error.to_string())
+    }
+
+    fn bind_native_recovery(&mut self, store: AutosaveStore) -> Result<(), String> {
+        let lease = store
+            .acquire_workspace_lease()
+            .map_err(|error| error.to_string())?;
+        self.bind_autosave(store)?;
+        self.workspace_lease = Some(lease);
+        Ok(())
+    }
+
+    pub fn checkpoint_workspace(&mut self, timestamp: u64, clean_exit: bool) -> Result<(), String> {
+        self.workspace_autosave
+            .checkpoint(&self.core, timestamp, clean_exit)
+    }
+
+    pub fn adopt_workspace(
+        &mut self,
+        workspace: &rutile_core::RecoveredWorkspace,
+        now_ms: u64,
+    ) -> Result<(), String> {
+        let notices = crate::recovery::restore_workspace(&mut self.core, workspace, false)?;
+        self.submit_rope_render(self.core.revision(), now_ms);
+        for message in notices {
+            self.report_restore_failure(message);
+        }
+        Ok(())
     }
 
     pub fn autosave_tick(
@@ -1652,24 +2344,21 @@ impl LinuxProductSession {
     /// On a load failure the error becomes a durable notice instead of a fatal
     /// exit, and the existing document is preserved. On success the loaded
     /// [`Document`] is swapped in and bound to `path`.
-    pub fn open_via_shared_command(&mut self, path: PathBuf, now_ms: u64) -> Vec<AppEffect> {
-        let _ = self
-            .core
-            .app_mut()
-            .reduce(AppMessage::OpenDocument { path: path.clone() });
-        match self
-            .file_service
-            .load(&path, rutile_core::MAX_DOCUMENT_BYTES)
-        {
-            Ok(loaded) => {
-                self.closed = false;
-                let effects = self
-                    .core
-                    .adopt_opened_document(loaded.document, path, loaded.disk);
+    pub fn open_via_shared_command(
+        &mut self,
+        path: impl AsRef<Path>,
+        now_ms: u64,
+    ) -> Vec<AppEffect> {
+        let path = path.as_ref();
+        let _ = self.core.app_mut().reduce(AppMessage::OpenDocument {
+            path: path.to_path_buf(),
+        });
+        match self.open_effects(path) {
+            Ok(effects) => {
                 self.schedule_effects(&effects, now_ms);
                 effects
             }
-            Err(error) => self.complete_open_request(Err(error.to_string()), now_ms),
+            Err(error) => self.complete_open_request(Err(error), now_ms),
         }
     }
 
@@ -1914,6 +2603,7 @@ pub enum NativeRenderOutcome {
     Navigate { revision: Revision, url: String },
     Failed { revision: Revision },
     DiscardedStale { revision: Revision },
+    DiscardedUnknown,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1950,7 +2640,7 @@ impl PreviewControlSink for WryScrollSink<'_> {
     }
 }
 
-/// Owns the production WebKit context and view as one lifecycle unit. The
+/// Owns the production `WebKit` context and view as one lifecycle unit. The
 /// context intentionally outlives the view so custom-protocol state remains
 /// valid until the native child is released.
 struct NativeWebState {
@@ -2117,7 +2807,7 @@ impl Drop for RenderWorker {
 fn gio_files_to_paths(files: &[gtk::gio::File]) -> Vec<PathBuf> {
     files
         .iter()
-        .filter_map(|file| file.path())
+        .filter_map(gtk::prelude::FileExt::path)
         .filter(|path| path.is_file())
         .collect()
 }
@@ -2126,8 +2816,12 @@ fn refresh_window_chrome(
     session: &Rc<RefCell<LinuxProductSession>>,
     window: &gtk::ApplicationWindow,
     status_bar: &gtk::Label,
-    last_counts_revision: &Cell<u64>,
+    last_counts_revision: &Cell<Option<CountsIdentity>>,
+    tabs: Option<&Rc<tabs::NativeTabs>>,
 ) {
+    if let Some(tabs) = tabs {
+        tabs.refresh();
+    }
     let session_ref = session.borrow();
     let title = if session_ref.has_external_conflict() {
         status_title("File changed on disk (Ctrl+Shift+R reload, Ctrl+Shift+K keep)")
@@ -2139,13 +2833,18 @@ fn refresh_window_chrome(
     window.set_title(&title);
 
     if let Some(notice) = session_ref.latest_notice() {
+        last_counts_revision.set(None);
         status_bar.set_text(&notice.message);
         return;
     }
 
-    let revision = session_ref.revision();
-    if last_counts_revision.get() != revision {
-        last_counts_revision.set(revision);
+    let identity = Some((
+        session_ref.core.document_generation(),
+        session_ref.core.app().documents().active_id(),
+        session_ref.revision(),
+    ));
+    if last_counts_revision.get() != identity {
+        last_counts_revision.set(identity);
         let counts = session_ref.counts();
         let minutes = counts.reading_time_seconds().div_ceil(60);
         status_bar.set_text(&format!(
@@ -2163,24 +2862,15 @@ fn execute_shared_open(
     path: PathBuf,
     started: Instant,
 ) {
-    let effects = session
+    capture_session_view(session, editor_adapter);
+    session
         .borrow_mut()
         .open_via_shared_command(path, elapsed_ms(started));
-    for effect in effects {
-        if let AppEffect::ScheduleRender { revision } = effect {
-            session
-                .borrow_mut()
-                .submit_rope_render(revision, elapsed_ms(started));
-        }
-    }
     if session.borrow().is_closed() {
         return;
     }
-    let snapshot = session.borrow().snapshot();
-    if let Err(error) = editor_adapter.borrow_mut().install_open_snapshot(&snapshot) {
-        let mirror_effects = session
-            .borrow_mut()
-            .record_mirror_failure(error.to_string());
+    if let Err(error) = install_session_view(session, editor_adapter) {
+        let mirror_effects = session.borrow_mut().record_mirror_failure(error);
         handle_session_effects(
             &mirror_effects,
             session,
@@ -2207,9 +2897,7 @@ fn handle_session_effects(
                 let result = session
                     .borrow_mut()
                     .resync_editor_mirror(&mut editor_adapter.borrow_mut());
-                let follow_up = session
-                    .borrow_mut()
-                    .complete_mirror_resync(result.map_err(|error| error.to_string()));
+                let follow_up = session.borrow_mut().complete_mirror_resync(result);
                 handle_session_effects(
                     &follow_up,
                     session,
@@ -2249,14 +2937,18 @@ fn pump_ui_work(
     window: &gtk::ApplicationWindow,
     status_bar: &gtk::Label,
     announcement_bar: &gtk::Label,
-    last_counts_revision: &Cell<u64>,
+    last_counts_revision: &Cell<Option<CountsIdentity>>,
+    tabs: &Rc<tabs::NativeTabs>,
     started: Instant,
 ) -> gtk::glib::ControlFlow {
     if session.borrow().is_closed() {
         return gtk::glib::ControlFlow::Break;
     }
 
-    while let Some(event) = editor_events.borrow_mut().pop_front() {
+    loop {
+        let Some(event) = editor_events.borrow_mut().pop_front() else {
+            break;
+        };
         match event {
             EditorEvent::CommitRequested {
                 adapter_commit_id,
@@ -2266,15 +2958,15 @@ fn pump_ui_work(
                     adapter_commit_id,
                     commit,
                 };
-                match session
+                let result = session
                     .borrow_mut()
-                    .apply_editor_event(event, elapsed_ms(started))
-                {
+                    .apply_editor_event(event, elapsed_ms(started));
+                match result {
                     Ok(Some((commit_id, change))) => {
-                        if let Err(error) = editor_adapter
+                        let acknowledgement = editor_adapter
                             .borrow_mut()
-                            .acknowledge_local_commit(commit_id, &change)
-                        {
+                            .acknowledge_local_commit(commit_id, &change);
+                        if let Err(error) = acknowledgement {
                             let effects = session
                                 .borrow_mut()
                                 .record_mirror_failure(error.to_string());
@@ -2342,7 +3034,8 @@ fn pump_ui_work(
     *frame_seq.borrow_mut() = next_frame;
     editor_adapter.borrow().native_layout(next_frame);
 
-    if let Some(permit) = session.borrow_mut().start_render(elapsed_ms(started))
+    let permit = session.borrow_mut().start_render(elapsed_ms(started));
+    if let Some(permit) = permit
         && let Err(error) = worker.submit(permit)
     {
         // Recoverable: keep the pump attached so later editor commits still drain.
@@ -2365,7 +3058,7 @@ fn pump_ui_work(
         {
             Ok(NativeRenderOutcome::Navigate { url, .. }) => {
                 if let Err(error) = native_web.borrow().load_url(&url) {
-                    let effects = session.borrow_mut().report_open_warning(error.to_string());
+                    let effects = session.borrow_mut().report_open_warning(error);
                     handle_session_effects(
                         &effects,
                         session,
@@ -2410,7 +3103,34 @@ fn pump_ui_work(
         }
     }
 
-    refresh_window_chrome(session, window, status_bar, last_counts_revision);
+    let restore = session.borrow_mut().pending_preview_restore.take();
+    if let Some(revision) = restore {
+        let position = editor_adapter.borrow().top_visible_byte(revision);
+        if let Ok(source_start) = position {
+            let web = native_web.borrow();
+            if let Ok(webview) = web.webview() {
+                let result = session.borrow().preview_host().deliver_scroll_to(
+                    &mut WryScrollSink(webview),
+                    revision,
+                    source_start,
+                    InteractionId::new(0),
+                );
+                if let Err(error) = result {
+                    session.borrow_mut().report_surface_failure(
+                        "Preview position could not be restored",
+                        error.to_string(),
+                    );
+                }
+            }
+        }
+    }
+    refresh_window_chrome(
+        session,
+        window,
+        status_bar,
+        last_counts_revision,
+        Some(tabs),
+    );
     gtk::glib::ControlFlow::Continue
 }
 
@@ -2454,7 +3174,8 @@ fn run_application() -> Result<(), String> {
     }
     #[cfg(feature = "test-control")]
     let lifecycle_control = std::env::var_os("RUTILE_SMOKE_AUTOCLOSE_MS").is_some()
-        || std::env::var_os("RUTILE_PRODUCT_FUNCTIONAL_PATH").is_some();
+        || std::env::var_os("RUTILE_PRODUCT_FUNCTIONAL_PATH").is_some()
+        || recovery_probe::mode()?.is_some();
     #[cfg(not(feature = "test-control"))]
     let lifecycle_control = false;
     if lifecycle_control && std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
@@ -2488,7 +3209,7 @@ fn run_application() -> Result<(), String> {
         let pending_open_warnings = Rc::clone(&pending_open_warnings);
         let window_ready = Rc::clone(&window_ready);
         let open_session = Rc::clone(&open_session);
-        application.connect_open(move |_application, files, _hint| {
+        application.connect_open(move |application, files, _hint| {
             let paths = gio_files_to_paths(files);
             if paths.is_empty() {
                 return;
@@ -2501,7 +3222,8 @@ fn run_application() -> Result<(), String> {
                 pending_open_warnings.borrow_mut().push(warning);
             }
             if window_ready.get() {
-                if let Some(handles) = open_session.borrow_mut().take() {
+                let handles = open_session.borrow_mut().take();
+                if let Some(handles) = handles {
                     drain_pending_open_paths(
                         &pending_open_paths,
                         &pending_open_warnings,
@@ -2513,21 +3235,32 @@ fn run_application() -> Result<(), String> {
                     );
                     *open_session.borrow_mut() = Some(handles);
                 }
+            } else {
+                // GApplication emits Open instead of Activate for a cold CLI
+                // file launch. Build the window before draining the delivery.
+                application.activate();
             }
         });
     }
 
     application.connect_activate(move |application| {
+        if window_ready.get() {
+            if let Some(handles) = open_session.borrow().as_ref() {
+                handles.window.present();
+            }
+            return;
+        }
         activation_flag.store(true, Ordering::Release);
         if lifecycle_control {
             eprintln!("RUTILE_ACTIVATED pid={}", std::process::id());
         }
         if let Err(error) = build_window(
             application,
-            Rc::clone(&pending_open_paths),
-            Rc::clone(&pending_open_warnings),
-            Rc::clone(&window_ready),
-            Rc::clone(&open_session),
+            &pending_open_paths,
+            &pending_open_warnings,
+            &window_ready,
+            &open_session,
+            &error_slot,
         ) {
             *error_slot.borrow_mut() = Some(error);
             application.quit();
@@ -2557,6 +3290,7 @@ fn run_application() -> Result<(), String> {
     startup_error.borrow_mut().take().map_or(Ok(()), Err)
 }
 
+#[derive(Clone)]
 struct OpenSessionHandles {
     session: Rc<RefCell<LinuxProductSession>>,
     editor_adapter: Rc<RefCell<GtkSourceEditorAdapter>>,
@@ -2591,10 +3325,11 @@ fn drain_pending_open_paths(
 
 fn build_window(
     application: &gtk::Application,
-    pending_open_paths: Rc<RefCell<Vec<PathBuf>>>,
-    pending_open_warnings: Rc<RefCell<Vec<String>>>,
-    window_ready: Rc<Cell<bool>>,
-    open_session: Rc<RefCell<Option<OpenSessionHandles>>>,
+    pending_open_paths: &Rc<RefCell<Vec<PathBuf>>>,
+    pending_open_warnings: &Rc<RefCell<Vec<String>>>,
+    window_ready: &Rc<Cell<bool>>,
+    open_session: &Rc<RefCell<Option<OpenSessionHandles>>>,
+    run_failure: &Rc<RefCell<Option<String>>>,
 ) -> Result<(), String> {
     #[cfg(feature = "test-control")]
     let trace = |stage: &str| {
@@ -2606,12 +3341,22 @@ fn build_window(
     trace("build-window");
     let started = Instant::now();
     let session = Rc::new(RefCell::new(LinuxProductSession::new()?));
+    #[cfg(feature = "test-control")]
+    if std::env::var_os("RUTILE_PRODUCT_FUNCTIONAL_PATH").is_some() {
+        session.borrow_mut().new_document(0)?;
+    }
+    #[cfg(not(feature = "test-control"))]
+    let _ = run_failure;
     // gtk 0.18 marks MainContext::channel deprecated in favor of async-channel +
     // spawn_future_local. That rewrite is out of scope for W2-C; the wake path
     // is still the supported local-main-context pattern for shell event pumps.
     #[allow(deprecated)]
     let (wakeup_tx, wakeup_rx) =
         gtk::glib::MainContext::channel::<LoopWakeup>(gtk::glib::Priority::DEFAULT);
+    let render_wakeup = wakeup_tx.clone();
+    session.borrow_mut().render_wakeup = Some(Rc::new(move || {
+        let _ = render_wakeup.send(LoopWakeup::Work);
+    }));
     let worker = Rc::new(RenderWorker::new(wakeup_tx.clone()));
     let editor_events = Rc::new(RefCell::new(VecDeque::<EditorEvent>::new()));
 
@@ -2657,7 +3402,7 @@ fn build_window(
     // Specimen-case visuals (DESIGN-SYSTEM app-chrome): gold needle caret + warm
     // gold selection (CSS) and quiet gold syntax staining on a smoky ground
     // (GtkSourceView style scheme + markdown language). Best-effort; the
-    // light-mode oatmeal ground flip is deferred to Wave 3.
+    // source ground follows the native light/dark preference.
     install_app_css();
     stain_source(&source_buffer);
     source_view.set_monospace(false);
@@ -2670,38 +3415,7 @@ fn build_window(
         let session = Rc::clone(&session);
         let editor_adapter = Rc::clone(&editor_adapter);
         Rc::new(move |command: FormatCommand| {
-            let selection = match editor_adapter.borrow().selection() {
-                Ok(selection) => selection,
-                Err(error) => {
-                    let _ = session
-                        .borrow_mut()
-                        .report_surface_failure("Format failed", error.to_string());
-                    return;
-                }
-            };
-            let result = session
-                .borrow_mut()
-                .apply_format(selection, command, elapsed_ms(started));
-            let applied = match result {
-                Ok(applied) => applied,
-                Err(error) => {
-                    let _ = session
-                        .borrow_mut()
-                        .report_surface_failure("Format rejected", error.to_string());
-                    return;
-                }
-            };
-            let snapshot = session.borrow().snapshot();
-            if let Err(error) = follow_shared_edit(
-                &editor_adapter,
-                &snapshot,
-                &applied.changes,
-                applied.selection_after,
-            ) {
-                let _ = session
-                    .borrow_mut()
-                    .report_surface_failure("Format mirror failed", error.to_string());
-            }
+            apply_native_format(&session, &editor_adapter, command, started);
         })
     };
 
@@ -2739,17 +3453,80 @@ fn build_window(
         accessible.set_name(announcement_spec.0);
     }
 
-    let menubar = build_menu_bar(
-        &window,
+    let command_handles = OpenSessionHandles {
+        session: Rc::clone(&session),
+        editor_adapter: Rc::clone(&editor_adapter),
+        window: window.clone(),
+        announcement_bar: announcement_bar.clone(),
+        started,
+    };
+    let (menubar, view_menu) = build_menu_bar(
+        &command_handles,
         &format_action,
         &toolbar,
         &find_bar.container,
         &find_bar.search,
-        &session,
     );
 
+    let project_mode = views::install_modes(
+        &view_menu,
+        &session,
+        &source_scroll,
+        &source_view,
+        &preview_container,
+        &paned,
+    );
+
+    let tab_wakeup = wakeup_tx.clone();
+    let tabs = tabs::NativeTabs::new(
+        Rc::clone(&session),
+        Rc::clone(&editor_adapter),
+        &window,
+        started,
+        Rc::new(move || {
+            let _ = tab_wakeup.send(LoopWakeup::Work);
+        }),
+    );
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    root.style_context().add_class("rutile-shell");
+    let project_focus = views::install_focus(
+        &view_menu,
+        &session,
+        vec![
+            tabs.widget.clone().upcast(),
+            status_bar.clone().upcast(),
+            toolbar.clone().upcast(),
+            find_bar.container.clone().upcast(),
+        ],
+    );
+    let project_view: Rc<dyn Fn()> = Rc::new(move || {
+        project_mode();
+        project_focus();
+    });
+    {
+        let item = gtk::MenuItem::with_label("Commands…   Ctrl+Shift+P");
+        let handles = command_handles.clone();
+        let tabs = Rc::clone(&tabs);
+        let project_view = Rc::clone(&project_view);
+        item.connect_activate(move |_| palette::show(&handles, &tabs, &project_view));
+        view_menu.append(&item);
+    }
+    {
+        let handles = command_handles;
+        let tabs = Rc::clone(&tabs);
+        window.connect_key_press_event(move |_, event| {
+            let modifiers =
+                gtk::gdk::ModifierType::CONTROL_MASK | gtk::gdk::ModifierType::SHIFT_MASK;
+            if event.state().contains(modifiers) && matches!(event.keyval(), keys::p | keys::P) {
+                palette::show(&handles, &tabs, &project_view);
+                gtk::glib::Propagation::Stop
+            } else {
+                gtk::glib::Propagation::Proceed
+            }
+        });
+    }
     root.pack_start(&menubar, false, false, 0);
+    root.pack_start(&tabs.widget, false, false, 0);
     root.pack_start(&toolbar, false, false, 0);
     root.pack_start(&find_bar.container, false, false, 0);
     root.pack_start(&paned, true, true, 0);
@@ -2769,12 +3546,13 @@ fn build_window(
         .start_render(crate::render_scheduler::DEBOUNCE_MS)
         .ok_or_else(|| "initial render did not become ready".to_owned())?
         .execute();
-    let initial_url = match session
+    let NativeRenderOutcome::Navigate {
+        url: initial_url, ..
+    } = session
         .borrow_mut()
         .finish_render(initial, random_nonce()?)?
-    {
-        NativeRenderOutcome::Navigate { url, .. } => url,
-        _ => return Err("initial render failed".to_owned()),
+    else {
+        return Err("initial render failed".to_owned());
     };
     #[cfg(feature = "test-control")]
     trace("initial-rendered");
@@ -2827,7 +3605,7 @@ fn build_window(
                 Err(error) => {
                     let _ = ipc_session
                         .borrow_mut()
-                        .report_surface_failure("Preview rejected", error.to_string());
+                        .report_surface_failure("Preview rejected", error);
                     return;
                 }
             };
@@ -2940,7 +3718,7 @@ fn build_window(
                 if let Err(error) = result {
                     let _ = session
                         .borrow_mut()
-                        .report_surface_failure("Reload failed", error.to_string());
+                        .report_surface_failure("Reload failed", error);
                 }
                 return gtk::glib::Propagation::Stop;
             }
@@ -2951,7 +3729,7 @@ fn build_window(
                 if let Err(error) = result {
                     let _ = session
                         .borrow_mut()
-                        .report_surface_failure("Keep buffer failed", error.to_string());
+                        .report_surface_failure("Keep buffer failed", error);
                 }
                 return gtk::glib::Propagation::Stop;
             }
@@ -2961,12 +3739,12 @@ fn build_window(
                 session.borrow_mut().redo_change(elapsed_ms(started))
             } else {
                 if key == gtk::gdk::keys::constants::s {
-                    let result = if let Some(path) = session.borrow().path().map(Path::to_path_buf)
-                    {
-                        session.borrow_mut().save_as(&path)
+                    let path = session.borrow().path().map(Path::to_path_buf);
+                    let result = if let Some(path) = path {
+                        save_session_path(&session, &editor_adapter, &path)
                     } else {
                         match prompt_save_path(Some(&window), None) {
-                            Some(path) => session.borrow_mut().save_as(&path),
+                            Some(path) => save_session_path(&session, &editor_adapter, &path),
                             None => Ok(()),
                         }
                     };
@@ -2998,7 +3776,7 @@ fn build_window(
         let editor_adapter = Rc::clone(&editor_adapter);
         let format_action = Rc::clone(&format_action);
         let find_container = find_bar.container.clone();
-        let find_search = find_bar.search.clone();
+        let find_search = find_bar.search;
         source_view.connect_key_press_event(move |_view, event| {
             let key = event.keyval();
             let ctrl = event.state().contains(gtk::gdk::ModifierType::CONTROL_MASK);
@@ -3011,16 +3789,14 @@ fn build_window(
                 && (key == keys::Return || key == keys::KP_Enter)
                 && !editor_adapter.borrow().is_composing()
             {
-                let selection = match editor_adapter.borrow().selection() {
-                    Ok(selection) => selection,
-                    Err(_) => return gtk::glib::Propagation::Proceed,
+                let Ok(selection) = editor_adapter.borrow().selection() else {
+                    return gtk::glib::Propagation::Proceed;
                 };
-                let applied = match session
+                let Ok(applied) = session
                     .borrow_mut()
                     .smart_enter(selection, elapsed_ms(started))
-                {
-                    Ok(applied) => applied,
-                    Err(_) => return gtk::glib::Propagation::Proceed,
+                else {
+                    return gtk::glib::Propagation::Proceed;
                 };
                 let snapshot = session.borrow().snapshot();
                 let _ = follow_shared_edit(
@@ -3079,30 +3855,30 @@ fn build_window(
         });
     }
 
-    // Smart paste: convert clipboard HTML → markdown via the bounded core
-    // converter before insertion; fall back to the native plain-text paste when
-    // there is no HTML flavour or the converter rejects the input.
+    // Both rich and plain paste enter the shared atomic replacement path.
+    // GTK's default selection paste emits separate delete/insert transactions,
+    // which bypassed the bulk checkpoint and could partially apply a rejection.
     {
         let session = Rc::clone(&session);
         let editor_adapter = Rc::clone(&editor_adapter);
         source_view.connect_paste_clipboard(move |view| {
             let clipboard = gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD);
-            let Some(data) = clipboard.wait_for_contents(&gtk::gdk::Atom::intern("text/html"))
-            else {
+            let markdown = clipboard
+                .wait_for_contents(&gtk::gdk::Atom::intern("text/html"))
+                .and_then(|data| {
+                    let bytes = data.data();
+                    if bytes.is_empty() {
+                        None
+                    } else {
+                        rutile_core::html_to_markdown(&String::from_utf8_lossy(&bytes)).ok()
+                    }
+                })
+                .or_else(|| clipboard.wait_for_text().map(|text| text.to_string()));
+            let Some(markdown) = markdown else {
                 return;
             };
-            let bytes = data.data();
-            if bytes.is_empty() {
+            let Ok(selection) = editor_adapter.borrow().selection() else {
                 return;
-            }
-            let html = String::from_utf8_lossy(&bytes).into_owned();
-            let markdown = match rutile_core::html_to_markdown(&html) {
-                Ok(markdown) => markdown,
-                Err(_) => return,
-            };
-            let selection = match editor_adapter.borrow().selection() {
-                Ok(selection) => selection,
-                Err(_) => return,
             };
             // Claim the paste only once we can honour it.
             view.stop_signal_emission_by_name("paste-clipboard");
@@ -3115,7 +3891,7 @@ fn build_window(
                 Err(error) => {
                     let _ = session
                         .borrow_mut()
-                        .report_surface_failure("Smart paste failed", error.to_string());
+                        .report_surface_failure("Paste failed", error);
                     return;
                 }
             };
@@ -3141,7 +3917,7 @@ fn build_window(
             {
                 let _ = session
                     .borrow_mut()
-                    .report_surface_failure("Preview resize failed", error.to_string());
+                    .report_surface_failure("Preview resize failed", error);
             }
         });
     }
@@ -3153,14 +3929,14 @@ fn build_window(
             if let Err(error) = native_web.borrow().focus() {
                 let _ = session
                     .borrow_mut()
-                    .report_surface_failure("Preview focus failed", error.to_string());
+                    .report_surface_failure("Preview focus failed", error);
             }
             gtk::glib::Propagation::Proceed
         });
     }
 
     {
-        let paned = paned.clone();
+        let paned = paned;
         let last_width = Rc::new(Cell::new(0));
         paned
             .clone()
@@ -3178,7 +3954,7 @@ fn build_window(
             if let Err(error) = native_web.borrow_mut().resume() {
                 let _ = session
                     .borrow_mut()
-                    .report_surface_failure("Preview resume failed", error.to_string());
+                    .report_surface_failure("Preview resume failed", error);
             }
         });
     }
@@ -3190,7 +3966,7 @@ fn build_window(
             if let Err(error) = native_web.borrow_mut().suspend() {
                 let _ = session
                     .borrow_mut()
-                    .report_surface_failure("Preview suspend failed", error.to_string());
+                    .report_surface_failure("Preview suspend failed", error);
             }
         });
     }
@@ -3225,9 +4001,15 @@ fn build_window(
         let window = window.clone();
         let status_bar = status_bar.clone();
         let announcement_bar = announcement_bar.clone();
-        let last_counts_revision = Cell::new(u64::MAX);
+        let last_counts_revision = Cell::new(None);
+        let tabs = Rc::clone(&tabs);
+        let debounce_timer: Rc<RefCell<Option<gtk::glib::SourceId>>> = Rc::new(RefCell::new(None));
+        let debounce_wakeup = wakeup_tx.clone();
         wakeup_rx.attach(None, move |_wakeup| {
-            pump_ui_work(
+            if let Some(timer) = debounce_timer.borrow_mut().take() {
+                timer.remove();
+            }
+            let flow = pump_ui_work(
                 &session,
                 &worker,
                 &native_web,
@@ -3238,8 +4020,27 @@ fn build_window(
                 &status_bar,
                 &announcement_bar,
                 &last_counts_revision,
+                &tabs,
                 started,
-            )
+            );
+            let pending = {
+                let session = session.borrow();
+                !session.closed
+                    && session.scheduler.pending_revision().is_some()
+                    && session.scheduler.running_revision().is_none()
+            };
+            if pending {
+                let timer = Rc::clone(&debounce_timer);
+                let wakeup = debounce_wakeup.clone();
+                *debounce_timer.borrow_mut() = Some(gtk::glib::timeout_add_local_once(
+                    Duration::from_millis(crate::render_scheduler::DEBOUNCE_MS),
+                    move || {
+                        timer.borrow_mut().take();
+                        let _ = wakeup.send(LoopWakeup::Work);
+                    },
+                ));
+            }
+            flow
         });
         let _ = wakeup_tx.send(LoopWakeup::Work);
     }
@@ -3248,19 +4049,21 @@ fn build_window(
         let session = Rc::clone(&session);
         let editor_adapter = Rc::clone(&editor_adapter);
         let window = window.clone();
-        let status_bar = status_bar.clone();
+        let status_bar = status_bar;
         let announcement_bar = announcement_bar.clone();
-        let last_counts_revision = Cell::new(u64::MAX);
+        let last_counts_revision = Cell::new(None);
+        let tabs = Rc::clone(&tabs);
         gtk::glib::timeout_add_local(Duration::from_millis(DISK_POLL_MS), move || {
             if session.borrow().is_closed() {
                 return gtk::glib::ControlFlow::Break;
             }
             let now_ms = elapsed_ms(started);
-            match session.borrow_mut().inspect_external_change(now_ms) {
+            let result = session.borrow_mut().inspect_external_change(now_ms);
+            match result {
                 Ok(LinuxExternalOutcome::Reloaded { .. }) => {
                     let snapshot = session.borrow().snapshot();
-                    if let Err(error) = editor_adapter.borrow_mut().install_open_snapshot(&snapshot)
-                    {
+                    let installed = editor_adapter.borrow_mut().install_open_snapshot(&snapshot);
+                    if let Err(error) = installed {
                         let effects = session
                             .borrow_mut()
                             .record_mirror_failure(error.to_string());
@@ -3281,7 +4084,13 @@ fn build_window(
                         .report_open_warning(format!("external change check failed: {error}"));
                 }
             }
-            refresh_window_chrome(&session, &window, &status_bar, &last_counts_revision);
+            refresh_window_chrome(
+                &session,
+                &window,
+                &status_bar,
+                &last_counts_revision,
+                Some(&tabs),
+            );
             gtk::glib::ControlFlow::Continue
         });
     }
@@ -3296,7 +4105,15 @@ fn build_window(
                 || std::env::var_os("RUTILE_PRODUCT_FUNCTIONAL_PATH").is_some();
             #[cfg(not(feature = "test-control"))]
             let automated_close = false;
-            if !automated_close && session.borrow().dirty() {
+            let original = session.borrow().core.app().documents().active_id();
+            let dirty_tabs = if automated_close { Vec::new() } else { session.borrow().core.dirty_document_ids() };
+            for id in dirty_tabs {
+                if let Err(error) = switch_session_tab(&session, &editor_adapter, id, elapsed_ms(started)) {
+                    session.borrow_mut().report_surface_failure("Could not display unsaved document", error);
+                    return gtk::glib::Propagation::Stop;
+                }
+                let name = session.borrow().path().map_or_else(|| "Untitled".to_owned(), |path| path.display().to_string());
+                window.set_title(&status_title(&format!("Unsaved changes — {name}")));
                 match prompt_dirty_close(window) {
                     CloseDecision::Cancel => return gtk::glib::Propagation::Stop,
                     CloseDecision::Discard => {}
@@ -3306,10 +4123,10 @@ fn build_window(
                         } else {
                             prompt_save_path(Some(window), Some("Untitled.md"))
                         };
-                        match session
+                        let result = session
                             .borrow_mut()
-                            .decide_close(CloseDecision::Save { untitled_path })
-                        {
+                            .decide_close(CloseDecision::Save { untitled_path });
+                        match result {
                             Ok(CloseOutcome::Close) => break,
                             Ok(CloseOutcome::KeepOpen) => {
                                 return gtk::glib::Propagation::Stop;
@@ -3317,15 +4134,14 @@ fn build_window(
                             Err(error) => {
                                 let _ = session.borrow_mut().report_save_failure(&error);
                                 match prompt_close_save_retry(window) {
-                                    CloseSaveRetryAction::Retry => continue,
+                                    CloseSaveRetryAction::Retry => {}
                                     CloseSaveRetryAction::SaveAs => {
                                         let Some(path) = prompt_save_path(Some(window), None)
                                         else {
                                             return gtk::glib::Propagation::Stop;
                                         };
-                                        if let Err(save_error) =
-                                            session.borrow_mut().save_as(&path)
-                                        {
+                                        let result = session.borrow_mut().save_as(&path);
+                                        if let Err(save_error) = result {
                                             let _ = session
                                                 .borrow_mut()
                                                 .report_save_failure(save_error);
@@ -3343,6 +4159,17 @@ fn build_window(
                             }
                         }
                     },
+                }
+            }
+            if !automated_close {
+                if let Err(error) = switch_session_tab(&session, &editor_adapter, original, elapsed_ms(started)) {
+                    session.borrow_mut().report_surface_failure("Could not restore active document", error);
+                    return gtk::glib::Propagation::Stop;
+                }
+                let result = session.borrow_mut().checkpoint_workspace(unix_millis(), true);
+                if let Err(error) = result {
+                    session.borrow_mut().report_surface_failure("Could not finish recovery checkpoint", error);
+                    return gtk::glib::Propagation::Stop;
                 }
             }
             // Persist session-restore state (last file, selection, window
@@ -3399,32 +4226,59 @@ fn build_window(
     let automated_qol = false;
     if !automated_qol {
         let mut recovered_adopted = false;
-        if let Some(dir) = autosave_dir()
-            && std::fs::create_dir_all(&dir).is_ok()
-        {
-            if let Err(error) = session.borrow_mut().bind_autosave(AutosaveStore::new(dir)) {
-                let _ = session
+        if let Some(dir) = autosave_dir() {
+            std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+            session
+                .borrow_mut()
+                .bind_native_recovery(AutosaveStore::new(dir))?;
+            let pending = crate::recovery::read_pending(&session.borrow().core)?;
+            if let Some(pending) = pending {
+                let decision = if pending.needs_confirmation() {
+                    prompt_recover(&window)
+                } else {
+                    RecoveryDecision::Restore
+                };
+                if decision == RecoveryDecision::Quit {
+                    #[cfg(feature = "test-control")]
+                    if recovery_probe::mode()?.as_deref() == Some("quit") {
+                        eprintln!("RECOVERY_PROBE quit-preserved");
+                    }
+                    application.quit();
+                    return Ok(());
+                }
+                match (pending, decision) {
+                    (crate::recovery::PendingRecovery::Workspace(workspace), decision) => {
+                        let workspace = if decision == RecoveryDecision::Discard {
+                            crate::recovery::without_drafts(&workspace)
+                        } else {
+                            workspace
+                        };
+                        session
+                            .borrow_mut()
+                            .adopt_workspace(&workspace, elapsed_ms(started))?;
+                    }
+                    (
+                        crate::recovery::PendingRecovery::Legacy(document),
+                        RecoveryDecision::Restore,
+                    ) => {
+                        session
+                            .borrow_mut()
+                            .adopt_recovered(document, elapsed_ms(started))?;
+                    }
+                    _ => {}
+                }
+                session
                     .borrow_mut()
-                    .report_restore_failure(format!("autosave disabled: {error}"));
-            }
-            // Crash recovery: offer the highest verifiable autosave.
-            let recovered = session.borrow().recover();
-            if let Ok(Some(recovered)) = recovered
-                && prompt_recover(&window)
-                && session
-                    .borrow_mut()
-                    .adopt_recovered(recovered, elapsed_ms(started))
-                    .is_ok()
-            {
-                let snapshot = session.borrow().snapshot();
-                let _ = editor_adapter.borrow_mut().install_open_snapshot(&snapshot);
+                    .checkpoint_workspace(unix_millis(), false)?;
+                install_session_view(&session, &editor_adapter)?;
                 recovered_adopted = true;
             }
         }
 
         // Session restore: window frame always; last file + selection only when
         // we did not just adopt a recovered buffer.
-        if let Ok(Some(state)) = session.borrow().load_session_state() {
+        let state = session.borrow().load_session_state();
+        if let Ok(Some(state)) = state {
             let restore = session.borrow().restore_session(&state);
             if let Some(frame) = restore.window {
                 window.move_(frame.x, frame.y);
@@ -3451,14 +4305,23 @@ fn build_window(
 
         // Autosave timer: journal the dirty buffer on a quiet cadence.
         let autosave_session = Rc::clone(&session);
+        let autosave_adapter = Rc::clone(&editor_adapter);
         gtk::glib::timeout_add_local(Duration::from_secs(4), move || {
             if autosave_session.borrow().is_closed() {
                 return gtk::glib::ControlFlow::Break;
             }
-            if autosave_session.borrow().dirty() {
-                if let Err(error) = autosave_session.borrow_mut().autosave_tick(unix_millis()) {
-                    let _ = autosave_session.borrow_mut().complete_autosave(Err(error));
-                }
+            let result = {
+                capture_session_view(&autosave_session, &autosave_adapter);
+                let mut session = autosave_session.borrow_mut();
+                let LinuxProductSession {
+                    core,
+                    workspace_autosave,
+                    ..
+                } = &mut *session;
+                workspace_autosave.start(core, unix_millis())
+            };
+            if let Err(error) = result {
+                let _ = autosave_session.borrow_mut().complete_autosave(Err(error));
             }
             gtk::glib::ControlFlow::Continue
         });
@@ -3467,7 +4330,7 @@ fn build_window(
     #[cfg(feature = "test-control")]
     if let Ok(path) = std::env::var("RUTILE_PRODUCT_FUNCTIONAL_PATH") {
         const EXPECTED: &str = "# Rutile Linux\n\nNative edit, save, and reopen.\n";
-        let buffer = source_buffer.clone();
+        let buffer = source_buffer;
         gtk::glib::timeout_add_local_once(Duration::from_millis(100), move || {
             let mut end = buffer.end_iter();
             buffer.insert(&mut end, EXPECTED);
@@ -3558,6 +4421,31 @@ fn build_window(
         });
 
         let inspect_session = Rc::clone(&session);
+        if let Some(capture_path) = std::env::var_os("RUTILE_TEST_SCREENSHOT") {
+            let capture_window = window.clone();
+            let capture_failure = Rc::clone(run_failure);
+            gtk::glib::timeout_add_local_once(Duration::from_millis(950), move || {
+                let result = capture_window
+                    .window()
+                    .and_then(|window| {
+                        window.pixbuf(
+                            0,
+                            0,
+                            capture_window.allocated_width(),
+                            capture_window.allocated_height(),
+                        )
+                    })
+                    .ok_or_else(|| "Native screenshot was unavailable".to_owned())
+                    .and_then(|pixels| {
+                        pixels
+                            .savev(PathBuf::from(capture_path), "png", &[])
+                            .map_err(|error| error.to_string())
+                    });
+                if let Err(error) = result {
+                    *capture_failure.borrow_mut() = Some(error);
+                }
+            });
+        }
         let inspect_adapter = Rc::clone(&editor_adapter);
         let inspect_window = window.clone();
         gtk::glib::timeout_add_local_once(Duration::from_millis(1_050), move || {
@@ -3575,7 +4463,8 @@ fn build_window(
         let receipt_session = Rc::clone(&session);
         let receipt_web = Rc::clone(&native_web);
         let receipt_window = window.clone();
-        let receipt_view = source_view.clone();
+        let receipt_view = source_view;
+        let run_failure = Rc::clone(run_failure);
         gtk::glib::timeout_add_local_once(Duration::from_millis(1_400), move || {
             let disk = std::fs::read_to_string(&path);
             let session = receipt_session.borrow();
@@ -3597,6 +4486,12 @@ fn build_window(
                 session.stats().scroll_events,
                 disk.as_ref().map_or(0, String::len),
             );
+            if !passed {
+                *run_failure.borrow_mut() = Some(
+                    "Native functional journey failed; inspect RUTILE_PRODUCT_FUNCTIONAL receipt"
+                        .into(),
+                );
+            }
             drop(session);
             receipt_window.close();
         });
@@ -3626,8 +4521,8 @@ fn build_window(
         started,
     });
     drain_pending_open_paths(
-        &pending_open_paths,
-        &pending_open_warnings,
+        pending_open_paths,
+        pending_open_warnings,
         &session,
         &editor_adapter,
         &window,
@@ -3637,6 +4532,8 @@ fn build_window(
 
     #[cfg(feature = "test-control")]
     trace("callbacks-installed");
+    #[cfg(feature = "test-control")]
+    recovery_probe::install(application, &window, &session, &editor_adapter, run_failure)?;
     Ok(())
 }
 
@@ -3674,6 +4571,22 @@ fn prompt_dirty_close(parent: &gtk::ApplicationWindow) -> CloseDecision {
     dialog.add_button("Discard", gtk::ResponseType::No);
     dialog.add_button("Save", gtk::ResponseType::Yes);
     dialog.set_default_response(gtk::ResponseType::Cancel);
+    #[cfg(feature = "test-control")]
+    if recovery_probe::mode().ok().flatten().as_deref() == Some("close-cancel") {
+        static CLOSE_DECISIONS: std::sync::atomic::AtomicUsize =
+            std::sync::atomic::AtomicUsize::new(0);
+        let response = if CLOSE_DECISIONS.fetch_add(1, Ordering::Relaxed) == 0 {
+            gtk::ResponseType::No
+        } else {
+            gtk::ResponseType::Cancel
+        };
+        let dialog = dialog.downgrade();
+        gtk::glib::timeout_add_local_once(Duration::from_millis(25), move || {
+            if let Some(dialog) = dialog.upgrade() {
+                dialog.response(response);
+            }
+        });
+    }
     let response = dialog.run();
     dialog.close();
     match response {
@@ -3730,6 +4643,10 @@ fn unix_millis() -> u64 {
 /// `$XDG_DATA_HOME/rutile/autosave` (or `~/.local/share/...`) — the
 /// per-user journal + session-state directory.
 fn autosave_dir() -> Option<PathBuf> {
+    #[cfg(feature = "test-control")]
+    if let Some(path) = std::env::var_os("RUTILE_TEST_STATE_DIR") {
+        return Some(PathBuf::from(path));
+    }
     let base = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .or_else(|| {
@@ -3738,7 +4655,7 @@ fn autosave_dir() -> Option<PathBuf> {
     Some(base.join("rutile").join("autosave"))
 }
 
-/// Cache directory for the runtime-materialised GtkSourceView style scheme.
+/// Cache directory for the runtime-materialised `GtkSourceView` style scheme.
 fn scheme_cache_dir() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
@@ -3750,8 +4667,7 @@ fn scheme_cache_dir() -> Option<PathBuf> {
 /// app-chrome fire budget). The style scheme also sets these; the CSS is the
 /// belt-and-braces path for themes that ignore scheme cursor colours.
 fn install_app_css() {
-    const CSS: &[u8] = b"textview { caret-color: #C9921E; }\n\
-                         textview text selection { background-color: rgba(201,146,30,0.28); }\n";
+    const CSS: &[u8] = include_bytes!("../../assets/rutile-shell.css");
     let provider = gtk::CssProvider::new();
     if provider.load_from_data(CSS).is_ok()
         && let Some(screen) = gtk::gdk::Screen::default()
@@ -3767,17 +4683,60 @@ fn install_app_css() {
 /// Materialises the bundled "quartz" style scheme into the user cache dir and
 /// resolves it through the manager (the 0.5 binding has no from-string loader).
 fn source_style_scheme() -> Option<sourceview4::StyleScheme> {
-    const SCHEME_XML: &[u8] = include_bytes!("../../assets/rutile-quartz.xml");
-    const SCHEME_ID: &str = "rutile-quartz";
+    const SCHEME_XML: &str = include_str!("../../assets/rutile-quartz.xml");
+    let (id, xml) = if uses_dark_theme() {
+        ("rutile-quartz", SCHEME_XML.to_owned())
+    } else {
+        let mut xml = SCHEME_XML.replace("id=\"rutile-quartz\"", "id=\"rutile-quartz-light\"");
+        for (from, to) in [
+            ("#241E19", "#F6F2E9"),
+            ("#2B241D", "#EFE8DC"),
+            ("#E9E2D6", "#241E19"),
+            ("#9C7C3A", "#796335"),
+            ("#6E5F49", "#786F62"),
+            ("#4C3A1E", "#E4D5B8"),
+        ] {
+            xml = xml.replace(from, to);
+        }
+        ("rutile-quartz-light", xml)
+    };
+    materialize_source_scheme(id, &xml)
+}
+
+fn uses_dark_theme() -> bool {
+    std::env::var("GTK_THEME")
+        .ok()
+        .and_then(|theme| match theme.rsplit_once(':') {
+            Some((_, "dark")) => Some(true),
+            Some((_, "light")) => Some(false),
+            _ => None,
+        })
+        .unwrap_or_else(|| {
+            gtk::Settings::default().is_some_and(|settings| {
+                settings.is_gtk_application_prefer_dark_theme()
+                    || settings
+                        .gtk_theme_name()
+                        .is_some_and(|name| name.to_ascii_lowercase().contains("dark"))
+            })
+        })
+}
+
+fn materialize_source_scheme(id: &str, xml: &str) -> Option<sourceview4::StyleScheme> {
     let dir = scheme_cache_dir()?;
     std::fs::create_dir_all(&dir).ok()?;
-    let path = dir.join("rutile-quartz.xml");
-    if std::fs::read(&path).ok().as_deref() != Some(SCHEME_XML) {
-        std::fs::write(&path, SCHEME_XML).ok()?;
+    let path = dir.join(format!("{id}.xml"));
+    if std::fs::read(&path).ok().as_deref() != Some(xml.as_bytes()) {
+        let document = Document::new(xml).ok()?;
+        if matches!(
+            LocalFileService::new().save_atomic(&path, &document.snapshot()),
+            rutile_core::SaveOutcome::NotCommitted { .. }
+        ) {
+            return None;
+        }
     }
-    let manager = sourceview4::StyleSchemeManager::default()?;
+    let manager = sourceview4::StyleSchemeManager::new();
     manager.append_search_path(dir.to_str()?);
-    manager.scheme(SCHEME_ID)
+    manager.scheme(id)
 }
 
 /// Quiet gold syntax staining: markdown language (when installed) + the quartz
@@ -3792,9 +4751,37 @@ fn stain_source(buffer: &sourceview4::Buffer) {
     if let Some(scheme) = source_style_scheme() {
         buffer.set_style_scheme(Some(&scheme));
     }
+    if let Some(settings) = gtk::Settings::default() {
+        let apply: Rc<dyn Fn()> = {
+            let buffer = buffer.downgrade();
+            Rc::new(move || {
+                if let (Some(buffer), Some(scheme)) = (buffer.upgrade(), source_style_scheme()) {
+                    buffer.set_style_scheme(Some(&scheme));
+                }
+            })
+        };
+        let update = Rc::clone(&apply);
+        settings.connect_gtk_application_prefer_dark_theme_notify(move |_| update());
+        settings.connect_gtk_theme_name_notify(move |_| apply());
+    }
 }
 
-fn prompt_recover(parent: &gtk::ApplicationWindow) -> bool {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RecoveryDecision {
+    Restore,
+    Discard,
+    Quit,
+}
+
+fn recovery_decision(response: gtk::ResponseType) -> RecoveryDecision {
+    match response {
+        gtk::ResponseType::Yes => RecoveryDecision::Restore,
+        gtk::ResponseType::No => RecoveryDecision::Discard,
+        _ => RecoveryDecision::Quit,
+    }
+}
+
+fn prompt_recover(parent: &gtk::ApplicationWindow) -> RecoveryDecision {
     let dialog = gtk::MessageDialog::new(
         Some(parent),
         gtk::DialogFlags::MODAL,
@@ -3802,12 +4789,27 @@ fn prompt_recover(parent: &gtk::ApplicationWindow) -> bool {
         gtk::ButtonsType::None,
         "Recover unsaved changes from the last session?",
     );
-    dialog.add_button("Discard", gtk::ResponseType::No);
-    dialog.add_button("Recover", gtk::ResponseType::Yes);
+    dialog.add_button("Quit", gtk::ResponseType::Cancel);
+    dialog.add_button("Discard Drafts", gtk::ResponseType::No);
+    dialog.add_button("Restore", gtk::ResponseType::Yes);
     dialog.set_default_response(gtk::ResponseType::Yes);
+    #[cfg(feature = "test-control")]
+    if let Ok(Some(mode)) = recovery_probe::mode() {
+        let response = match mode.as_str() {
+            "restore" | "close-cancel" => gtk::ResponseType::Yes,
+            "dismiss" => gtk::ResponseType::No,
+            _ => gtk::ResponseType::Cancel,
+        };
+        let dialog = dialog.downgrade();
+        gtk::glib::timeout_add_local_once(Duration::from_millis(25), move || {
+            if let Some(dialog) = dialog.upgrade() {
+                dialog.response(response);
+            }
+        });
+    }
     let response = dialog.run();
     dialog.close();
-    response == gtk::ResponseType::Yes
+    recovery_decision(response)
 }
 
 /// Follows a shared (AppState-driven) mutation on the GTK adapter incrementally
@@ -3874,19 +4876,123 @@ fn build_format_toolbar(format_action: &Rc<dyn Fn(FormatCommand)>) -> gtk::Box {
 /// The menu bar: File (HTML export), Edit (find), Format (all commands), View
 /// (toolbar toggle). Accelerators are handled by the key handler; the labels
 /// carry the shortcut hint for discoverability.
+fn apply_native_format(
+    session: &Rc<RefCell<LinuxProductSession>>,
+    editor_adapter: &Rc<RefCell<GtkSourceEditorAdapter>>,
+    command: FormatCommand,
+    started: Instant,
+) {
+    if session.borrow().core.app().mode() == crate::app::DocumentMode::View {
+        return;
+    }
+    let selection = match editor_adapter.borrow().selection() {
+        Ok(selection) => selection,
+        Err(error) => {
+            let _ = session
+                .borrow_mut()
+                .report_surface_failure("Format failed", error.to_string());
+            return;
+        }
+    };
+    let result = session
+        .borrow_mut()
+        .apply_format(selection, command, elapsed_ms(started));
+    let applied = match result {
+        Ok(applied) => applied,
+        Err(error) => {
+            let _ = session
+                .borrow_mut()
+                .report_surface_failure("Format rejected", error);
+            return;
+        }
+    };
+    let snapshot = session.borrow().snapshot();
+    if let Err(error) = follow_shared_edit(
+        editor_adapter,
+        &snapshot,
+        &applied.changes,
+        applied.selection_after,
+    ) {
+        let _ = session
+            .borrow_mut()
+            .report_surface_failure("Format mirror failed", error.to_string());
+    }
+}
+
 fn build_menu_bar(
-    window: &gtk::ApplicationWindow,
+    handles: &OpenSessionHandles,
     format_action: &Rc<dyn Fn(FormatCommand)>,
     toolbar: &gtk::Box,
     find_container: &gtk::Box,
     find_search: &gtk::Entry,
-    session: &Rc<RefCell<LinuxProductSession>>,
-) -> gtk::MenuBar {
+) -> (gtk::MenuBar, gtk::Menu) {
+    let window = &handles.window;
+    let session = &handles.session;
     let menubar = gtk::MenuBar::new();
+    menubar.style_context().add_class("rutile-menubar");
 
     let file_menu = gtk::Menu::new();
     let file_root = gtk::MenuItem::with_label("File");
     file_root.set_submenu(Some(&file_menu));
+    {
+        let item = gtk::MenuItem::with_label("Open…");
+        let handles = handles.clone();
+        item.connect_activate(move |_| {
+            let dialog = gtk::FileChooserNative::new(
+                Some("Open Markdown"),
+                Some(&handles.window),
+                gtk::FileChooserAction::Open,
+                Some("Open"),
+                Some("Cancel"),
+            );
+            let path = (dialog.run() == gtk::ResponseType::Accept)
+                .then(|| dialog.filename())
+                .flatten();
+            dialog.hide();
+            if let Some(path) = path {
+                execute_shared_open(
+                    &handles.session,
+                    &handles.editor_adapter,
+                    &handles.window,
+                    &handles.announcement_bar,
+                    path,
+                    handles.started,
+                );
+            }
+        });
+        file_menu.append(&item);
+    }
+    for (label, save_as) in [("Save", false), ("Save As…", true)] {
+        let item = gtk::MenuItem::with_label(label);
+        let handles = handles.clone();
+        item.connect_activate(move |_| {
+            let current = handles.session.borrow().path().map(Path::to_path_buf);
+            let path = if save_as || current.is_none() {
+                prompt_save_path(
+                    Some(&handles.window),
+                    current
+                        .as_deref()
+                        .and_then(Path::file_name)
+                        .and_then(|name| name.to_str()),
+                )
+            } else {
+                current
+            };
+            if let Some(path) = path {
+                let result = save_session_path(&handles.session, &handles.editor_adapter, &path);
+                if let Err(error) = result {
+                    handles.session.borrow_mut().report_save_failure(error);
+                }
+            }
+        });
+        file_menu.append(&item);
+    }
+    {
+        let item = gtk::MenuItem::with_label("Quit");
+        let window = window.clone();
+        item.connect_activate(move |_| window.close());
+        file_menu.append(&item);
+    }
     {
         let item = gtk::MenuItem::with_label("Save as HTML…");
         let session = Rc::clone(session);
@@ -3897,7 +5003,7 @@ fn build_menu_bar(
                 if let Err(error) = result {
                     let _ = session
                         .borrow_mut()
-                        .report_surface_failure("HTML export failed", error.to_string());
+                        .report_surface_failure("HTML export failed", error);
                 }
             }
         });
@@ -3937,7 +5043,7 @@ fn build_menu_bar(
                 Err(error) => {
                     let _ = session
                         .borrow_mut()
-                        .report_surface_failure("HTML copy failed", error.to_string());
+                        .report_surface_failure("HTML copy failed", error);
                 }
             }
         });
@@ -4011,7 +5117,7 @@ fn build_menu_bar(
     }
     menubar.append(&view_root);
 
-    menubar
+    (menubar, view_menu)
 }
 
 /// Accessible name + ATK role for the find/replace entries (G006 gap 1). Pure
@@ -4035,6 +5141,72 @@ pub fn announcement_accessible_spec() -> (&'static str, gtk::atk::Role) {
 /// Find/replace bar. Owns its widgets and routes every gesture to the Wave-2S
 /// find/replace actions on the session, resyncing the native mirror after any
 /// mutation.
+fn bind_find_view(
+    session: &Rc<RefCell<LinuxProductSession>>,
+    container: &gtk::Box,
+    search: &gtk::Entry,
+    replace: &gtk::Entry,
+) {
+    // The session must not own its native widgets: their callbacks already
+    // retain the session. Weak widget handles keep window shutdown acyclic.
+    let capture_widgets = (
+        container.downgrade(),
+        search.downgrade(),
+        replace.downgrade(),
+    );
+    session.borrow_mut().find_view_capture = Some(Rc::new(move || {
+        let (container, search, replace) = (
+            capture_widgets.0.upgrade()?,
+            capture_widgets.1.upgrade()?,
+            capture_widgets.2.upgrade()?,
+        );
+        container
+            .is_visible()
+            .then(|| crate::document_view::FindBarView {
+                query: search.text().to_string(),
+                replacement: replace.text().to_string(),
+                replace_enabled: true,
+                focus: if replace.has_focus() {
+                    crate::document_view::FindField::Replace
+                } else {
+                    crate::document_view::FindField::Query
+                },
+                status: String::new(),
+            })
+    }));
+    let project_widgets = (
+        container.downgrade(),
+        search.downgrade(),
+        replace.downgrade(),
+    );
+    session.borrow_mut().find_view_projection = Some(Rc::new(move |view| {
+        let (Some(container), Some(search), Some(replace)) = (
+            project_widgets.0.upgrade(),
+            project_widgets.1.upgrade(),
+            project_widgets.2.upgrade(),
+        ) else {
+            return;
+        };
+        if let Some(view) = view {
+            search.set_text(&view.query);
+            replace.set_text(&view.replacement);
+            container.show_all();
+            match view.focus {
+                crate::document_view::FindField::Query => {
+                    search.grab_focus();
+                }
+                crate::document_view::FindField::Replace => {
+                    replace.grab_focus();
+                }
+            }
+        } else {
+            search.set_text("");
+            replace.set_text("");
+            container.hide();
+        }
+    }));
+}
+
 struct FindBar {
     container: gtk::Box,
     search: gtk::Entry,
@@ -4054,6 +5226,7 @@ impl FindBar {
         search.set_placeholder_text(Some("Find"));
         let replace = gtk::Entry::new();
         replace.set_placeholder_text(Some("Replace with"));
+        bind_find_view(session, &container, &search, &replace);
         // A11Y (G006 gap 1): explicit accessible name + Entry role on the
         // find/replace entries so AT-SPI users can identify them. Previously
         // only the placeholder text labelled these fields.
@@ -4124,7 +5297,7 @@ impl FindBar {
                     Err(error) => {
                         let _ = session
                             .borrow_mut()
-                            .report_surface_failure("Find failed", error.to_string());
+                            .report_surface_failure("Find failed", error);
                     }
                 }
             })
@@ -4148,6 +5321,9 @@ impl FindBar {
             let replace = replace.clone();
             let locate = Rc::clone(&locate);
             replace_one.connect_clicked(move |_| {
+                if session.borrow().core.app().mode() == crate::app::DocumentMode::View {
+                    return;
+                }
                 locate(true);
                 let replacement = replace.text().to_string();
                 let result = session
@@ -4158,7 +5334,7 @@ impl FindBar {
                     Err(error) => {
                         let _ = session
                             .borrow_mut()
-                            .report_surface_failure("Replace failed", error.to_string());
+                            .report_surface_failure("Replace failed", error);
                         return;
                     }
                 };
@@ -4173,8 +5349,11 @@ impl FindBar {
             let adapter = Rc::clone(adapter);
             let window = window.clone();
             let search = search.clone();
-            let replace = replace.clone();
+            let replace = replace;
             replace_all.connect_clicked(move |_| {
+                if session.borrow().core.app().mode() == crate::app::DocumentMode::View {
+                    return;
+                }
                 let pattern = search.text().to_string();
                 if pattern.is_empty() {
                     return;
@@ -4200,7 +5379,7 @@ impl FindBar {
                     Err(error) => {
                         let _ = session
                             .borrow_mut()
-                            .report_surface_failure("Replace all failed", error.to_string());
+                            .report_surface_failure("Replace all failed", error);
                         return;
                     }
                 };

@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'">
+  <title>Rutile · Repair review</title>
+  <style>
+    /* Design system: warm paper, charcoal ink, rust status; system sans for
+       evidence, Georgia for headings; 8px spacing scale; 72rem reading canvas. */
+    :root { color-scheme: light; --paper:#f7f3eb; --ink:#252923; --muted:#586052; --line:#cdcdbd; --accent:#8b3424; --card:#fffdf8; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--paper); color:var(--ink); font:17px/1.6 system-ui,sans-serif; }
+    main { max-width:72rem; margin:auto; padding:48px 24px 64px; }
+    header { border-top:5px solid var(--ink); padding-top:24px; }
+    .eyebrow { font-size:13px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
+    h1,h2 { font-family:Georgia,serif; line-height:1.15; font-weight:400; }
+    h1 { font-size:clamp(38px,6vw,68px); max-width:850px; margin:24px 0; }
+    h2 { font-size:30px; margin:0 0 16px; }
+    .lead { max-width:780px; font-size:21px; }
+    .status { color:var(--accent); font-weight:700; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; margin:40px 0; }
+    section { border-top:1px solid var(--line); padding-top:24px; }
+    .card { background:var(--card); padding:24px; border:1px solid var(--line); }
+    li { margin:0 0 12px; } ul,ol { padding-left:24px; }
+    a { color:var(--accent); text-underline-offset:4px; }
+    a:focus-visible { outline:3px solid var(--accent); outline-offset:4px; }
+    figure { margin:24px 0; } img { width:100%; height:auto; border:1px solid var(--line); }
+    figcaption,footer { font-size:14px; color:var(--muted); }
+    code { overflow-wrap:anywhere; font-size:.9em; }
+    footer { border-top:1px solid var(--line); margin-top:40px; padding-top:24px; }
+    @media(max-width:720px) { .grid { grid-template-columns:1fr; } main { padding:24px 16px; } }
+  </style>
+</head>
+<body><main>
+  <header>
+    <div class="eyebrow">Rutile / Local repair review / 7 September 2026</div>
+    <h1>The editor is more stable.<br>The product is still unfinished.</h1>
+    <p class="status">Session recovered. Three additional recovery defects repaired locally; the full backlog remains open.</p>
+    <p class="lead">Repaired a native editing crash, unsaved tab loss, stale previews, view modes, named-tab restoration and stale word counts. This is an uncommitted macOS development candidate. It has not been installed or released.</p>
+    <p><a href="../ultraqa-2026-09-07.md">Read the complete scenario matrix and evidence log</a></p>
+  </header>
+  <section class="card">
+    <h2>Recovery continuation</h2>
+    <p>The previous branch and uncommitted repairs survived. Autosave now preserves damaged journals and their snapshots, startup reports entirely unreadable recovery data, and the preview displays the recovered text.</p>
+    <p>New regressions failed before repair and passed afterward. The workspace suite passed after the journal fixes; all 254 focused native tests and an 11.2-second native smoke passed after the preview fix. Formatting, both Clippy checks, dependency policy and audit passed.</p>
+    <p>A damaged journal needs repair before autosave can resume. Per-tab recovery identity, native conflict controls and the missing panels remain unfinished. Preview HTML was checked through the actual scheme host; no new browser, accessibility or TasteCheck pass is claimed.</p>
+  </section>
+  <div class="grid">
+    <section class="card">
+      <h2>Previous five-cycle evidence</h2>
+      <ul>
+        <li><strong>1,155 workspace tests</strong> passed; two infrastructure tests explicitly ignored.</li>
+        <li><strong>254 focused native tests</strong> passed. These are separate runs, not added to the workspace total.</li>
+        <li>Final native smoke passed in 13 seconds, including Unicode edits, save/reopen, view widths, Select All and 50 lifecycle cycles.</li>
+        <li>Formatting, workspace and native Clippy, dependency policy and security audit passed.</li>
+      </ul>
+    </section>
+    <section class="card">
+      <h2>What still needs work</h2>
+      <ol>
+        <li><strong>Recovery:</strong> every unsaved or untitled tab still needs its own crash-recovery journal.</li>
+        <li><strong>Native interactions:</strong> conflict resolution controls and physical close/save prompts need completion and verification.</li>
+        <li><strong>Missing panels:</strong> outline, cross-document search/backlinks and revision history are not implemented native interfaces.</li>
+        <li>Linux validation, accessibility, packaged installation and independent review remain open.</li>
+      </ol>
+    </section>
+  </div>
+  <section>
+    <h2>Observed native output</h2>
+    <p>The source compositor was captured during the actual native smoke and visually inspected. Its edited status now shows five words and 26 characters. These captures do not include WKWebView preview pixels.</p>
+    <figure><img src="editor-edit.png" alt="Native Rutile source editor after a Unicode edit, showing an unsaved tab and corrected word and character counts."><figcaption>Editor Only mode. The live harness also verified full-width source geometry.</figcaption></figure>
+    <p><a href="editor-split.png">View the Split-mode source capture</a>; the native trace verified a 600-pixel source pane in a 1,200-pixel window.</p>
+  </section>
+  <section>
+    <h2>Local candidate</h2>
+    <p>Run <code>./target/ultraqa/rutile-recovery /absolute/path/to/note.md</code> from the repository. This updated development candidate uses production macOS features and rejects the test-only smoke flag. The earlier candidate remains preserved.</p>
+    <p>Candidate SHA-256: <code>8a405edbeb8c18cdf3b0d2d267ad77d3133cc6ebec4079400ccb8e5231849401</code></p>
+    <p>The next repair should address per-document recovery, followed by native conflict and close interactions, then the missing panels.</p>
+  </section>
+  <footer>Local evidence only. No frozen files changed and no publication occurred. This HTML uses a documented local design system and no external resources. Browser rendering and TasteCheck were unavailable; no visual-quality pass is claimed for this report.</footer>
+</main></body>
+</html>

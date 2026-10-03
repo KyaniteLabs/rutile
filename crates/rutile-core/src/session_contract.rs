@@ -112,6 +112,12 @@ pub struct SessionStateV1 {
     pub window: Option<SessionWindowV1>,
     /// Most-recent-first, at most [`MAX_RECENT_FILES`] absolute paths.
     pub recent_files: Vec<String>,
+    /// Ordered named tabs. Missing in older v1 records.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open_tabs: Vec<String>,
+    /// Named active tab, if one was selected when the session was saved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_tab: Option<String>,
 }
 
 /// Errors for the session/autosave wire contracts, mirroring
@@ -202,6 +208,21 @@ fn validate_autosave_entry(entry: &AutosaveEntryV1) -> Result<(), SessionError> 
 }
 
 fn validate_session_state(state: &SessionStateV1) -> Result<(), SessionError> {
+    if state.open_tabs.len() > 16 {
+        return Err(SessionError::InvalidMetadata("too many open tabs"));
+    }
+    for (index, path) in state.open_tabs.iter().enumerate() {
+        validate_path(path)?;
+        if state.open_tabs[..index].contains(path) {
+            return Err(SessionError::InvalidMetadata("duplicate open tab"));
+        }
+    }
+    if let Some(path) = &state.active_tab {
+        validate_path(path)?;
+        if !state.open_tabs.contains(path) {
+            return Err(SessionError::InvalidMetadata("active tab is not open"));
+        }
+    }
     if state.v != 1 {
         return Err(SessionError::UnsupportedVersion);
     }
@@ -247,7 +268,7 @@ fn validate_session_state(state: &SessionStateV1) -> Result<(), SessionError> {
     Ok(())
 }
 
-fn validate_path(path: &str) -> Result<(), SessionError> {
+pub(crate) fn validate_path(path: &str) -> Result<(), SessionError> {
     if path.is_empty() {
         return Err(SessionError::InvalidMetadata("path must not be empty"));
     }

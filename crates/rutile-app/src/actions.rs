@@ -31,8 +31,8 @@ use std::ops::Range;
 use std::path::PathBuf;
 
 use rutile_core::{
-    ChangeSet, EditError, EditPlanError, FindDirection, FindError, FindQuery, ReplaceError,
-    Selection, SessionWindowV1, SmartEnterAction,
+    ChangeSet, EditError, EditPlanError, FindDirection, FindError, FindQuery, FormatCommand,
+    ReplaceError, Selection, SessionWindowV1, SmartEnterAction,
 };
 use rutile_types::Revision;
 use thiserror::Error;
@@ -193,6 +193,9 @@ pub struct ExportOutput {
 /// [`AppState::restore_session`]: crate::app::AppState::restore_session
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionRestore {
+    pub recent_files: Vec<String>,
+    pub open_tabs: Vec<PathBuf>,
+    pub active_tab: Option<PathBuf>,
     /// Path of the last open file to reopen, if any.
     pub last_file: Option<PathBuf>,
     /// Cursor/selection to install once the document is loaded.
@@ -449,10 +452,10 @@ fn cmd_clear_recents(state: &AppState) -> Option<AppMessage> {
     (!state.recents().is_empty()).then_some(AppMessage::ClearRecents)
 }
 
-/// Builds "New Tab", always available.
-#[allow(clippy::unnecessary_wraps)]
-const fn cmd_new_tab(_state: &AppState) -> Option<AppMessage> {
-    Some(AppMessage::NewTab)
+/// Builds "New Tab" while the bounded workspace has capacity.
+fn cmd_new_tab(state: &AppState) -> Option<AppMessage> {
+    (state.documents().len() < crate::document_manager::MAX_OPEN_DOCUMENTS)
+        .then_some(AppMessage::NewTab)
 }
 
 /// Builds "Close Tab" for the active tab, available with more than one tab.
@@ -521,6 +524,11 @@ fn cmd_taste_reroll(state: &AppState) -> Option<AppMessage> {
 /// Builds "Reset Design" — available only when a roll is active.
 fn cmd_taste_reset(state: &AppState) -> Option<AppMessage> {
     state.taste().is_active().then_some(AppMessage::TasteReset)
+}
+
+fn format_message(state: &AppState, command: FormatCommand) -> Option<AppMessage> {
+    (state.mode() != crate::app::DocumentMode::View)
+        .then_some(AppMessage::FormatRequested { command })
 }
 
 /// The compile-time default command set (see `docs/plan/command-palette-design.md`).
@@ -622,6 +630,130 @@ pub const DEFAULT_CATALOG: &[CommandDescriptor] = &[
         category: CommandCategory::Design,
         shortcut: None,
         message: cmd_taste_reset,
+    },
+    CommandDescriptor {
+        id: CommandId("format.bold"),
+        title: "Bold",
+        category: CommandCategory::Format,
+        shortcut: Some(Shortcut::cmd("b")),
+        message: |state| format_message(state, FormatCommand::ToggleBold),
+    },
+    CommandDescriptor {
+        id: CommandId("format.italic"),
+        title: "Italic",
+        category: CommandCategory::Format,
+        shortcut: Some(Shortcut::cmd("i")),
+        message: |state| format_message(state, FormatCommand::ToggleItalic),
+    },
+    CommandDescriptor {
+        id: CommandId("format.link"),
+        title: "Insert Link",
+        category: CommandCategory::Format,
+        shortcut: Some(Shortcut::cmd("k")),
+        message: |state| format_message(state, FormatCommand::InsertLink { url: None }),
+    },
+    CommandDescriptor {
+        id: CommandId("format.code"),
+        title: "Inline Code",
+        category: CommandCategory::Format,
+        shortcut: Some(Shortcut::cmd("e")),
+        message: |state| format_message(state, FormatCommand::ToggleCodeSpan),
+    },
+    CommandDescriptor {
+        id: CommandId("format.code-block"),
+        title: "Code Block",
+        category: CommandCategory::Format,
+        shortcut: Some(Shortcut::cmd_shift("c")),
+        message: |state| format_message(state, FormatCommand::ToggleCodeBlock),
+    },
+    CommandDescriptor {
+        id: CommandId("format.heading"),
+        title: "Cycle Heading",
+        category: CommandCategory::Format,
+        shortcut: Some(Shortcut::cmd_shift("h")),
+        message: |state| format_message(state, FormatCommand::CycleHeading),
+    },
+    CommandDescriptor {
+        id: CommandId("format.quote"),
+        title: "Quote",
+        category: CommandCategory::Format,
+        shortcut: Some(Shortcut::cmd_shift("q")),
+        message: |state| format_message(state, FormatCommand::ToggleQuote),
+    },
+    CommandDescriptor {
+        id: CommandId("format.bullet-list"),
+        title: "Bullet List",
+        category: CommandCategory::Format,
+        shortcut: Some(Shortcut::cmd_shift("u")),
+        message: |state| format_message(state, FormatCommand::ToggleBulletList),
+    },
+    CommandDescriptor {
+        id: CommandId("format.numbered-list"),
+        title: "Numbered List",
+        category: CommandCategory::Format,
+        shortcut: Some(Shortcut::cmd_shift("o")),
+        message: |state| format_message(state, FormatCommand::ToggleOrderedList),
+    },
+    CommandDescriptor {
+        id: CommandId("format.checklist"),
+        title: "Checklist",
+        category: CommandCategory::Format,
+        shortcut: Some(Shortcut::cmd_shift("l")),
+        message: |state| format_message(state, FormatCommand::ToggleChecklist),
+    },
+    CommandDescriptor {
+        id: CommandId("format.smart-enter"),
+        title: "Smart New Line",
+        category: CommandCategory::Format,
+        shortcut: None,
+        message: |state| format_message(state, FormatCommand::SmartEnter),
+    },
+    CommandDescriptor {
+        id: CommandId("history.checkpoint"),
+        title: "Create History Checkpoint",
+        category: CommandCategory::File,
+        shortcut: None,
+        message: |_| Some(AppMessage::CreateHistoryCheckpoint),
+    },
+    CommandDescriptor {
+        id: CommandId("history.show"),
+        title: "Show Session History",
+        category: CommandCategory::View,
+        shortcut: None,
+        message: |_| Some(AppMessage::ShowHistory),
+    },
+    CommandDescriptor {
+        id: CommandId("navigate.outline"),
+        title: "Show Outline",
+        category: CommandCategory::View,
+        shortcut: None,
+        message: |_| {
+            Some(AppMessage::ShowNavigator {
+                kind: crate::navigation::NavigatorKind::Outline,
+            })
+        },
+    },
+    CommandDescriptor {
+        id: CommandId("navigate.search"),
+        title: "Search Open Documents",
+        category: CommandCategory::View,
+        shortcut: None,
+        message: |_| {
+            Some(AppMessage::ShowNavigator {
+                kind: crate::navigation::NavigatorKind::Search,
+            })
+        },
+    },
+    CommandDescriptor {
+        id: CommandId("navigate.backlinks"),
+        title: "Show Backlinks",
+        category: CommandCategory::View,
+        shortcut: None,
+        message: |_| {
+            Some(AppMessage::ShowNavigator {
+                kind: crate::navigation::NavigatorKind::Backlinks,
+            })
+        },
     },
 ];
 

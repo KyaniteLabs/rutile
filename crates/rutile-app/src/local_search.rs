@@ -40,7 +40,7 @@ pub struct SearchResult {
 pub struct Backlink {
     /// The document that contains the link.
     pub source: DocumentId,
-    /// The document path that the link targets (resolved relative path).
+    /// Local destination without a fragment; relative paths need the source directory.
     pub target_path: String,
     /// The link text (display label).
     pub label: String,
@@ -115,10 +115,11 @@ impl SearchIndex {
     /// by frequency within each document.
     #[must_use]
     pub fn search(&self, query: &str) -> Vec<SearchResult> {
-        if query.is_empty() {
+        let Ok(query) =
+            rutile_core::FindQuery::new(query.to_owned(), rutile_core::MatchMode::Plain, false)
+        else {
             return Vec::new();
-        }
-        let q = query.to_lowercase();
+        };
 
         // Collect per-document results, ordered by tab_order (active first).
         let mut ordered_ids: Vec<DocumentId> = Vec::new();
@@ -140,23 +141,28 @@ impl SearchIndex {
         let mut results = Vec::new();
         for id in ordered_ids {
             let doc = &self.documents[&id];
-            let text_lower = doc.text.to_lowercase();
             let mut count = 0;
             let mut start = 0;
-            while let Some(pos) = text_lower[start..].find(&q) {
-                let abs_pos = start + pos;
+            while let Some(range) = rutile_core::find_next(
+                &doc.text,
+                &query,
+                start,
+                rutile_core::FindDirection::Forward,
+                false,
+            ) {
+                let abs_pos = range.start;
                 let heading = nearest_heading(&doc.text, &doc.heading_starts, abs_pos);
-                let snippet = make_snippet(&doc.text, abs_pos, q.len());
+                let snippet = make_snippet(&doc.text, abs_pos, range.len());
                 results.push(SearchResult {
                     document_id: id,
                     byte_offset: abs_pos,
-                    byte_length: q.len(),
+                    byte_length: range.len(),
                     heading,
                     snippet,
                     indexed_revision: doc.revision,
                 });
                 count += 1;
-                start = abs_pos + q.len().max(1);
+                start = range.end;
                 // Cap matches per document to bound result size.
                 if count >= 50 {
                     break;
@@ -198,9 +204,15 @@ impl BacklinkGraph {
 
     /// Indexes links from a document's text.
     pub fn index_document(&mut self, id: DocumentId, text: &str) {
-        let mut links = Vec::new();
-        links.extend(parse_markdown_links(id, text));
-        links.extend(parse_wiki_links(id, text));
+        let links = rutile_core::document_links(text)
+            .into_iter()
+            .map(|link| Backlink {
+                source: id,
+                target_path: link.target,
+                label: link.label,
+                byte_offset: link.byte_offset,
+            })
+            .collect();
         self.backlinks.insert(id, links);
     }
 
@@ -238,20 +250,18 @@ impl BacklinkGraph {
 // Link parsing helpers
 // ---------------------------------------------------------------------------
 
-/// Finds byte offsets of lines starting with `#` (headings).
+/// Uses the renderer's heading coordinates, including setext and excluding code.
 fn extract_heading_starts(text: &str) -> Vec<usize> {
-    let mut starts = Vec::new();
-    for (offset, _) in text.match_indices('\n') {
-        let line_start = offset + 1;
-        if text[line_start..].starts_with('#') {
-            starts.push(line_start);
-        }
-    }
-    // Check first line
-    if text.starts_with('#') {
-        starts.insert(0, 0);
-    }
-    starts
+    crate::outline::Outline::from_source(text).map_or_else(
+        |_| Vec::new(),
+        |outline| {
+            outline
+                .entries()
+                .iter()
+                .map(|entry| entry.source_offset)
+                .collect()
+        },
+    )
 }
 
 /// Finds the nearest preceding heading for a byte offset.
@@ -272,85 +282,24 @@ fn nearest_heading(text: &str, heading_starts: &[usize], offset: usize) -> Optio
 /// All byte offsets are clamped to UTF-8 char boundaries to prevent panics
 /// on multibyte content.
 fn make_snippet(text: &str, pos: usize, len: usize) -> String {
-    let start = pos.saturating_sub(MAX_SNIPPET_BYTES / 3);
-    let end = (pos + len + MAX_SNIPPET_BYTES / 3).min(text.len());
-    // Clamp to char boundaries — get() returns None if start/end split a codepoint.
-    let raw = text.get(start..end).unwrap_or("");
+    let mut start = pos.saturating_sub(MAX_SNIPPET_BYTES / 3);
+    let mut end = (pos + len + MAX_SNIPPET_BYTES / 3).min(text.len());
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let raw = &text[start..end];
     let mut snippet = raw.replace('\n', " ");
     if snippet.len() > MAX_SNIPPET_BYTES {
-        // truncate on a char boundary
-        if let Some((idx, _)) = snippet.char_indices().nth(MAX_SNIPPET_BYTES) {
-            snippet.truncate(idx);
+        let mut end = MAX_SNIPPET_BYTES;
+        while !snippet.is_char_boundary(end) {
+            end -= 1;
         }
+        snippet.truncate(end);
     }
     snippet.trim().to_owned()
-}
-
-/// Parses markdown links `[text](path)` from document text.
-/// Case-insensitive suffix check (no allocation).
-fn ends_with_ci(haystack: &str, needle: &str) -> bool {
-    haystack.len() >= needle.len()
-        && haystack[haystack.len() - needle.len()..].eq_ignore_ascii_case(needle)
-}
-
-fn parse_markdown_links(source: DocumentId, text: &str) -> Vec<Backlink> {
-    let mut links = Vec::new();
-    let bytes = text.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        // Find `[`
-        if bytes[i] == b'[' {
-            // Find closing `]`
-            if let Some(bracket_end) = text[i + 1..].find(']') {
-                let label = &text[i + 1..i + 1 + bracket_end];
-                let after = i + 1 + bracket_end + 1; // Skip `]`
-                if after < bytes.len() && bytes[after] == b'(' {
-                    // Find closing `)`
-                    if let Some(paren_end) = text[after + 1..].find(')') {
-                        let path = &text[after + 1..after + 1 + paren_end];
-                        // Only accept .md paths (basic filter)
-                        if ends_with_ci(path, ".md") || ends_with_ci(path, ".markdown") {
-                            links.push(Backlink {
-                                source,
-                                target_path: path.to_owned(),
-                                label: label.to_owned(),
-                                byte_offset: i,
-                            });
-                        }
-                        i = after + 1 + paren_end + 1;
-                        continue;
-                    }
-                }
-            }
-        }
-        i += 1;
-    }
-    links
-}
-
-/// Parses wiki-links `[[path]]` from document text.
-fn parse_wiki_links(source: DocumentId, text: &str) -> Vec<Backlink> {
-    let mut links = Vec::new();
-    let mut start = 0;
-    while let Some(pos) = text[start..].find("[[") {
-        let abs = start + pos;
-        if let Some(end_rel) = text[abs + 2..].find("]]") {
-            let end = abs + 2 + end_rel;
-            let path = &text[abs + 2..end];
-            if !path.is_empty() {
-                links.push(Backlink {
-                    source,
-                    target_path: path.to_owned(),
-                    label: path.to_owned(),
-                    byte_offset: abs,
-                });
-            }
-            start = end + 2;
-        } else {
-            break;
-        }
-    }
-    links
 }
 
 // ---------------------------------------------------------------------------
@@ -359,6 +308,52 @@ fn parse_wiki_links(source: DocumentId, text: &str) -> Vec<Backlink> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn search_heading_context_matches_rendered_markdown() {
+        let mut index = super::SearchIndex::new();
+        index.index_document(
+            rutile_types::DocumentId::ROOT,
+            "Real section\n============\n\n```\n# Fake section\n```\n\n#not-a-heading\nneedle",
+            1,
+        );
+        assert_eq!(
+            index.search("needle")[0].heading.as_deref(),
+            Some("Real section")
+        );
+    }
+
+    #[test]
+    fn backlinks_ignore_code_images_and_remote_urls_but_resolve_reference_syntax() {
+        let mut graph = super::BacklinkGraph::new();
+        graph.index_document(rutile_types::DocumentId::ROOT,
+            "`[inline](fake.md)`\n\n```md\n[fenced](fake.md)\n[[fake]]\n```\n\n![image](fake.md)\n[remote](https://example.org/fake.md)\n[real][ref]\n\n[ref]: real.md#heading\n");
+        assert_eq!(graph.link_count(), 1);
+        assert_eq!(graph.backlinks_to("real.md").len(), 1);
+    }
+
+    #[test]
+    fn unicode_case_mapping_keeps_offsets_in_the_original_document() {
+        let source = "İ preceding 🪶 target";
+        let mut index = super::SearchIndex::new();
+        index.index_document(rutile_types::DocumentId::ROOT, source, 7);
+        let matches = index.search("TARGET");
+        assert_eq!(matches.len(), 1);
+        let found = &matches[0];
+        assert_eq!(
+            &source[found.byte_offset..found.byte_offset + found.byte_length],
+            "target"
+        );
+        assert!(!found.snippet.is_empty());
+        let source = "🪶".repeat(300);
+        assert!(super::make_snippet(&source, 100, 400).len() <= super::MAX_SNIPPET_BYTES);
+    }
+
+    #[test]
+    fn non_markdown_unicode_link_suffix_never_slices_a_codepoint() {
+        let mut graph = super::BacklinkGraph::new();
+        graph.index_document(rutile_types::DocumentId::ROOT, "[label](猫x)");
+        assert_eq!(graph.link_count(), 0);
+    }
     use super::*;
 
     #[test]

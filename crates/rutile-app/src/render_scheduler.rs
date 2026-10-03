@@ -172,6 +172,12 @@ impl RenderScheduler {
         Self::default()
     }
 
+    /// Invalidate a document's jobs without reusing an outstanding job ID.
+    pub fn invalidate_document(&mut self) {
+        self.running = None;
+        self.pending = None;
+    }
+
     pub fn submit(&mut self, request: RenderRequest, now_ms: u64) {
         if self
             .pending

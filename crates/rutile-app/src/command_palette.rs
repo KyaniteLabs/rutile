@@ -150,6 +150,15 @@ impl CommandPalette {
         self.candidates.get(self.selected)
     }
 
+    /// Selects a visible candidate, rejecting stale or closed-panel actions.
+    pub fn select_index(&mut self, index: usize) -> bool {
+        if !self.is_open() || index >= self.candidates.len() {
+            return false;
+        }
+        self.selected = index;
+        true
+    }
+
     /// Recomputes the ranked candidate list for `query` and resets selection to
     /// the first row. An empty query surfaces every command in registry order.
     pub fn set_query(&mut self, query: &str, registry: &ActionRegistry) {
@@ -293,6 +302,20 @@ mod command_palette_tests {
     }
 
     // -- Ranking tiers -------------------------------------------------------
+
+    #[test]
+    fn pointer_selection_rejects_closed_and_out_of_bounds_rows() {
+        let reg = registry(&[desc("file.new", "New"), desc("file.save", "Save")]);
+        let mut palette = CommandPalette::default();
+        palette.open();
+        palette.set_query("", &reg);
+        assert!(palette.select_index(1));
+        assert_eq!(palette.selected_candidate().unwrap().id.0, "file.save");
+        assert!(!palette.select_index(2));
+        assert_eq!(palette.selected_index(), Some(1));
+        palette.close();
+        assert!(!palette.select_index(0));
+    }
 
     #[test]
     fn empty_query_surfaces_all_in_order() {

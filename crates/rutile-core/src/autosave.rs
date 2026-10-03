@@ -218,6 +218,8 @@ pub enum AutosaveError {
     AutosaveUnavailable(#[source] io::Error),
     #[error("autosave sequence exhausted")]
     SequenceExhausted,
+    #[error("autosave journal is damaged or unsupported; existing recovery data was preserved")]
+    InvalidJournal,
     #[error("autosave journal exceeds {maximum} bytes")]
     OversizeJournal { maximum: usize },
     #[error("session state exceeds {maximum} bytes")]
@@ -255,6 +257,12 @@ impl AutosaveStore {
         with_store_lock(&self.dir, || {
             let journal = read_journal_bounded(&self.dir)?.unwrap_or_default();
             let (entries, rejected) = decode_entries_with_reasons(&journal);
+            // Unknown entries can own both sequence numbers and snapshots.
+            // Never overwrite those snapshots or compact away the evidence
+            // that keeps later recovery from garbage-collecting them.
+            if !rejected.is_empty() {
+                return Err(AutosaveError::InvalidJournal);
+            }
             let sequence = Self::next_sequence_from_entries(&entries)?;
 
             let snapshot_file = snapshot_file_name(sequence);
@@ -276,10 +284,8 @@ impl AutosaveStore {
             append_bytes_durable(&self.dir, AUTOSAVE_JOURNAL_FILE, &record)?;
 
             let prune = self.prune_locked()?;
-            // Keep-set from the compacted journal; fail-closed gate from the
-            // pre-append decode, because prune compaction rewrites the journal
-            // from decodable entries only and would otherwise erase the
-            // evidence that made GC unsafe.
+            // The pre-append journal was fully decoded under this same lock.
+            // Use the compacted journal's references for orphan collection.
             let journal_after = read_journal_bounded(&self.dir)?.unwrap_or_default();
             let (entries_after, _rejected_after) = decode_entries_with_reasons(&journal_after);
             let orphan_gc = self.gc_orphans_fail_closed(&rejected, || {
@@ -526,12 +532,14 @@ fn is_autosave_snapshot_name(name: &str) -> bool {
 /// Reads a snapshot file bounded at `max` bytes, distinguishing a missing
 /// snapshot from one that outgrew the document cap. A TOCTOU race that grows
 /// the file between the metadata check and the read is caught by the same cap.
-fn read_snapshot_file(path: &Path, max: usize) -> Result<Vec<u8>, RejectionReason> {
-    let metadata = fs::metadata(path).map_err(|_| RejectionReason::SnapshotMissing)?;
+pub(crate) fn read_snapshot_file(path: &Path, max: usize) -> Result<Vec<u8>, RejectionReason> {
+    let file = open_recovery_file(path).map_err(|_| RejectionReason::SnapshotMissing)?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| RejectionReason::SnapshotMissing)?;
     if metadata.len() > max as u64 {
         return Err(RejectionReason::SnapshotOversized);
     }
-    let file = fs::File::open(path).map_err(|_| RejectionReason::SnapshotMissing)?;
     let mut bytes = Vec::new();
     let cap = max.saturating_add(1);
     file.take(cap as u64)
@@ -543,11 +551,30 @@ fn read_snapshot_file(path: &Path, max: usize) -> Result<Vec<u8>, RejectionReaso
     Ok(bytes)
 }
 
+/// Recovery must not follow a substituted symlink or block on a FIFO/device.
+pub(crate) fn open_recovery_file(path: &Path) -> io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "recovery data is not a regular file",
+        ));
+    }
+    Ok(file)
+}
+
 /// Reads the journal bounded at [`MAX_JOURNAL_BYTES`] + 1 so an oversize
 /// journal is rejected without a full allocation.
 fn read_journal_bounded(dir: &Path) -> Result<Option<Vec<u8>>, AutosaveError> {
     let path = dir.join(AUTOSAVE_JOURNAL_FILE);
-    let file = match fs::File::open(&path) {
+    let file = match open_recovery_file(&path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
@@ -569,7 +596,7 @@ fn read_session_state_bounded(dir: &Path) -> Result<Option<Vec<u8>>, AutosaveErr
     use crate::session_contract::MAX_SESSION_STATE_BYTES;
 
     let path = dir.join(SESSION_STATE_FILE);
-    let file = match fs::File::open(&path) {
+    let file = match open_recovery_file(&path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
@@ -598,6 +625,14 @@ fn decode_entries_with_reasons(journal: &[u8]) -> (Vec<AutosaveEntryV1>, Vec<Rej
                 reason: rejection_reason_from_session_error(&error),
             }),
         }
+    }
+    // A torn final append can still reference a durable snapshot. Retain it
+    // as rejected evidence so neither writes nor recovery GC discard it.
+    if !journal.is_empty() && !journal.ends_with(b"\n") {
+        rejected.push(RejectedEntry {
+            sequence: None,
+            reason: RejectionReason::CorruptLine,
+        });
     }
     (entries, rejected)
 }
@@ -629,12 +664,26 @@ struct StoreLock {
 
 fn acquire_store_lock(dir: &Path) -> Result<StoreLock, AutosaveError> {
     let lock_path = dir.join(AUTOSAVE_LOCK_FILE);
-    let file = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
+    let mut options = fs::OpenOptions::new();
+    options.create(true).truncate(false).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = options
         .open(&lock_path)
         .map_err(AutosaveError::AutosaveUnavailable)?;
+    if !file
+        .metadata()
+        .map_err(AutosaveError::AutosaveUnavailable)?
+        .is_file()
+    {
+        return Err(AutosaveError::AutosaveUnavailable(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Autosave lock is not a regular file",
+        )));
+    }
 
     let start = Instant::now();
     let timeout = Duration::from_millis(LOCK_TIMEOUT_MS);
@@ -652,7 +701,7 @@ fn acquire_store_lock(dir: &Path) -> Result<StoreLock, AutosaveError> {
     }
 }
 
-fn with_store_lock<T>(
+pub(crate) fn with_store_lock<T>(
     dir: &Path,
     operation: impl FnOnce() -> Result<T, AutosaveError>,
 ) -> Result<T, AutosaveError> {
@@ -911,6 +960,8 @@ mod tests {
         assert!(store.load_session_state().unwrap().is_none());
 
         let state = SessionStateV1 {
+            open_tabs: Vec::new(),
+            active_tab: None,
             schema: SESSION_SCHEMA_V1.to_owned(),
             v: 1,
             saved_at_unix_ms: 42,
@@ -1018,13 +1069,17 @@ mod tests {
         bytes.extend_from_slice(b"not json at all\n");
         fs::write(&journal, &bytes).unwrap();
 
-        store.record(&snapshot("second"), None, 2).unwrap();
+        assert!(matches!(
+            store.record(&snapshot("second"), None, 2),
+            Err(AutosaveError::InvalidJournal)
+        ));
         assert!(
             dir.0.join("autosave-9000.md").exists(),
             "record's orphan GC must not run while the journal has rejected lines"
         );
-        // The new entry itself still landed.
+        assert_eq!(fs::read(&journal).unwrap(), bytes);
+        // The previous committed entry remains recoverable.
         let recovered = store.recover().unwrap().recovered.unwrap();
-        assert_eq!(recovered.document.snapshot().to_string(), "second");
+        assert_eq!(recovered.document.snapshot().to_string(), "first");
     }
 }

@@ -14,8 +14,19 @@ use crate::app::{AppEffect, AppMessage, AppState, CloseDecision, PreviewState};
 use crate::app::{NoticeSeverity, UserNotice};
 use rutile_types::{DocumentId, Revision};
 
+/// A fully prepared restored tab. File reads happen in the effect executor;
+/// installing the complete set below is atomic and I/O-free.
+pub struct RestoredDocument {
+    pub view: rutile_core::WorkspaceViewState,
+    pub document: Document,
+    pub path: Option<PathBuf>,
+    pub disk: Option<DiskVersion>,
+    pub dirty: bool,
+}
+
 /// Sole `AppState` / `Document` authority for one open document.
 pub struct DocumentSessionCore {
+    history: crate::revision_history::SnapshotHistory,
     app: AppState,
     document: Document,
     /// Parked ropes for inactive tabs. Path/dirty/revision stay on `DocumentSlot`.
@@ -23,9 +34,163 @@ pub struct DocumentSessionCore {
     /// Generation of the latest open request. Completions with a mismatched
     /// generation are ignored so stale async opens cannot roll state backward.
     open_generation: u64,
+    /// Advances when a document rope is replaced, including same-file revision-zero reloads.
+    document_generation: u64,
 }
 
 impl DocumentSessionCore {
+    pub fn checkpoint(
+        &mut self,
+        timestamp_ms: u64,
+        source: crate::revision_history::HistorySource,
+        description: &str,
+    ) -> Result<u64, String> {
+        self.history.record(
+            self.app.documents().active_id(),
+            self.snapshot(),
+            timestamp_ms,
+            source,
+            description,
+        )
+    }
+
+    pub fn checkpoints(
+        &self,
+    ) -> impl Iterator<Item = &crate::revision_history::SnapshotCheckpoint> {
+        self.history.entries(self.app.documents().active_id())
+    }
+
+    pub fn restore_checkpoint(
+        &mut self,
+        id: u64,
+        timestamp_ms: u64,
+    ) -> Result<crate::actions::InsertApplied, String> {
+        if self.app.mode() == crate::app::DocumentMode::View {
+            return Err("Switch to an editing view before restoring history".into());
+        }
+        let snapshot = self
+            .history
+            .get(self.app.documents().active_id(), id)
+            .ok_or("Checkpoint is no longer available for this document")?
+            .snapshot
+            .clone();
+        let current = self.snapshot();
+        let selection = rutile_core::Selection {
+            anchor: 0,
+            head: self.document.len_bytes(),
+        };
+        self.history.record(
+            self.app.documents().active_id(),
+            current,
+            timestamp_ms,
+            crate::revision_history::HistorySource::BeforeBulk,
+            "Before restore",
+        )?;
+        let applied = self
+            .app
+            .insert_text(&mut self.document, selection, &snapshot.to_string())
+            .map_err(|error| error.to_string())?;
+        Ok(applied)
+    }
+
+    pub fn recovery_snapshot(&self) -> Result<rutile_core::WorkspaceRecoverySnapshot, String> {
+        let active = self.app.documents().active_id();
+        let mut tabs = Vec::new();
+        for &id in self.app.documents().tab_order() {
+            let slot = self
+                .app
+                .documents()
+                .slot(id)
+                .ok_or("missing document slot")?;
+            let document = if id == active {
+                &self.document
+            } else {
+                self.parked.get(&id).ok_or("missing parked document")?
+            };
+            let path = slot
+                .path
+                .as_ref()
+                .map(|path| {
+                    path.to_str()
+                        .map(str::to_owned)
+                        .ok_or("document path is not UTF-8")
+                })
+                .transpose()?;
+            tabs.push(rutile_core::WorkspaceRecoveryTab {
+                id: id.get(),
+                view: slot.view.validated(&document.snapshot()),
+                path,
+                snapshot: slot.dirty.then(|| document.snapshot()),
+            });
+        }
+        Ok(rutile_core::WorkspaceRecoverySnapshot {
+            active_id: active.get(),
+            tabs,
+        })
+    }
+
+    pub fn install_restored_documents(
+        &mut self,
+        documents: Vec<RestoredDocument>,
+        active_index: usize,
+    ) -> Result<(), String> {
+        use crate::document_manager::{DocumentManager, MAX_OPEN_DOCUMENTS};
+        if !self.dirty_document_ids().is_empty() {
+            return Err("Save or close unsaved documents before restoring a session".into());
+        }
+        if documents.is_empty()
+            || documents.len() > MAX_OPEN_DOCUMENTS
+            || active_index >= documents.len()
+        {
+            return Err("Invalid restored tab set".into());
+        }
+        let mut manager = DocumentManager::new();
+        if let Some(store) = self.app.autosave_store() {
+            manager.bind_autosave_store(store);
+        }
+        let mut ropes = HashMap::new();
+        let mut paths = std::collections::HashSet::new();
+        let mut active_id = DocumentId::ROOT;
+        for (index, restored) in documents.into_iter().enumerate() {
+            if let Some(path) = &restored.path {
+                if !paths.insert(path.clone()) {
+                    return Err("Duplicate restored document path".into());
+                }
+            }
+            let id = if index == 0 {
+                DocumentId::ROOT
+            } else {
+                manager.new_tab().map_err(|error| error.to_string())?
+            };
+            let slot = manager.slot_mut(id).ok_or("missing restored slot")?;
+            slot.view = restored.view.validated(&restored.document.snapshot());
+            slot.path = restored.path;
+            slot.saved_disk = restored.disk;
+            slot.dirty = restored.dirty;
+            slot.revision = restored.document.revision();
+            slot.preview = PreviewState::Waiting {
+                revision: slot.revision,
+            };
+            ropes.insert(id, restored.document);
+            if index == active_index {
+                active_id = id;
+            }
+        }
+        manager
+            .switch_tab(active_id)
+            .map_err(|error| error.to_string())?;
+        let document = ropes
+            .remove(&active_id)
+            .ok_or("missing active restored document")?;
+        self.app.replace_documents(manager);
+        self.document = document;
+        self.parked = ropes;
+        self.history = crate::revision_history::SnapshotHistory::default();
+        self.open_generation = self.open_generation.saturating_add(1);
+        self.document_generation = self.document_generation.saturating_add(1);
+        Ok(())
+    }
+
     /// Builds a core around an in-memory starter document and applies
     /// [`AppMessage::NewDocument`].
     pub fn new_in_memory(source: &str) -> Result<Self, String> {
@@ -33,10 +198,12 @@ impl DocumentSessionCore {
         let mut app = AppState::new();
         let _ = app.reduce(AppMessage::NewDocument);
         Ok(Self {
+            history: crate::revision_history::SnapshotHistory::default(),
             app,
             document,
             parked: HashMap::new(),
             open_generation: 0,
+            document_generation: 0,
         })
     }
 
@@ -50,10 +217,12 @@ impl DocumentSessionCore {
             disk,
         });
         Self {
+            history: crate::revision_history::SnapshotHistory::default(),
             app,
             document,
             parked: HashMap::new(),
             open_generation: 0,
+            document_generation: 0,
         }
     }
 
@@ -62,10 +231,12 @@ impl DocumentSessionCore {
     #[must_use]
     pub fn from_parts(app: AppState, document: Document) -> Self {
         Self {
+            history: crate::revision_history::SnapshotHistory::default(),
             app,
             document,
             parked: HashMap::new(),
             open_generation: 0,
+            document_generation: 0,
         }
     }
 
@@ -89,6 +260,12 @@ impl DocumentSessionCore {
 
     pub fn set_document(&mut self, document: Document) {
         self.document = document;
+        self.document_generation = self.document_generation.saturating_add(1);
+    }
+
+    #[must_use]
+    pub const fn document_generation(&self) -> u64 {
+        self.document_generation
     }
 
     #[must_use]
@@ -101,6 +278,22 @@ impl DocumentSessionCore {
         self.app.dirty()
     }
 
+    /// Window close must account for unsaved background tabs as well.
+    pub fn dirty_document_ids(&self) -> Vec<DocumentId> {
+        self.app
+            .documents()
+            .tab_order()
+            .iter()
+            .copied()
+            .filter(|id| {
+                self.app
+                    .documents()
+                    .slot(*id)
+                    .is_some_and(|slot| slot.dirty)
+            })
+            .collect()
+    }
+
     #[must_use]
     pub fn path(&self) -> Option<&Path> {
         self.app.path()
@@ -109,6 +302,14 @@ impl DocumentSessionCore {
     #[must_use]
     pub fn snapshot(&self) -> DocumentSnapshot {
         self.document.snapshot()
+    }
+
+    pub fn snapshot_for_document(&self, id: DocumentId) -> Option<DocumentSnapshot> {
+        if id == self.app.documents().active_id() {
+            Some(self.snapshot())
+        } else {
+            self.parked.get(&id).map(Document::snapshot)
+        }
     }
 
     #[must_use]
@@ -155,8 +356,8 @@ impl DocumentSessionCore {
 
     /// Installs a freshly loaded file as the active tab (design D4).
     ///
-    /// - Same path already active: replace the live rope in place (reload).
-    /// - Same path open in another tab: switch there and install the load.
+    /// - Same path already open: focus it and preserve unsaved contents.
+    ///   A clean buffer may adopt a refreshed disk version.
     /// - Single untitled clean tab: replace in place (startup / first open).
     /// - Otherwise: park the current tab and open a new one.
     pub fn adopt_opened_document(
@@ -166,12 +367,11 @@ impl DocumentSessionCore {
         disk: DiskVersion,
     ) -> Vec<AppEffect> {
         if let Some(existing) = self.app.documents().find_by_path(&path) {
-            if existing != self.app.documents().active_id() {
-                self.park_active();
-                let _ = self.app.reduce(AppMessage::SwitchTab { id: existing });
-                self.parked.remove(&existing);
+            let effects = self.reduce(AppMessage::SwitchTab { id: existing });
+            if self.dirty() {
+                return effects;
             }
-            self.document = document;
+            self.set_document(document);
             return self.app.reduce(AppMessage::DocumentOpened {
                 revision: self.document.revision(),
                 path,
@@ -181,6 +381,10 @@ impl DocumentSessionCore {
 
         let replace_in_place =
             self.app.documents().len() == 1 && !self.app.dirty() && self.app.path().is_none();
+        if replace_in_place {
+            self.history
+                .remove_document(self.app.documents().active_id());
+        }
         if !replace_in_place {
             self.park_active();
             let effects = self.app.reduce(AppMessage::NewTab);
@@ -192,7 +396,7 @@ impl DocumentSessionCore {
                 return effects;
             }
         }
-        self.document = document;
+        self.set_document(document);
         self.app.reduce(AppMessage::DocumentOpened {
             revision: self.document.revision(),
             path,
@@ -202,6 +406,22 @@ impl DocumentSessionCore {
 
     pub fn reduce(&mut self, message: AppMessage) -> Vec<AppEffect> {
         match message {
+            AppMessage::PaletteSubmit => {
+                let dispatch = self.app.selected_palette_message();
+                self.app.reduce(AppMessage::CloseCommandPalette);
+                dispatch.map_or_else(Vec::new, |message| self.reduce(message))
+            }
+            AppMessage::NewDocument if !self.dirty() => {
+                self.history
+                    .remove_document(self.app.documents().active_id());
+                self.set_document(Self::empty_document());
+                self.app.reduce(AppMessage::NewDocument)
+            }
+            AppMessage::NewDocument => self.surface_notice(
+                NoticeSeverity::Warning,
+                "Save or close the current document before creating a new document",
+                "unsaved document",
+            ),
             AppMessage::NewTab => {
                 self.park_active();
                 let effects = self.app.reduce(AppMessage::NewTab);
@@ -230,6 +450,7 @@ impl DocumentSessionCore {
                     return effects;
                 }
                 self.parked.remove(&id);
+                self.history.remove_document(id);
                 if was_active {
                     self.load_active();
                 }
@@ -248,6 +469,7 @@ impl DocumentSessionCore {
                     decision: CloseDecision::Discard,
                 });
                 self.parked.remove(&id);
+                self.history.remove_document(id);
                 if was_active {
                     self.load_active();
                 }
@@ -289,6 +511,27 @@ impl DocumentSessionCore {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn checkpoint_restore_is_tab_scoped_and_undoable() {
+        use crate::revision_history::HistorySource;
+        let mut core = super::DocumentSessionCore::new_in_memory("old café").unwrap();
+        let first = core.app().documents().active_id();
+        let checkpoint = core.checkpoint(1, HistorySource::Manual, "Manual").unwrap();
+        core.set_document(rutile_core::Document::new("current 🪶").unwrap());
+        core.reduce(crate::app::AppMessage::NewTab);
+        assert!(core.restore_checkpoint(checkpoint, 2).is_err());
+        core.reduce(crate::app::AppMessage::SwitchTab { id: first });
+        core.restore_checkpoint(checkpoint, 3).unwrap();
+        assert_eq!(core.snapshot().to_string(), "old café");
+        assert_eq!(
+            core.checkpoints().next().unwrap().snapshot.to_string(),
+            "current 🪶"
+        );
+        assert!(core.dirty());
+        core.document_mut().undo().unwrap();
+        assert_eq!(core.snapshot().to_string(), "current 🪶");
+    }
+
     use super::*;
     use crate::app::AppMessage;
     use std::path::PathBuf;
@@ -411,5 +654,40 @@ mod tests {
         assert!(effects.is_empty());
         assert_eq!(core.document().snapshot().to_string(), "only");
         assert_eq!(core.app().documents().len(), 1);
+    }
+
+    #[test]
+    fn reopening_a_dirty_tab_preserves_unsaved_text() {
+        let (path, disk) = sample_disk("dirty-duplicate", "disk");
+        let mut core = DocumentSessionCore::from_opened(
+            Document::new("disk").unwrap(),
+            path.clone(),
+            disk.clone(),
+        );
+        let first = core.app().documents().active_id();
+        core.set_document(Document::new("unsaved 🦀").unwrap());
+        core.reduce(AppMessage::DocumentEdited {
+            revision: Revision::new(1),
+        });
+        core.reduce(AppMessage::NewTab);
+        core.adopt_opened_document(Document::new("disk").unwrap(), path, disk);
+        assert_eq!(core.app().documents().active_id(), first);
+        assert_eq!(core.snapshot().to_string(), "unsaved 🦀");
+        assert!(core.dirty());
+    }
+
+    #[test]
+    fn palette_new_tab_parks_the_existing_rope() {
+        let mut core = DocumentSessionCore::new_in_memory("keep this text").unwrap();
+        let first = core.app().documents().active_id();
+        core.reduce(AppMessage::OpenCommandPalette);
+        core.reduce(AppMessage::PaletteQueryChanged {
+            query: "New Tab".into(),
+        });
+        core.reduce(AppMessage::PaletteSubmit);
+        assert_eq!(core.app().documents().len(), 2);
+        assert_eq!(core.snapshot().to_string(), "");
+        core.reduce(AppMessage::SwitchTab { id: first });
+        assert_eq!(core.snapshot().to_string(), "keep this text");
     }
 }

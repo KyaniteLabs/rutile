@@ -711,6 +711,18 @@ fn autosave_tick_then_recover_round_trips() {
 }
 
 #[test]
+fn unrecoverable_journal_is_an_error_not_an_empty_first_launch() {
+    let dir = ScratchDir::new("unrecoverable-journal");
+    let mut state = AppState::new();
+    state
+        .bind_autosave(AutosaveStore::new(dir.0.clone()))
+        .unwrap();
+    assert!(state.recover().unwrap().is_none());
+    std::fs::write(dir.0.join(rutile_core::AUTOSAVE_JOURNAL_FILE), b"{broken\n").unwrap();
+    assert!(state.recover().is_err());
+}
+
+#[test]
 fn adopt_recovered_keeps_revision_and_document_path() {
     let dir = ScratchDir::new("adopt");
     let (path, disk) = disk_version("adopt-doc", "on disk");
@@ -1145,6 +1157,8 @@ fn session_restored_with_last_file_opens_it() {
     let mut state = AppState::new();
     let effects = state.reduce(AppMessage::SessionRestored {
         state: SessionStateV1 {
+            open_tabs: Vec::new(),
+            active_tab: None,
             schema: rutile_core::SESSION_SCHEMA_V1.to_owned(),
             v: 1,
             saved_at_unix_ms: 1,
@@ -1173,6 +1187,8 @@ fn session_restored_without_last_file_is_noop() {
             v: 1,
             saved_at_unix_ms: 1,
             last_file: None,
+            open_tabs: Vec::new(),
+            active_tab: None,
             selection: None,
             top_visible_byte: None,
             window: None,
@@ -1366,6 +1382,8 @@ fn remove_recent_drops_a_single_entry() {
 fn session_restored_restores_recents() {
     let mut state = AppState::new();
     let session = SessionStateV1 {
+        open_tabs: Vec::new(),
+        active_tab: None,
         schema: rutile_core::SESSION_SCHEMA_V1.to_owned(),
         v: 1,
         saved_at_unix_ms: 100,
@@ -1505,8 +1523,42 @@ fn palette_open_lists_all_default_commands() {
     assert!(!state.palette().is_open());
     state.reduce(AppMessage::OpenCommandPalette);
     assert!(state.palette().is_open());
-    // The default catalog ships 14 dispatchable commands.
-    assert_eq!(state.palette().candidates().len(), 14);
+    assert_eq!(
+        state.palette().candidates().len(),
+        rutile_app::actions::DEFAULT_CATALOG.len()
+    );
+}
+
+#[test]
+fn palette_format_dispatch_respects_read_mode() {
+    let mut state = AppState::new();
+    state.reduce(AppMessage::OpenCommandPalette);
+    state.reduce(AppMessage::PaletteQueryChanged {
+        query: "format.bold".into(),
+    });
+    assert!(matches!(
+        state.selected_palette_message(),
+        Some(AppMessage::FormatRequested { .. })
+    ));
+    assert!(matches!(
+        state.reduce(AppMessage::PaletteSubmit).as_slice(),
+        [AppEffect::PerformFormat { .. }]
+    ));
+    state.reduce(AppMessage::SetDocumentMode {
+        mode: rutile_app::app::DocumentMode::View,
+    });
+    state.reduce(AppMessage::OpenCommandPalette);
+    state.reduce(AppMessage::PaletteQueryChanged {
+        query: "format.bold".into(),
+    });
+    assert!(state.selected_palette_message().is_none());
+    assert!(
+        state
+            .reduce(AppMessage::FormatRequested {
+                command: rutile_core::FormatCommand::ToggleBold
+            })
+            .is_empty()
+    );
 }
 
 #[test]

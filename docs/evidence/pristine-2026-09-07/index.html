@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'">
+<title>Rutile · Completion review in progress</title>
+<style>
+/* Existing repair-review system: warm paper, charcoal, rust status, Georgia
+   headings, system-sans evidence, 8px spacing, 72rem reading canvas. */
+:root{color-scheme:light;--paper:#f7f3eb;--ink:#252923;--muted:#586052;--line:#cdcdbd;--accent:#8b3424;--card:#fffdf8}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:17px/1.6 system-ui,sans-serif}main{max-width:72rem;margin:auto;padding:48px 24px 72px}header{border-top:5px solid var(--ink);padding-top:24px}.eyebrow{font-size:13px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}h1,h2{font-family:Georgia,serif;font-weight:400;line-height:1.15}h1{font-size:clamp(38px,6vw,68px);max-width:850px;margin:24px 0}h2{font-size:30px;margin:0 0 16px}.lead{max-width:48rem;font-size:21px}.status{color:var(--accent);font-weight:700}section{border-top:1px solid var(--line);padding-top:24px;margin-top:40px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:24px}.card{background:var(--card);padding:24px;border:1px solid var(--line)}li{margin-bottom:12px}a{color:var(--accent);text-underline-offset:4px}a:focus-visible{outline:3px solid var(--accent);outline-offset:4px}table{border-collapse:collapse;width:100%;font-size:15px}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(--line);padding:12px 8px}th:first-child,td:first-child{padding-left:0}.scroll{overflow-x:auto}footer,.note{font-size:14px;color:var(--muted)}footer{border-top:1px solid var(--line);margin-top:48px;padding-top:16px}@media(max-width:680px){main{padding:24px 16px 48px}.grid{grid-template-columns:1fr}th,td{min-width:9rem}}@media print{main{padding:0}section{break-inside:avoid}a{color:inherit}}
+</style>
+<main>
+<header><div class="eyebrow">Rutile / local repair candidate / 7 September 2026</div>
+<h1>Repairs verified.<br>Completion still open.</h1>
+<p class="lead">Crash recovery, save protection, native state restoration, formatting, themes, backlinks, and session history have executable evidence. The complete operator journey matrix has not yet passed.</p>
+<p class="status">In progress — no release, installation over the user’s app, or publication.</p></header>
+<section class="grid" aria-label="Evidence and remaining work">
+<div class="card"><h2>What has evidence</h2><ul>
+<li>Three dirty tabs survive kill/restart. Quitting recovery preserves bytes; cancelling a later close preserves every draft.</li>
+<li>Save detects external edits. Export uses protected atomic writes. Same-file reload refreshes the editor and counts.</li>
+<li>The GTK palette executes Unicode formatting and undo without losing the selection.</li>
+<li>GTK history creates, compares, restores, and undoes a checkpoint through the native editor.</li>
+<li>GTK outline, search and backlinks execute shared navigation; their rendered dialogs were inspected.</li>
+<li>External Linux keyboard input passes Unicode format, undo/redo, Save, Find focus and clipboard operations across tabs.</li>
+<li>ZIP and DMG packages pass isolated installation, public entrypoint execution, LaunchServices and removal checks.</li>
+<li>Light and dark document surfaces were rendered and inspected.</li>
+</ul></div>
+<div class="card"><h2>What remains open</h2><ul>
+<li>The remaining macOS external panel, file-dialog and session journeys.</li>
+<li>Final-source packaging refresh and final validation reconciliation.</li>
+<li>External macOS keyboard automation is being checked for reliable input delivery.</li>
+<li>Physical IME and screen-reader evidence remain unverified.</li>
+</ul><p class="note">No TasteCheck capability is available in this session. Rendered inspection must not be reported as a TasteCheck pass.</p></div></section>
+<section><h2>Validation snapshots</h2><div class="scroll"><table><thead><tr><th>Scope</th><th>Observed result</th><th>Limit</th></tr></thead><tbody>
+<tr><td>Workspace, with history and navigation</td><td>Serial workspace execution: 1,190 tests passed across 57 suites, including packaging-tool changes.</td><td>Latest macOS smoke timer change needs final lint reconciliation.</td></tr>
+<tr><td>Linux final candidate</td><td>34 product tests; external keyboard, clipboard, history and navigation; release gate with 50 ready and 50 closed, zero failures.</td><td>Isolated ARM64 VM; no x86 or Wayland claim.</td></tr>
+<tr><td>macOS native smoke</td><td>13 rendered editor frames; 50 visibility and 50 suspend/resume cycles; format, find, clipboard, save and export probes passed.</td><td>Native harness execution is separate from external keyboard and Accessibility.</td></tr>
+<tr><td>Both native shells</td><td>Clippy passed.</td><td>Compilation is not rendered acceptance.</td></tr>
+<tr><td>Linux recovery</td><td>Seed, quit, restore, close cancellation, discard; original disk bytes preserved.</td><td>Isolated Linux ARM64 VM, not x86 hardware.</td></tr>
+<tr><td>Local macOS packages</td><td>ZIP and DMG install, hash-bound executable, LaunchServices entrypoint and uninstall passed.</td><td>Public --version entrypoint only; no GUI-paint or release-attestation claim.</td></tr>
+</tbody></table></div><p>Detailed evidence: <a href="../comorbidity-check-2026-09-07.md">causal audit</a>, <a href="../pristine-progress-2026-09-07.md">progress record</a>, and <a href="../../plan/pristine-execution-2026-09-07.md">all 19 operator journeys</a>.</p></section>
+<section><h2>Ten next improvements</h2><p>Provisional priorities for after the required work passes. These are additional capabilities, separate from the unfinished fixes above.</p><ol>
+<li><strong>Opt-in persistent history.</strong> Keep bounded checkpoints across clean restarts, with visible retention and deletion controls.</li>
+<li><strong>Three-way conflict comparison.</strong> Compare the last saved version, local draft, and external edit before choosing a resolution.</li>
+<li><strong>Section folding.</strong> Collapse long Markdown sections without changing their source.</li>
+<li><strong>Structural section movement.</strong> Move a heading and its contents together as one undoable action.</li>
+<li><strong>Native table editing.</strong> Insert, move, and remove rows or columns through shared Markdown transactions.</li>
+<li><strong>Custom keyboard bindings.</strong> Rebind native commands with conflict detection and an immediate reset path.</li>
+<li><strong>Local document templates.</strong> Start repeatable notes from small, user-owned Markdown templates.</li>
+<li><strong>Open-document task navigator.</strong> Review unchecked tasks across open buffers and jump directly to each source location.</li>
+<li><strong>Bounded local attachment import.</strong> Validate and copy selected images into an explicit document-owned folder.</li>
+<li><strong>Portable offline export bundles.</strong> Package a document with its approved local assets and an inspectable contents list.</li>
+</ol></section>
+<footer>Candidate review only. Passing contracts, native execution, rendered inspection, packaging, and release approval are separate evidence gates.</footer>
+</main>
+</html>

@@ -5,6 +5,7 @@ mod chance_style;
 mod counts;
 mod design_tokens;
 mod document;
+mod document_links;
 mod editor_contract;
 mod export;
 mod export_contract;
@@ -19,6 +20,12 @@ mod render;
 mod scroll;
 mod security;
 mod session_contract;
+mod workspace_recovery;
+
+pub use workspace_recovery::{
+    MAX_RECOVERY_TABS, RecoveredWorkspace, RecoveredWorkspaceTab, WORKSPACE_RECOVERY_FILE,
+    WorkspaceRecoveryLease, WorkspaceRecoverySnapshot, WorkspaceRecoveryTab, WorkspaceViewState,
+};
 
 pub use autosave::{
     AUTOSAVE_JOURNAL_FILE, AUTOSAVE_LOCK_FILE, AUTOSAVE_RETENTION, AutosaveError,
@@ -37,12 +44,13 @@ pub use document::{
     HistoryBoundary, HistoryContext, HistoryEntry, MAX_DOCUMENT_BYTES, MAX_UNDO_BYTES, Selection,
     TransactionKind, TypingDirection,
 };
+pub use document_links::{DocumentLink, MAX_DOCUMENT_LINKS, document_links};
 pub use editor_contract::{
     AdapterCommitId, CompositionCancelReason, CompositionId, CompositionTracker, EditorAdapter,
     EditorCommit, EditorError, EditorEvent, EditorEventSink, ImeCommit, LocalCommitRejection,
     StaleRevision, ViewportState, apply_editor_commit,
 };
-pub use export::render_export_page;
+pub use export::{DOCUMENT_CSS, render_export_page};
 pub use export_contract::{
     EXPORT_CSP, ExportError, ExportPage, ExportRequest, ExportViolation, MAX_EXPORT_PAGE_BYTES,
     MAX_EXPORT_TITLE_BYTES,

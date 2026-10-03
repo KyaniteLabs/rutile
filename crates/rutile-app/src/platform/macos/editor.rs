@@ -22,9 +22,8 @@ pub struct IcedAdapterStats {
 struct LineByteIndex {
     starts: Vec<usize>,
     len: usize,
-    /// Full text mirror, needed to convert Iced's character-column to a byte
-    /// offset (they differ for any line containing multibyte UTF-8).
-    text: Arc<str>,
+    /// Text used to validate UTF-8 boundaries alongside the incremental index.
+    text: String,
 }
 
 impl LineByteIndex {
@@ -38,15 +37,14 @@ impl LineByteIndex {
         Self {
             starts,
             len: text.len(),
-            text: Arc::from(text),
+            text: text.to_owned(),
         }
     }
 
     /// Converts an Iced `(line, column)` to a byte offset.
     ///
-    /// Iced's `column` is a **character** offset (Unicode scalar value count),
-    /// not a byte offset. We walk `char_indices` on the line's text to find
-    /// the correct byte position, preventing panics from mid-codepoint slicing.
+    /// Iced 0.14 forwards cosmic-text's Cursor.index, a UTF-8 byte offset.
+    /// Both directions must use bytes, including after a multibyte character.
     fn byte_at(&self, line: usize, column: usize) -> Result<usize, EditorError> {
         let start = *self
             .starts
@@ -68,28 +66,14 @@ impl LineByteIndex {
             .copied()
             .unwrap_or(self.len)
             .min(self.len);
-        let line_text = &self.text[start..line_end];
-        match line_text.char_indices().nth(column) {
-            Some((byte_off, _)) => start
-                .checked_add(byte_off)
-                .filter(|byte| *byte <= self.len)
-                .ok_or_else(|| EditorError::Platform("Iced cursor byte is outside mirror".into())),
-            None => {
-                // Column at or past the last character — cursor is at end of line.
-                let char_count = line_text.chars().count();
-                if column == char_count {
-                    Ok(line_end.min(self.len))
-                } else {
-                    Err(EditorError::Platform(
-                        "Iced cursor column is outside mirror".into(),
-                    ))
-                }
-            }
-        }
+        start
+            .checked_add(column)
+            .filter(|byte| *byte <= line_end && self.text.is_char_boundary(*byte))
+            .ok_or_else(|| EditorError::Platform("Iced cursor byte is outside mirror".into()))
     }
 
     fn position_at(&self, byte: usize) -> Result<text_editor::Position, EditorError> {
-        if byte > self.len {
+        if byte > self.len || !self.text.is_char_boundary(byte) {
             return Err(EditorError::Platform(
                 "requested byte is outside Iced mirror".into(),
             ));
@@ -116,6 +100,7 @@ impl LineByteIndex {
     }
 
     fn apply(&mut self, range: Range<usize>, replacement: &str) {
+        self.text.replace_range(range.clone(), replacement);
         let removed = range.end - range.start;
         let delta = replacement.len() as isize - removed as isize;
         self.starts
@@ -134,6 +119,34 @@ impl LineByteIndex {
         self.starts.sort_unstable();
         self.starts.dedup();
         self.len = self.len.saturating_add_signed(delta);
+    }
+}
+
+#[cfg(test)]
+mod byte_index_regressions {
+    use super::LineByteIndex;
+
+    #[test]
+    fn unicode_cursor_round_trips_byte_columns_after_repeated_edits() {
+        let mut index = LineByteIndex::from_text("🦀é\nlast");
+        for text in ["a\n🦀🦀\n", "é", "\n\n🦀", ""] {
+            index.apply(0..index.len, text);
+            for byte in 0..=text.len() {
+                if text.is_char_boundary(byte) {
+                    let pos = index.position_at(byte).unwrap();
+                    assert_eq!(index.byte_at(pos.line, pos.column).unwrap(), byte);
+                } else {
+                    assert!(index.position_at(byte).is_err());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cursor_after_multibyte_text_uses_bytes() {
+        let index = LineByteIndex::from_text("🦀é!");
+        assert_eq!(index.byte_at(0, 6).unwrap(), 6);
+        assert!(index.byte_at(0, 1).is_err());
     }
 }
 
@@ -657,10 +670,11 @@ impl EditorAdapter for IcedEditorAdapter {
     ) -> Result<(), EditorError> {
         self.top_visible_byte(revision)?;
         let position = self.index.position_at(byte)?;
-        self.content.move_to(text_editor::Cursor {
-            position,
-            selection: None,
-        });
+        let current = self.index.position_at(self.top_visible_byte)?;
+        let lines = i32::try_from(position.line as i64 - current.line as i64).map_err(|_| {
+            EditorError::Platform("scroll distance exceeds the editor limit".into())
+        })?;
+        self.content.perform(text_editor::Action::Scroll { lines });
         self.top_visible_byte = byte;
         Ok(())
     }

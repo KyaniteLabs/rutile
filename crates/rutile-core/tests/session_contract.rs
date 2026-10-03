@@ -22,6 +22,8 @@ fn entry() -> AutosaveEntryV1 {
 
 fn state() -> SessionStateV1 {
     SessionStateV1 {
+        open_tabs: Vec::new(),
+        active_tab: None,
         schema: SESSION_SCHEMA_V1.into(),
         v: 1,
         saved_at_unix_ms: 1_760_000_000_000,
@@ -59,6 +61,8 @@ fn session_state_round_trips() {
 #[test]
 fn minimal_session_state_round_trips() {
     let minimal = SessionStateV1 {
+        open_tabs: Vec::new(),
+        active_tab: None,
         schema: SESSION_SCHEMA_V1.into(),
         v: 1,
         saved_at_unix_ms: 0,
@@ -70,6 +74,28 @@ fn minimal_session_state_round_trips() {
     };
     let encoded = encode_session_state(&minimal).unwrap();
     assert_eq!(decode_session_state(&encoded).unwrap(), minimal);
+}
+
+#[test]
+fn ordered_tabs_are_bounded_validated_and_legacy_records_still_decode() {
+    let mut record = state();
+    let legacy = encode_session_state(&record).unwrap();
+    assert!(decode_session_state(&legacy).unwrap().open_tabs.is_empty());
+    record.open_tabs = vec!["/notes/a.md".into(), "/notes/b.md".into()];
+    record.active_tab = Some("/notes/a.md".into());
+    assert_eq!(
+        decode_session_state(&encode_session_state(&record).unwrap()).unwrap(),
+        record
+    );
+    record.active_tab = Some("/notes/missing.md".into());
+    assert!(encode_session_state(&record).is_err());
+    record.active_tab = None;
+    record.open_tabs = vec!["/notes/a.md".into(); 2];
+    assert!(encode_session_state(&record).is_err());
+    record.open_tabs = vec!["/notes/../private.md".into()];
+    assert!(encode_session_state(&record).is_err());
+    record.open_tabs = (0..17).map(|i| format!("/notes/{i}.md")).collect();
+    assert!(encode_session_state(&record).is_err());
 }
 
 #[test]

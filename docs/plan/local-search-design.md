@@ -1,7 +1,7 @@
 # Local Search and Related Links (Roadmap 12) — Design Decisions
 
-Status: **locked (in-memory contract implemented in `local_search.rs`;
-native search UI deferred).** Parent issue:
+Status: **in-memory contract and native search/backlink dialogs implemented;
+GTK execution verified, macOS rendered acceptance pending.** Parent issue:
 `.scratch/rutile-macos-roadmap/issues/12-local-search-and-related-links.md`.
 Blocked by 03 (LOCKED), 08 (DONE).
 
@@ -16,14 +16,15 @@ needed. The index is rebuilt on document open/edit; no persistence.
 
 ### S2 — Index triggers: on open + on idle debounce
 
-The index updates when a document is opened and on a debounced idle timer
-(~500ms after the last edit). No real-time per-keystroke reindexing.
+The native navigator builds a bounded index from open snapshots when the user
+submits a query. Empty queries do not index documents. Results retain their
+snapshot identity so editing, closing or changing a path invalidates navigation.
 
 ### S3 — Ranking: recency + frequency + document-active boost
 
-Results are ranked by: (1) active document matches first, (2) match frequency
-within each document, (3) most-recently-opened document order from
-`RecentDocuments`.
+The index ranks the active document first, then applies its existing match
+ordering. Native results are capped at 500 rows, with at most 50 matches per
+document. Navigation reads only the open workspace; it does not scan directories.
 
 ### S4 — Path/privacy: only open documents are indexed
 
@@ -33,9 +34,8 @@ preserved by construction.
 
 ### S5 — Heading extraction for result context
 
-Each search result includes the nearest preceding heading (line starting
-with `#`) as context, so the user sees where the match lives in the document
-structure.
+Each search result includes the nearest preceding heading from the renderer's
+outline model, including setext headings, as context.
 
 ### S6 — Backlink graph from markdown + wiki-links
 
@@ -49,16 +49,15 @@ document X?"
 
 ### S7 — Stale-index behavior: graceful degradation
 
-If a document was edited but not yet reindexed, search results may include
-stale matches. The `SearchResult` includes the `indexed_revision` so the
-platform shell can show a "reindexing..." indicator if needed. Stale results
-are NOT harmful — they just may not reflect the very latest edit.
+Native results retain their source snapshot, revision, document identity and
+path. Activation rejects changed or closed documents before installing a
+selection. A new query builds from the current open buffers.
 
 ### S8 — Result navigation via AppMessage
 
-`AppMessage::SearchResultActivated { document_id, byte_offset }` switches to
-the document's tab and scrolls to the match offset. The platform shell
-handles the visual navigation.
+`DocumentSessionCore::activate_navigation` validates the retained result,
+switches tabs through the shared reducer, and stores its selection and viewport.
+The native shell then installs that shared view and refreshes the preview.
 
 ## Locking gate
 
