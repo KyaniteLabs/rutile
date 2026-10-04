@@ -66,6 +66,14 @@ Parity means **same contracts, native GTK widgets**. Not iced-on-Linux. Not NSPa
    so no behavior change is needed here.
 2. File ▸ Open / Save / Save As / Close. Reuse `FileChooserNative`. Window
    close remains quit. Last-tab Close Tab stays a no-op.
+   **VERIFIED 2026-10-04 on Linux (nucbox x86_64, Xvfb + dbus-run-session):**
+   File menu carries Open… (`FileChooserNative` → `execute_shared_open`),
+   Save / Save As… (`prompt_save_path` → `FileChooserNative` Save →
+   `save_session_path` → `save_as`, failure → durable notice, dirty kept),
+   Quit (`window.close()`; window close is the quit path — no tabs yet, so
+   no Close Tab question arises). Live `RUTILE_PRODUCT_FUNCTIONAL_PATH`
+   journey: native edit → save → reopen `passed=true`, exact expected bytes
+   on disk, clean close. Menu callbacks route to the same proven methods.
 
 ### P1 — Tabs
 
