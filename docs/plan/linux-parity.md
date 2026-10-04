@@ -56,6 +56,14 @@ Parity means **same contracts, native GTK widgets**. Not iced-on-Linux. Not NSPa
 
 1. Stop dropping the CLI path. After GTK window build, call
    `open_via_shared_command` + `install_open_snapshot`.
+   **VERIFIED 2026-10-04 on Linux (nucbox x86_64, Xvfb + dbus-run-session):**
+   cold `rutile <file>` delivers via `connect_open` → pending queue →
+   `build_window` drain → `execute_shared_open` (which is
+   `open_via_shared_command` + `install_session_view`); no-arg launch keeps
+   the starter document. Observable with `RUTILE_STARTUP_TRACE=1`
+   (`open-delivered path=…`, test-control only). `main.rs` still drops the
+   parsed value (`let _ = path`) — argv reaches GTK through `run_with_args`,
+   so no behavior change is needed here.
 2. File ▸ Open / Save / Save As / Close. Reuse `FileChooserNative`. Window
    close remains quit. Last-tab Close Tab stays a no-op.
 

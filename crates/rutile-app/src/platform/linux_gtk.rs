@@ -3369,6 +3369,13 @@ fn drain_pending_open_paths(
         let _ = session.borrow_mut().report_open_warning(warning);
     }
     for path in pending_paths.borrow_mut().drain(..) {
+        #[cfg(feature = "test-control")]
+        if std::env::var_os("RUTILE_STARTUP_TRACE").is_some() {
+            eprintln!(
+                "RUTILE_STARTUP_TRACE open-delivered path={}",
+                path.display()
+            );
+        }
         execute_shared_open(
             session,
             editor_adapter,
