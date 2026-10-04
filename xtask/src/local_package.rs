@@ -12,7 +12,6 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
 
-pub const LOCAL_BETA_VERSION: &str = "0.2.2";
 pub const MAX_EXECUTABLE_BYTES: u64 = 25 * 1024 * 1024;
 pub const MAX_ARTIFACT_BYTES: u64 = 20 * 1024 * 1024;
 
