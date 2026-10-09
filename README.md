@@ -10,7 +10,7 @@ Rutile is a lightweight native Markdown editor written in Rust. It combines an i
 
 ## TL;DR
 
-Rutile is a local-first native Markdown editor: typed Rust core, Iced/AppKit on macOS, GTK3 on Linux, sanitized live preview, no Electron. Current release: **0.2.3 (preview tier)** — macOS packages with provenance records and release-authority-signed publication authorizations in [Releases](https://github.com/KyaniteLabs/rutile/releases). Linux packages follow the full tag ceremony.
+Rutile is a local-first native Markdown editor: typed Rust core, Iced/AppKit on macOS, GTK3 on Linux, sanitized live preview, no Electron. Workspace version: **0.2.3 (preview tier)** — macOS packages with provenance records and release-authority-signed publication authorizations are staged as a GitHub release that is **still a draft** (not yet publicly visible); the last public tag is **`v0.2.2`**. See [Releases](https://github.com/KyaniteLabs/rutile/releases). Linux packages follow the full tag ceremony.
 
 ## Who it's for
 
@@ -20,7 +20,7 @@ People who want a small native writing app they can build and run locally — wr
 
 ### Is this ready to publish?
 
-Partially — deliberately. 0.2.3 ships at the **preview tier**: every artifact
+Partially — deliberately. 0.2.3 is prepared at the **preview tier** (its GitHub release is still a draft): every artifact
 carries a reproducible-build provenance record and an ed25519 release-authority
 signature over that exact artifact. The full production tier additionally
 requires the independent-verifier readiness ceremony (`publication_authorized`
@@ -37,7 +37,7 @@ Yes on macOS (parked documents + Iced strip). Linux has the same reducer but no 
 
 ## Agent surface
 
-Read `AGENTS.md` and `docs/handoff/current-state.md` before changing code. Frozen files: `crates/rutile-core/src/render.rs`, `crates/rutile-core/src/security.rs`, `crates/rutile-types/src/safe_link.rs`. Authority remote is Forgejo `git.kyanitelabs.tech:simon/feathermark.git`.
+Read `AGENTS.md` and `docs/handoff/current-state.md` before changing code. Frozen files: `crates/rutile-core/src/render.rs`, `crates/rutile-core/src/security.rs`, `crates/rutile-types/src/safe_link.rs`. Authority remote is Forgejo `git.kyanitelabs.tech:simon/feathermark.git` (private, maintainers only).
 
 <!-- s-plus-geo:end -->
 
@@ -138,7 +138,7 @@ Documents labeled **Current** describe the live code. Documents labeled **Histor
 
 ## Source and contributing
 
-Authority remote: [git.kyanitelabs.tech/simon/feathermark](https://git.kyanitelabs.tech/simon/feathermark). GitHub, if present, is a mirror. Agent and contributor rules: [`AGENTS.md`](AGENTS.md).
+Authority remote: [git.kyanitelabs.tech/simon/feathermark](https://git.kyanitelabs.tech/simon/feathermark) (private, maintainers only). GitHub ([KyaniteLabs/rutile](https://github.com/KyaniteLabs/rutile)) is the public mirror; file public issues there. Agent and contributor rules: [`AGENTS.md`](AGENTS.md).
 
 ## License
 
