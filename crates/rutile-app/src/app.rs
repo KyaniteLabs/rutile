@@ -17,7 +17,7 @@ use crate::actions::{
     ActionError, ActionRegistry, ExportOutput, FindSession, FormatApplied, InsertApplied,
     ReplaceApplied, SessionRestore,
 };
-use crate::document_manager::{DocumentManager, DocumentSlot};
+use crate::document_manager::{DocumentManager, DocumentSlot, SaveDurability};
 use crate::publishing::PublishingPreset;
 use crate::tasteroll::TasteState;
 
@@ -83,6 +83,11 @@ pub enum NoticeSeverity {
 /// Notices are persisted in [`AppState::notices`] so the native shell can render
 /// them on its next view update and keep them across reducer messages until the
 /// user dismisses them.
+///
+/// Lifecycle: `push_notice` → *Active* (in [`AppState::notices`]) →
+/// `dismiss_notice` → removed. Presence in the list **is** the state; the old
+/// `shown` flag was never read and `dismissed` was garbage-collected in the same
+/// reducer step that set it, so neither could ever be observed as `true`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UserNotice {
     pub id: usize,
@@ -90,8 +95,6 @@ pub struct UserNotice {
     pub message: String,
     pub source_error: String,
     pub action_label: Option<String>,
-    pub shown: bool,
-    pub dismissed: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -569,37 +572,39 @@ impl AppState {
             message: message.into(),
             source_error: source_error.into(),
             action_label: None,
-            shown: false,
-            dismissed: false,
         };
         self.notices.push(notice.clone());
         notice
     }
 
-    /// Marks the notice with `id` as dismissed, if it exists.
-    fn dismiss_notice(&mut self, id: usize) {
-        if let Some(notice) = self.notices.iter_mut().find(|n| n.id == id) {
-            notice.dismissed = true;
-        }
+    /// Opened/reopened document: record it in recents and load it clean.
+    /// Shared by [`AppMessage::DocumentOpened`] and a successful
+    /// [`AppMessage::OpenRequestCompleted`].
+    fn load_opened(
+        &mut self,
+        revision: Revision,
+        path: PathBuf,
+        disk: DiskVersion,
+    ) -> Vec<AppEffect> {
+        self.recents.touch(path.clone());
+        self.documents
+            .active_slot_mut()
+            .load_clean(revision, Some(path), Some(disk));
+        vec![AppEffect::ScheduleRender { revision }]
     }
 
-    /// Removes dismissed notices from the active list.
-    fn gc_dismissed_notices(&mut self) {
-        self.notices.retain(|notice| !notice.dismissed);
+    /// Active → removed: dismisses the notice with `id`. Unknown ids are a
+    /// no-op (stale dismissals from the shell are harmless).
+    fn dismiss_notice(&mut self, id: usize) {
+        self.notices.retain(|notice| notice.id != id);
     }
 
     pub fn reduce(&mut self, message: AppMessage) -> Vec<AppEffect> {
         match message {
             AppMessage::NewDocument => {
-                let slot = self.documents.active_slot_mut();
-                slot.revision = Revision::new(0);
-                slot.dirty = false;
-                slot.path = None;
-                slot.saved_disk = None;
-                slot.external_conflict = None;
-                slot.preview = PreviewState::Waiting {
-                    revision: Revision::new(0),
-                };
+                self.documents
+                    .active_slot_mut()
+                    .load_clean(Revision::new(0), None, None);
                 vec![AppEffect::ScheduleRender {
                     revision: Revision::new(0),
                 }]
@@ -608,39 +613,21 @@ impl AppState {
                 revision,
                 path,
                 disk,
-            } => {
-                self.recents.touch(path.clone());
-                let slot = self.documents.active_slot_mut();
-                slot.revision = revision;
-                slot.dirty = false;
-                slot.path = Some(path);
-                slot.saved_disk = Some(disk);
-                slot.external_conflict = None;
-                slot.preview = PreviewState::Waiting { revision };
-                vec![AppEffect::ScheduleRender { revision }]
-            }
-            AppMessage::DocumentEdited { revision }
-                if revision <= self.documents.active_slot().revision =>
-            {
-                vec![AppEffect::IgnoredStale { revision }]
-            }
+            } => self.load_opened(revision, path, disk),
             AppMessage::DocumentEdited { revision } => {
-                let slot = self.documents.active_slot_mut();
-                slot.revision = revision;
-                slot.dirty = true;
-                slot.preview = PreviewState::Waiting { revision };
-                vec![AppEffect::ScheduleRender { revision }]
+                match self.documents.active_slot_mut().mark_edited(revision) {
+                    Ok(()) => vec![AppEffect::ScheduleRender { revision }],
+                    Err(_) => vec![AppEffect::IgnoredStale { revision }],
+                }
             }
             AppMessage::SaveCompleted {
                 revision,
                 path,
                 disk,
             } if revision == self.documents.active_slot().revision => {
-                let slot = self.documents.active_slot_mut();
-                slot.dirty = false;
-                slot.path = Some(path);
-                slot.saved_disk = Some(disk);
-                slot.external_conflict = None;
+                self.documents
+                    .active_slot_mut()
+                    .record_save(path, disk, SaveDurability::Durable);
                 vec![]
             }
             AppMessage::SaveCompleted { revision, .. } => {
@@ -655,11 +642,9 @@ impl AppState {
                 // could not be verified. Keep dirty set so the user can re-save
                 // to flush the directory, but record the disk version/path so
                 // external-change detection can proceed.
-                let slot = self.documents.active_slot_mut();
-                slot.dirty = true;
-                slot.path = Some(path);
-                slot.saved_disk = Some(disk);
-                slot.external_conflict = None;
+                self.documents
+                    .active_slot_mut()
+                    .record_save(path, disk, SaveDurability::Unknown);
                 vec![]
             }
             AppMessage::SaveDurabilityUnknown { revision, .. } => {
@@ -743,17 +728,7 @@ impl AppState {
                 vec![AppEffect::PerformOpen { path }]
             }
             AppMessage::OpenRequestCompleted { result } => match result {
-                Ok((revision, path, disk)) => {
-                    self.recents.touch(path.clone());
-                    let slot = self.documents.active_slot_mut();
-                    slot.revision = revision;
-                    slot.dirty = false;
-                    slot.path = Some(path);
-                    slot.saved_disk = Some(disk);
-                    slot.external_conflict = None;
-                    slot.preview = PreviewState::Waiting { revision };
-                    vec![AppEffect::ScheduleRender { revision }]
-                }
+                Ok((revision, path, disk)) => self.load_opened(revision, path, disk),
                 Err(error) => {
                     let notice = self.push_notice(
                         NoticeSeverity::Error,
@@ -849,7 +824,6 @@ impl AppState {
             }
             AppMessage::NoticeDismissed { id } => {
                 self.dismiss_notice(id);
-                self.gc_dismissed_notices();
                 vec![]
             }
             AppMessage::SurfaceNotice {
@@ -864,20 +838,27 @@ impl AppState {
                 // Contract: one full authoritative resync after incremental failure.
                 // If a resync is already outstanding (or already failed without
                 // clearing), surface a durable notice rather than retry forever.
-                if self.documents.active_slot().mirror_resync_pending {
+                if self
+                    .documents
+                    .active_slot_mut()
+                    .begin_mirror_resync()
+                    .is_ok()
+                {
+                    vec![AppEffect::PerformMirrorResync]
+                } else {
                     let notice = self.push_notice(
                         NoticeSeverity::Error,
                         format!("Preview mirror failed: {error}"),
                         &error,
                     );
                     vec![AppEffect::PresentNotice { notice }]
-                } else {
-                    self.documents.active_slot_mut().mirror_resync_pending = true;
-                    vec![AppEffect::PerformMirrorResync]
                 }
             }
             AppMessage::MirrorResyncCompleted { result } => {
-                self.documents.active_slot_mut().mirror_resync_pending = false;
+                // A completion with no outstanding resync is refused by the
+                // transition and leaves state unchanged; a failure is still
+                // surfaced to the user either way.
+                let _ = self.documents.active_slot_mut().finish_mirror_resync();
                 match result {
                     Ok(()) => vec![],
                     Err(error) => {
@@ -950,7 +931,8 @@ impl AppState {
             },
             AppMessage::OpenCommandPalette => {
                 self.palette.open();
-                self.palette.set_query("", &self.registry);
+                // Just opened, so the Open → Open query transition cannot be refused.
+                let _ = self.palette.set_query("", &self.registry);
                 vec![]
             }
             AppMessage::CloseCommandPalette => {
@@ -958,7 +940,9 @@ impl AppState {
                 vec![]
             }
             AppMessage::PaletteQueryChanged { query } => {
-                self.palette.set_query(&query, &self.registry);
+                // A late keystroke after the palette closed is refused, never
+                // resurrecting candidates on a hidden palette.
+                let _ = self.palette.set_query(&query, &self.registry);
                 vec![]
             }
             AppMessage::PaletteSelectNext => {
@@ -974,14 +958,15 @@ impl AppState {
                 // current state, close the palette, then forward the message
                 // through the reducer so the transition is exercised exactly
                 // once by the single writer.
-                let dispatch: Option<AppMessage> = {
-                    let id = self.palette.selected_candidate().map(|c| c.id);
-                    id.and_then(|id| {
-                        let desc = self.registry.lookup(&id).copied()?;
-                        (desc.message)(self)
-                    })
+                // A submit from a closed palette is refused: nothing is visible,
+                // so nothing may be dispatched.
+                let Ok(chosen) = self.palette.submit() else {
+                    return vec![];
                 };
-                self.palette.close();
+                let dispatch: Option<AppMessage> = chosen.and_then(|candidate| {
+                    let desc = self.registry.lookup(&candidate.id).copied()?;
+                    (desc.message)(self)
+                });
                 match dispatch {
                     Some(msg) => self.reduce(msg),
                     None => vec![],
@@ -1394,13 +1379,9 @@ impl AppState {
         document_path: Option<PathBuf>,
     ) -> Vec<AppEffect> {
         let revision = document.revision();
-        let slot = self.documents.active_slot_mut();
-        slot.revision = revision;
-        slot.dirty = true;
-        slot.path = document_path;
-        slot.saved_disk = None;
-        slot.external_conflict = None;
-        slot.preview = PreviewState::Waiting { revision };
+        self.documents
+            .active_slot_mut()
+            .load_recovered(revision, document_path);
         vec![AppEffect::ScheduleRender { revision }]
     }
 

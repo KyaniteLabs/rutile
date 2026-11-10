@@ -43,7 +43,35 @@ pub struct DocumentSlot {
     pub find: Option<FindSession>,
     pub autosave: Option<AutosaveStore>,
     pub next_transaction_id: u64,
-    pub mirror_resync_pending: bool,
+    /// Editor/preview mirror recovery phase. Write only through
+    /// [`DocumentSlot::begin_mirror_resync`] / [`DocumentSlot::finish_mirror_resync`].
+    pub mirror: MirrorSync,
+}
+
+/// Editor ↔ preview mirror recovery lifecycle (W2-A contract: one full
+/// authoritative resync after an incremental failure, never a retry loop).
+///
+/// ```text
+///            begin_mirror_resync()
+///   InSync ─────────────────────────▶ ResyncPending
+///     ▲                                  │   begin_mirror_resync() → Err(AlreadyPending)
+///     └──────────────────────────────────┘   (caller surfaces a durable notice)
+///            finish_mirror_resync()
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MirrorSync {
+    #[default]
+    InSync,
+    ResyncPending,
+}
+
+/// A refused [`MirrorSync`] transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum MirrorSyncError {
+    #[error("a full mirror resync is already outstanding")]
+    AlreadyPending,
+    #[error("no mirror resync is outstanding")]
+    NotPending,
 }
 
 impl Default for DocumentSlot {
@@ -58,24 +86,136 @@ impl Default for DocumentSlot {
             find: None,
             autosave: None,
             next_transaction_id: 0,
-            mirror_resync_pending: false,
+            mirror: MirrorSync::InSync,
         }
     }
 }
 
+/// Edit/save lifecycle transitions.
+///
+/// `revision`, `dirty`, `path`, `saved_disk`, `external_conflict` and
+/// `preview` together describe one document lifecycle. The reducer used to
+/// write those six fields by hand in five places; every write now goes through
+/// exactly one of these named moves:
+///
+/// ```text
+///   any ──load_clean(rev, path?, disk?)──▶ Clean   (dirty=false, conflict cleared, preview Waiting)
+///   any ──load_recovered(rev, path?)────▶ Dirty   (dirty=true, no disk baseline, preview Waiting)
+///   any ──mark_edited(rev > current)────▶ Dirty   (stale/equal revision refused)
+///   any ──record_save(path, disk, Durable)────────▶ Clean (conflict cleared)
+///   any ──record_save(path, disk, DurabilityUnknown)▶ Dirty (re-save flushes the directory)
+/// ```
 impl DocumentSlot {
     /// Creates a slot for a freshly opened document at `revision` and `path`.
     #[must_use]
     pub fn opened(revision: Revision, path: PathBuf) -> Self {
-        Self {
-            revision,
-            dirty: false,
-            preview: PreviewState::Waiting { revision },
-            path: Some(path),
-            ..Self::default()
+        let mut slot = Self::default();
+        slot.load_clean(revision, Some(path), None);
+        slot
+    }
+
+    /// Replace the buffer with clean content (new, opened, or reopened).
+    pub fn load_clean(
+        &mut self,
+        revision: Revision,
+        path: Option<PathBuf>,
+        disk: Option<DiskVersion>,
+    ) {
+        self.load(revision, false, path, disk);
+    }
+
+    /// Replace the buffer with recovered (unsaved) autosave content.
+    pub fn load_recovered(&mut self, revision: Revision, path: Option<PathBuf>) {
+        self.load(revision, true, path, None);
+    }
+
+    fn load(
+        &mut self,
+        revision: Revision,
+        dirty: bool,
+        path: Option<PathBuf>,
+        disk: Option<DiskVersion>,
+    ) {
+        self.revision = revision;
+        self.dirty = dirty;
+        self.path = path;
+        self.saved_disk = disk;
+        self.external_conflict = None;
+        self.preview = PreviewState::Waiting { revision };
+    }
+
+    /// Advance to a newer edited revision.
+    ///
+    /// # Errors
+    ///
+    /// [`StaleRevision`] when `revision` is not newer than the slot's revision;
+    /// the slot is left untouched.
+    pub fn mark_edited(&mut self, revision: Revision) -> Result<(), StaleRevision> {
+        if revision <= self.revision {
+            return Err(StaleRevision(revision));
+        }
+        self.revision = revision;
+        self.dirty = true;
+        self.preview = PreviewState::Waiting { revision };
+        Ok(())
+    }
+
+    /// Record a committed save of the current revision to `path`/`disk`.
+    pub fn record_save(&mut self, path: PathBuf, disk: DiskVersion, durability: SaveDurability) {
+        self.dirty = match durability {
+            SaveDurability::Durable => false,
+            // The atomic rename committed but parent-directory durability
+            // could not be verified: keep dirty so a re-save can flush it.
+            SaveDurability::Unknown => true,
+        };
+        self.path = Some(path);
+        self.saved_disk = Some(disk);
+        self.external_conflict = None;
+    }
+
+    /// `InSync → ResyncPending`.
+    ///
+    /// # Errors
+    ///
+    /// [`MirrorSyncError::AlreadyPending`] when a resync is already outstanding.
+    pub fn begin_mirror_resync(&mut self) -> Result<(), MirrorSyncError> {
+        match self.mirror {
+            MirrorSync::InSync => {
+                self.mirror = MirrorSync::ResyncPending;
+                Ok(())
+            }
+            MirrorSync::ResyncPending => Err(MirrorSyncError::AlreadyPending),
+        }
+    }
+
+    /// `ResyncPending → InSync`.
+    ///
+    /// # Errors
+    ///
+    /// [`MirrorSyncError::NotPending`] when no resync was outstanding (state is
+    /// unchanged).
+    pub fn finish_mirror_resync(&mut self) -> Result<(), MirrorSyncError> {
+        match self.mirror {
+            MirrorSync::ResyncPending => {
+                self.mirror = MirrorSync::InSync;
+                Ok(())
+            }
+            MirrorSync::InSync => Err(MirrorSyncError::NotPending),
         }
     }
 }
+
+/// Whether a committed save is known to be durable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveDurability {
+    Durable,
+    Unknown,
+}
+
+/// A refused [`DocumentSlot::mark_edited`]: the revision is not newer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("revision {0:?} is not newer than the slot's revision")]
+pub struct StaleRevision(pub Revision);
 
 /// The result of closing a tab.
 #[derive(Debug)]
@@ -320,6 +460,215 @@ impl DocumentManager {
 mod tests {
     use super::*;
     use rutile_types::Revision;
+
+    // --- DocumentSlot lifecycle machine ------------------------------------
+
+    /// A distinct [`DiskVersion`] per `n` (digest from one real save; `len`
+    /// and `modified` vary so versions compare unequal).
+    fn disk(n: u8) -> DiskVersion {
+        use rutile_core::FileService as _;
+        static BASE: std::sync::OnceLock<DiskVersion> = std::sync::OnceLock::new();
+        let base = BASE.get_or_init(|| {
+            let path =
+                std::env::temp_dir().join(format!("rutile-slot-machine-{}.md", std::process::id()));
+            let document = rutile_core::Document::new("x").unwrap();
+            let outcome =
+                rutile_core::LocalFileService::new().save_atomic(&path, &document.snapshot());
+            let _ = std::fs::remove_file(&path);
+            match outcome {
+                rutile_core::SaveOutcome::Committed { disk } => disk,
+                other => panic!("expected committed save, got {other:?}"),
+            }
+        });
+        DiskVersion {
+            digest: base.digest,
+            modified: std::time::SystemTime::UNIX_EPOCH
+                + std::time::Duration::from_secs(u64::from(n)),
+            len: u64::from(n),
+        }
+    }
+
+    /// The derived (dirty, has-baseline, conflict) table for each transition.
+    #[test]
+    fn slot_transition_state_table() {
+        let mut slot = DocumentSlot {
+            external_conflict: Some(disk(9)),
+            ..DocumentSlot::default()
+        };
+        slot.load_clean(Revision::new(3), Some(PathBuf::from("a.md")), Some(disk(1)));
+        assert_eq!(slot.revision, Revision::new(3));
+        assert!(!slot.dirty);
+        assert_eq!(slot.saved_disk, Some(disk(1)));
+        assert_eq!(slot.external_conflict, None);
+        assert_eq!(
+            slot.preview,
+            PreviewState::Waiting {
+                revision: Revision::new(3)
+            }
+        );
+
+        slot.external_conflict = Some(disk(9));
+        slot.load_recovered(Revision::new(1), Some(PathBuf::from("b.md")));
+        assert!(slot.dirty);
+        assert_eq!(slot.path.as_deref(), Some(Path::new("b.md")));
+        assert_eq!(
+            slot.saved_disk, None,
+            "recovered content has no disk baseline"
+        );
+        assert_eq!(slot.external_conflict, None);
+
+        slot.mark_edited(Revision::new(2)).unwrap();
+        assert!(slot.dirty);
+        assert_eq!(
+            slot.preview,
+            PreviewState::Waiting {
+                revision: Revision::new(2)
+            }
+        );
+
+        slot.external_conflict = Some(disk(9));
+        slot.record_save(PathBuf::from("c.md"), disk(2), SaveDurability::Durable);
+        assert!(!slot.dirty);
+        assert_eq!(slot.saved_disk, Some(disk(2)));
+        assert_eq!(slot.external_conflict, None);
+        assert_eq!(
+            slot.revision,
+            Revision::new(2),
+            "a save never moves the revision"
+        );
+
+        slot.record_save(PathBuf::from("c.md"), disk(3), SaveDurability::Unknown);
+        assert!(slot.dirty, "unverified durability keeps the document dirty");
+        assert_eq!(slot.saved_disk, Some(disk(3)));
+    }
+
+    #[test]
+    fn mark_edited_refuses_stale_and_equal_revisions() {
+        let mut slot = DocumentSlot::default();
+        slot.load_clean(Revision::new(5), None, None);
+        let before = slot.clone();
+        assert_eq!(
+            slot.mark_edited(Revision::new(5)),
+            Err(StaleRevision(Revision::new(5)))
+        );
+        assert_eq!(
+            slot.mark_edited(Revision::new(4)),
+            Err(StaleRevision(Revision::new(4)))
+        );
+        assert_eq!(slot.revision, before.revision);
+        assert_eq!(slot.dirty, before.dirty);
+        assert_eq!(slot.preview, before.preview);
+    }
+
+    /// Exhaustive over [`MirrorSync`] × transition.
+    #[test]
+    fn mirror_sync_transition_table() {
+        for start in [MirrorSync::InSync, MirrorSync::ResyncPending] {
+            let mut slot = DocumentSlot {
+                mirror: start,
+                ..DocumentSlot::default()
+            };
+            let begin = slot.begin_mirror_resync();
+            match start {
+                MirrorSync::InSync => {
+                    assert_eq!(begin, Ok(()));
+                    assert_eq!(slot.mirror, MirrorSync::ResyncPending);
+                }
+                MirrorSync::ResyncPending => {
+                    assert_eq!(begin, Err(MirrorSyncError::AlreadyPending));
+                    assert_eq!(slot.mirror, MirrorSync::ResyncPending);
+                }
+            }
+
+            let mut slot = DocumentSlot {
+                mirror: start,
+                ..DocumentSlot::default()
+            };
+            let finish = slot.finish_mirror_resync();
+            match start {
+                MirrorSync::InSync => {
+                    assert_eq!(finish, Err(MirrorSyncError::NotPending));
+                    assert_eq!(slot.mirror, MirrorSync::InSync);
+                }
+                MirrorSync::ResyncPending => {
+                    assert_eq!(finish, Ok(()));
+                    assert_eq!(slot.mirror, MirrorSync::InSync);
+                }
+            }
+        }
+    }
+
+    /// Stateful model test over random sequences of slot transitions.
+    #[test]
+    fn random_slot_transitions_preserve_invariants() {
+        let mut seed: u64 = 0x0d0c_5107;
+        for _run in 0..200 {
+            let mut slot = DocumentSlot::default();
+            let mut model_rev = 0u64;
+            let mut model_dirty = false;
+            let mut model_mirror = MirrorSync::InSync;
+            for _step in 0..50 {
+                seed = seed
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                let pick = seed >> 33;
+                let n = (pick % 7) as u8;
+                match pick % 7 {
+                    0 => {
+                        slot.load_clean(
+                            Revision::new(pick % 4),
+                            Some(PathBuf::from("x.md")),
+                            Some(disk(n)),
+                        );
+                        model_rev = pick % 4;
+                        model_dirty = false;
+                    }
+                    1 => {
+                        slot.load_recovered(Revision::new(pick % 4), None);
+                        model_rev = pick % 4;
+                        model_dirty = true;
+                    }
+                    2 => {
+                        let target = pick % 6;
+                        let ok = slot.mark_edited(Revision::new(target)).is_ok();
+                        assert_eq!(ok, target > model_rev);
+                        if ok {
+                            model_rev = target;
+                            model_dirty = true;
+                        }
+                    }
+                    3 => {
+                        slot.record_save(PathBuf::from("x.md"), disk(n), SaveDurability::Durable);
+                        model_dirty = false;
+                    }
+                    4 => {
+                        slot.record_save(PathBuf::from("x.md"), disk(n), SaveDurability::Unknown);
+                        model_dirty = true;
+                    }
+                    5 => {
+                        let ok = slot.begin_mirror_resync().is_ok();
+                        assert_eq!(ok, model_mirror == MirrorSync::InSync);
+                        model_mirror = MirrorSync::ResyncPending;
+                    }
+                    _ => {
+                        let ok = slot.finish_mirror_resync().is_ok();
+                        assert_eq!(ok, model_mirror == MirrorSync::ResyncPending);
+                        model_mirror = MirrorSync::InSync;
+                    }
+                }
+                assert_eq!(slot.revision, Revision::new(model_rev));
+                assert_eq!(slot.dirty, model_dirty);
+                assert_eq!(slot.mirror, model_mirror);
+                assert_eq!(
+                    slot.external_conflict, None,
+                    "every transition clears conflicts"
+                );
+                if slot.saved_disk.is_some() {
+                    assert!(slot.path.is_some(), "a disk baseline always has a path");
+                }
+            }
+        }
+    }
 
     #[test]
     fn new_manager_has_single_root_tab() {

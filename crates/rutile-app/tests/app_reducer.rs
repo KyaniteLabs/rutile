@@ -1593,6 +1593,50 @@ fn palette_close_resets_query_and_candidates() {
     assert!(state.palette().query().is_empty());
     assert!(state.palette().candidates().is_empty());
 }
+#[test]
+fn palette_submit_after_close_never_dispatches() {
+    // Regression: a late PaletteQueryChanged after the palette closed used to
+    // repopulate candidates on the hidden palette, and a following
+    // PaletteSubmit then dispatched the selected command (here: NewTab).
+    let mut state = AppState::new();
+    state.reduce(AppMessage::OpenCommandPalette);
+    state.reduce(AppMessage::CloseCommandPalette);
+    state.reduce(AppMessage::PaletteQueryChanged {
+        query: "new tab".into(),
+    });
+    assert!(!state.palette().is_open());
+    assert!(
+        state.palette().candidates().is_empty(),
+        "closed palette must not hold candidates"
+    );
+    let effects = state.reduce(AppMessage::PaletteSubmit);
+    assert!(effects.is_empty());
+    assert_eq!(
+        state.documents().len(),
+        1,
+        "closed palette dispatched a command"
+    );
+}
+
+#[test]
+fn dismissing_a_notice_removes_only_that_notice() {
+    let mut state = AppState::new();
+    for message in ["one", "two"] {
+        state.reduce(AppMessage::SurfaceNotice {
+            severity: NoticeSeverity::Warning,
+            message: message.into(),
+            source_error: String::new(),
+        });
+    }
+    let first = state.notices()[0].id;
+    state.reduce(AppMessage::NoticeDismissed { id: first });
+    assert_eq!(state.notices().len(), 1);
+    assert_eq!(state.notices()[0].message, "two");
+    // Unknown/stale ids are a harmless no-op.
+    state.reduce(AppMessage::NoticeDismissed { id: first });
+    assert_eq!(state.notices().len(), 1);
+}
+
 // --- Roadmap 04: reader-first view mode -----------------------------------
 
 #[test]

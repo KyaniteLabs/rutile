@@ -1385,8 +1385,6 @@ impl ProductSession {
             message: message.to_owned(),
             source_error: source,
             action_label: None,
-            shown: false,
-            dismissed: false,
         }
     }
 

@@ -1620,13 +1620,7 @@ impl LinuxProductSession {
 
     /// Returns the most recent undismissed notice, if any, for chrome rendering.
     pub fn latest_notice(&self) -> Option<crate::app::UserNotice> {
-        self.core
-            .app()
-            .notices()
-            .iter()
-            .rev()
-            .find(|notice| !notice.dismissed)
-            .cloned()
+        self.core.app().notices().last().cloned()
     }
 
     /// Dismisses the notice with `id` through the shared reducer.

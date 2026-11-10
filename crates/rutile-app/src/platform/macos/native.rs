@@ -478,11 +478,7 @@ impl ProductRunner {
     /// Pending pseudo-decisions (dirty-close / recovery) are deliberately NOT
     /// modeled here — only reducer-owned notices are announced.
     fn active_notice(&self) -> Option<&UserNotice> {
-        self.session
-            .app_state()
-            .notices()
-            .iter()
-            .find(|notice| !notice.dismissed)
+        self.session.app_state().notices().first()
     }
 
     /// The active status/notice message that should be surfaced to the user
@@ -3802,8 +3798,6 @@ mod tests {
             message: message.to_owned(),
             source_error: String::new(),
             action_label: None,
-            shown: false,
-            dismissed: false,
         }
     }
 

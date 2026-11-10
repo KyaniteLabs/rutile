@@ -90,71 +90,142 @@ impl PalettePanelSnapshot {
     }
 }
 
+/// Lifecycle of the command palette.
+///
+/// ```text
+///            open()                 set_query() / move_selection()
+///   Closed ─────────▶ Open{query,candidates,selected} ◀──────┐
+///     ▲                 │  │                                 │
+///     │    close()      │  └─────────────────────────────────┘
+///     └─────────────────┘       open() on Open = reset to empty query
+/// ```
+///
+/// Query, candidates, and selection only exist while the palette is open, so
+/// "closed but holding candidates" (which previously let
+/// [`AppMessage::PaletteSubmit`](crate::app::AppMessage::PaletteSubmit)
+/// dispatch a command from an invisible palette) is unrepresentable.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum PalettePhase {
+    #[default]
+    Closed,
+    Open {
+        query: String,
+        candidates: Vec<PaletteCandidate>,
+        selected: usize,
+    },
+}
+
+/// Error returned when a palette transition is attempted from the wrong phase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum PaletteError {
+    #[error("the command palette is closed")]
+    Closed,
+}
+
 /// The palette interaction state.
 ///
 /// Owned by [`AppState`](crate::app::AppState) and driven through reducer
 /// messages. The shell reads [`candidates`](CommandPalette::candidates) and
-/// [`selected_index`](CommandPalette::selected_index) to render.
+/// [`selected_index`](CommandPalette::selected_index) to render. Every write
+/// goes through the named transitions on this type; see [`PalettePhase`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CommandPalette {
-    open: bool,
-    query: String,
-    candidates: Vec<PaletteCandidate>,
-    selected: usize,
+    phase: PalettePhase,
 }
 
 impl CommandPalette {
+    /// The current lifecycle phase.
+    #[must_use]
+    pub const fn phase(&self) -> &PalettePhase {
+        &self.phase
+    }
+
     /// Whether the palette is currently visible.
     #[must_use]
     pub const fn is_open(&self) -> bool {
-        self.open
+        matches!(self.phase, PalettePhase::Open { .. })
     }
 
-    /// Opens the palette (clearing any previous query).
+    /// Transition `Closed | Open → Open` with an empty query and no rows.
     pub fn open(&mut self) {
-        self.open = true;
-        self.query.clear();
-        self.candidates.clear();
-        self.selected = 0;
+        self.phase = PalettePhase::Open {
+            query: String::new(),
+            candidates: Vec::new(),
+            selected: 0,
+        };
     }
 
-    /// Closes the palette and resets its query/selection.
+    /// Transition `Open | Closed → Closed`, dropping query and selection.
     pub fn close(&mut self) {
-        self.open = false;
-        self.query.clear();
-        self.candidates.clear();
-        self.selected = 0;
+        self.phase = PalettePhase::Closed;
     }
 
-    /// The current query string.
+    /// The current query string (empty while closed).
     #[must_use]
     pub fn query(&self) -> &str {
-        &self.query
+        match &self.phase {
+            PalettePhase::Open { query, .. } => query,
+            PalettePhase::Closed => "",
+        }
     }
 
-    /// The ranked candidate rows for the current query.
+    /// The ranked candidate rows for the current query (empty while closed).
     #[must_use]
     pub fn candidates(&self) -> &[PaletteCandidate] {
-        &self.candidates
+        match &self.phase {
+            PalettePhase::Open { candidates, .. } => candidates,
+            PalettePhase::Closed => &[],
+        }
     }
 
-    /// The index of the selected row, or `None` when there are no candidates.
+    /// The index of the selected row, or `None` when closed or empty.
     #[must_use]
     pub fn selected_index(&self) -> Option<usize> {
-        (!self.candidates.is_empty()).then_some(self.selected)
+        match &self.phase {
+            PalettePhase::Open {
+                candidates,
+                selected,
+                ..
+            } => (!candidates.is_empty()).then_some(*selected),
+            PalettePhase::Closed => None,
+        }
     }
 
-    /// The selected candidate, or `None` when empty.
+    /// The selected candidate, or `None` when closed or empty.
     #[must_use]
     pub fn selected_candidate(&self) -> Option<&PaletteCandidate> {
-        self.candidates.get(self.selected)
+        match &self.phase {
+            PalettePhase::Open {
+                candidates,
+                selected,
+                ..
+            } => candidates.get(*selected),
+            PalettePhase::Closed => None,
+        }
     }
 
-    /// Recomputes the ranked candidate list for `query` and resets selection to
-    /// the first row. An empty query surfaces every command in registry order.
-    pub fn set_query(&mut self, query: &str, registry: &ActionRegistry) {
-        self.query.clear();
-        self.query.push_str(query);
+    /// Transition `Open → Open`: recomputes the ranked candidate list for
+    /// `query` and resets selection to the first row. An empty query surfaces
+    /// every command in registry order.
+    ///
+    /// # Errors
+    ///
+    /// [`PaletteError::Closed`] when the palette is not open; state is untouched.
+    pub fn set_query(
+        &mut self,
+        query: &str,
+        registry: &ActionRegistry,
+    ) -> Result<(), PaletteError> {
+        let PalettePhase::Open {
+            query: stored,
+            candidates,
+            selected,
+        } = &mut self.phase
+        else {
+            return Err(PaletteError::Closed);
+        };
+        stored.clear();
+        stored.push_str(query);
 
         let q = query.trim().to_ascii_lowercase();
         let mut ranked: Vec<PaletteCandidate> = registry
@@ -175,26 +246,51 @@ impl CommandPalette {
         ranked.sort_by_key(|c| c.rank);
         ranked.truncate(MAX_PALETTE_RESULTS);
 
-        self.candidates = ranked;
-        self.selected = 0;
+        *candidates = ranked;
+        *selected = 0;
+        Ok(())
     }
 
-    /// Moves the selection down by `delta`, clamped to the candidate range.
-    /// Returns whether the selection changed.
+    /// Transition `Open → Open`: moves the selection by `delta`, clamped to the
+    /// candidate range. Returns whether the selection changed (always `false`
+    /// while closed or empty).
     pub fn move_selection(&mut self, delta: i32) -> bool {
-        if self.candidates.is_empty() {
+        let PalettePhase::Open {
+            candidates,
+            selected,
+            ..
+        } = &mut self.phase
+        else {
+            return false;
+        };
+        if candidates.is_empty() {
             return false;
         }
-        let last = self.candidates.len() - 1;
-        let target = (self.selected as i32)
+        let last = candidates.len() - 1;
+        let target = (*selected as i32)
             .saturating_add(delta)
             .clamp(0, last as i32) as usize;
-        if target == self.selected {
+        if target == *selected {
             false
         } else {
-            self.selected = target;
+            *selected = target;
             true
         }
+    }
+
+    /// Transition `Open → Closed`, yielding the candidate that was selected.
+    ///
+    /// # Errors
+    ///
+    /// [`PaletteError::Closed`] when the palette is not open: a submit from a
+    /// closed palette must never dispatch a command.
+    pub fn submit(&mut self) -> Result<Option<PaletteCandidate>, PaletteError> {
+        if !self.is_open() {
+            return Err(PaletteError::Closed);
+        }
+        let chosen = self.selected_candidate().copied();
+        self.close();
+        Ok(chosen)
     }
 }
 
@@ -283,6 +379,12 @@ mod command_palette_tests {
         }
     }
 
+    fn opened() -> CommandPalette {
+        let mut p = CommandPalette::default();
+        p.open();
+        p
+    }
+
     fn registry(cmds: &[CommandDescriptor]) -> ActionRegistry {
         // Bypass the static-catalog API for test-only dynamic registries.
         let mut reg = ActionRegistry::from_static(&[]);
@@ -297,9 +399,9 @@ mod command_palette_tests {
     #[test]
     fn empty_query_surfaces_all_in_order() {
         let reg = registry(&[desc("file.new", "New"), desc("file.save", "Save")]);
-        let mut p = CommandPalette::default();
+        let mut p = opened();
         p.open();
-        p.set_query("", &reg);
+        p.set_query("", &reg).unwrap();
         assert_eq!(p.candidates().len(), 2);
         assert_eq!(p.candidates()[0].id.0, "file.new");
         assert_eq!(p.candidates()[1].id.0, "file.save");
@@ -311,8 +413,8 @@ mod command_palette_tests {
             desc("file.save", "Save"),        // title prefix for "save"
             desc("save", "Persist Document"), // exact id for "save"
         ]);
-        let mut p = CommandPalette::default();
-        p.set_query("save", &reg);
+        let mut p = opened();
+        p.set_query("save", &reg).unwrap();
         assert_eq!(p.candidates()[0].id.0, "save");
         assert_eq!(p.candidates()[0].rank, MatchRank::ExactId);
         assert_eq!(p.candidates()[1].id.0, "file.save");
@@ -322,8 +424,8 @@ mod command_palette_tests {
     #[test]
     fn word_prefix_match_detected() {
         let reg = registry(&[desc("file.save-as", "Save As…")]);
-        let mut p = CommandPalette::default();
-        p.set_query("as", &reg);
+        let mut p = opened();
+        p.set_query("as", &reg).unwrap();
         assert_eq!(p.candidates().len(), 1);
         assert_eq!(p.candidates()[0].rank, MatchRank::WordPrefix);
     }
@@ -331,9 +433,9 @@ mod command_palette_tests {
     #[test]
     fn substring_is_lowest_tier() {
         let reg = registry(&[desc("file.new", "New Document")]);
-        let mut p = CommandPalette::default();
+        let mut p = opened();
         // "umen" is inside "Document" but not a prefix of any word.
-        p.set_query("umen", &reg);
+        p.set_query("umen", &reg).unwrap();
         assert_eq!(p.candidates().len(), 1);
         assert_eq!(p.candidates()[0].rank, MatchRank::Substring);
     }
@@ -341,16 +443,16 @@ mod command_palette_tests {
     #[test]
     fn id_substring_also_matches() {
         let reg = registry(&[desc("format.toggle-bold", "Bold")]);
-        let mut p = CommandPalette::default();
-        p.set_query("format", &reg);
+        let mut p = opened();
+        p.set_query("format", &reg).unwrap();
         assert_eq!(p.candidates().len(), 1);
     }
 
     #[test]
     fn no_match_returns_empty() {
         let reg = registry(&[desc("file.save", "Save")]);
-        let mut p = CommandPalette::default();
-        p.set_query("zzz", &reg);
+        let mut p = opened();
+        p.set_query("zzz", &reg).unwrap();
         assert!(p.candidates().is_empty());
         assert!(p.selected_index().is_none());
     }
@@ -360,8 +462,8 @@ mod command_palette_tests {
     #[test]
     fn query_is_case_insensitive() {
         let reg = registry(&[desc("file.save", "Save")]);
-        let mut p = CommandPalette::default();
-        p.set_query("SAVE", &reg);
+        let mut p = opened();
+        p.set_query("SAVE", &reg).unwrap();
         assert_eq!(p.candidates().len(), 1);
         assert_eq!(p.candidates()[0].rank, MatchRank::TitlePrefix);
     }
@@ -371,8 +473,8 @@ mod command_palette_tests {
     #[test]
     fn selection_starts_at_first_row() {
         let reg = registry(&[desc("a", "A"), desc("b", "B"), desc("c", "C")]);
-        let mut p = CommandPalette::default();
-        p.set_query("", &reg);
+        let mut p = opened();
+        p.set_query("", &reg).unwrap();
         assert_eq!(p.selected_index(), Some(0));
         assert_eq!(p.selected_candidate().unwrap().id.0, "a");
     }
@@ -380,8 +482,8 @@ mod command_palette_tests {
     #[test]
     fn move_selection_clamps_to_bounds() {
         let reg = registry(&[desc("a", "A"), desc("b", "B")]);
-        let mut p = CommandPalette::default();
-        p.set_query("", &reg);
+        let mut p = opened();
+        p.set_query("", &reg).unwrap();
         assert!(p.move_selection(1));
         assert_eq!(p.selected_index(), Some(1));
         assert!(!p.move_selection(1)); // clamped at last
@@ -392,7 +494,7 @@ mod command_palette_tests {
 
     #[test]
     fn move_selection_noop_when_empty() {
-        let mut p = CommandPalette::default();
+        let mut p = opened();
         assert!(!p.move_selection(1));
         assert!(p.selected_index().is_none());
     }
@@ -400,11 +502,11 @@ mod command_palette_tests {
     #[test]
     fn set_query_resets_selection() {
         let reg = registry(&[desc("a", "A"), desc("b", "B")]);
-        let mut p = CommandPalette::default();
-        p.set_query("", &reg);
+        let mut p = opened();
+        p.set_query("", &reg).unwrap();
         p.move_selection(1);
         assert_eq!(p.selected_index(), Some(1));
-        p.set_query("a", &reg);
+        p.set_query("a", &reg).unwrap();
         assert_eq!(p.selected_index(), Some(0));
     }
 
@@ -416,7 +518,7 @@ mod command_palette_tests {
         let mut p = CommandPalette::default();
         p.open();
         assert!(p.is_open());
-        p.set_query("a", &reg);
+        p.set_query("a", &reg).unwrap();
         assert!(!p.candidates().is_empty());
         p.close();
         assert!(!p.is_open());
@@ -433,8 +535,8 @@ mod command_palette_tests {
             cmds.push(desc(Box::leak(format!("c.{i}").into_boxed_str()), "cmd"));
         }
         let reg = registry(&cmds);
-        let mut p = CommandPalette::default();
-        p.set_query("", &reg);
+        let mut p = opened();
+        p.set_query("", &reg).unwrap();
         assert_eq!(p.candidates().len(), MAX_PALETTE_RESULTS);
     }
 
@@ -445,5 +547,129 @@ mod command_palette_tests {
         assert_eq!(Shortcut::cmd("s").display().unwrap(), "⌘S");
         assert_eq!(Shortcut::cmd_shift("p").display().unwrap(), "⇧⌘P");
         assert_eq!(Shortcut::cmd("f1").display().unwrap(), "⌘F1");
+    }
+
+    // -- Phase machine ---------------------------------------------------------
+
+    /// Exhaustive over [`PalettePhase`]: adding a phase without classifying it
+    /// here fails to compile.
+    fn phase_is_open(phase: &PalettePhase) -> bool {
+        match phase {
+            PalettePhase::Closed => false,
+            PalettePhase::Open { .. } => true,
+        }
+    }
+
+    #[test]
+    fn default_phase_is_closed_and_projects_empty() {
+        let p = CommandPalette::default();
+        assert_eq!(p.phase(), &PalettePhase::Closed);
+        assert!(!phase_is_open(p.phase()));
+        assert!(p.query().is_empty());
+        assert!(p.candidates().is_empty());
+        assert_eq!(p.selected_index(), None);
+        assert_eq!(p.selected_candidate(), None);
+    }
+
+    #[test]
+    fn closed_palette_refuses_query_selection_and_submit() {
+        let reg = registry(&[desc("a", "A"), desc("b", "B")]);
+        let mut p = CommandPalette::default();
+        assert_eq!(p.set_query("", &reg), Err(PaletteError::Closed));
+        assert!(!p.move_selection(1));
+        assert_eq!(p.submit(), Err(PaletteError::Closed));
+        assert_eq!(
+            p,
+            CommandPalette::default(),
+            "refused moves leave state untouched"
+        );
+    }
+
+    #[test]
+    fn submit_returns_selection_and_closes() {
+        let reg = registry(&[desc("a", "A"), desc("b", "B")]);
+        let mut p = opened();
+        p.set_query("", &reg).unwrap();
+        p.move_selection(1);
+        let chosen = p.submit().unwrap().expect("row selected");
+        assert_eq!(chosen.id.0, "b");
+        assert_eq!(p.phase(), &PalettePhase::Closed);
+        // Submit on an open-but-empty palette closes with no command.
+        let mut p = opened();
+        assert_eq!(p.submit(), Ok(None));
+        assert!(!p.is_open());
+    }
+
+    #[test]
+    fn reopen_resets_query() {
+        let reg = registry(&[desc("a", "A")]);
+        let mut p = opened();
+        p.set_query("a", &reg).unwrap();
+        p.open();
+        assert!(p.query().is_empty());
+        assert!(p.candidates().is_empty());
+    }
+
+    /// Stateful model test: drive random transition sequences (deterministic
+    /// LCG, no extra dependency) and check the invariants after every step.
+    #[test]
+    fn random_transition_sequences_preserve_invariants() {
+        let reg = registry(&[
+            desc("file.new", "New"),
+            desc("file.save", "Save"),
+            desc("file.save-as", "Save As"),
+            desc("view.split", "Split View"),
+        ]);
+        let queries = ["", "s", "save", "zzz", "view"];
+        let mut seed: u64 = 0x5eed_cafe;
+        for _run in 0..200 {
+            let mut p = CommandPalette::default();
+            let mut model_open = false;
+            for _step in 0..40 {
+                seed = seed
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                let pick = (seed >> 33) as usize;
+                match pick % 6 {
+                    0 => {
+                        p.open();
+                        model_open = true;
+                    }
+                    1 => {
+                        p.close();
+                        model_open = false;
+                    }
+                    2 => {
+                        let r = p.set_query(queries[pick % queries.len()], &reg);
+                        assert_eq!(r.is_ok(), model_open);
+                    }
+                    3 => {
+                        let changed = p.move_selection(1);
+                        assert!(model_open || !changed);
+                    }
+                    4 => {
+                        let changed = p.move_selection(-1);
+                        assert!(model_open || !changed);
+                    }
+                    _ => {
+                        let r = p.submit();
+                        assert_eq!(r.is_ok(), model_open);
+                        model_open = false;
+                    }
+                }
+                // Invariants.
+                assert_eq!(p.is_open(), model_open);
+                assert_eq!(phase_is_open(p.phase()), model_open);
+                if !model_open {
+                    assert!(p.query().is_empty());
+                    assert!(p.candidates().is_empty());
+                    assert_eq!(p.selected_index(), None);
+                }
+                if let Some(i) = p.selected_index() {
+                    assert!(i < p.candidates().len());
+                }
+                assert!(p.candidates().len() <= MAX_PALETTE_RESULTS);
+            }
+        }
     }
 }
