@@ -33,6 +33,10 @@ skip = [
     { name = "block2", version = "0.5.1" },
     { name = "calloop", version = "0.13.0" },
     { name = "calloop-wayland-source", version = "0.3.0" },
+    # zip 9.x (xtask artifact inspector) requires constant_time_eq 0.6 for its
+    # password check; blake3 (rutile-core) stays on 0.3. Semver-incompatible
+    # pair: retest when blake3 moves to 0.6.
+    { name = "constant_time_eq", version = "0.6.2" },
     { name = "font-types", version = "0.10.1" },
     { name = "getrandom", version = "0.2.17" },
     { name = "getrandom", version = "0.3.3" },
@@ -69,7 +73,6 @@ skip = [
     { name = "windows-link", version = "0.1.3" },
     { name = "windows-sys", version = "0.45.0" },
     { name = "windows-sys", version = "0.52.0" },
-    { name = "windows-sys", version = "0.59.0" },
     { name = "windows-targets", version = "0.42.2" },
     { name = "winnow", version = "0.5.40" },
 ]

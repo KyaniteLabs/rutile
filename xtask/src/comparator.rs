@@ -29,7 +29,7 @@ html-escape = "=0.2.13"
 serde = { version = "=1.0.220", features = ["derive"] }
 serde_json = "=1.0.140"
 thiserror = "=2.0.12"
-url = "=2.5.4"
+url = "=2.5.9"
 "#;
 
 const XTASK_MANIFEST: &str = r#"[package]
@@ -91,7 +91,12 @@ thiserror = "=2.0.12"
 toml = "=0.8.23"
 trybuild = "=1.0.104"
 walkdir = "=2.5.0"
-zip = "=2.4.2"
+zip = { version = "=9.7.3", default-features = false, features = [
+  "deflate",
+  "deflate64",
+  "time",
+  "zstd",
+] }
 "#;
 
 #[derive(Clone, Debug)]
