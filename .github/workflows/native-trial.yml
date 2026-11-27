@@ -1,0 +1,219 @@
+# SPDX-License-Identifier: MIT
+#
+# Rutile native/package gate trial on GitHub-hosted runners.
+#
+# PURPOSE: a measurement, not a gate. It answers one question with real runs:
+# can GitHub's standard hosted macOS (arm64) and Ubuntu runners execute the
+# four gates that .github/workflows/verify.yml does not run today --
+# macos-native-smoke, linux-native-smoke, package-macos and package-linux --
+# without any self-hosted runner?
+#
+# Boundaries:
+#   - runs only on its own trial branch (push) or by manual dispatch;
+#   - never on pull_request, so fork content never reaches these jobs;
+#   - never on a self-hosted runner: every job here is GitHub-hosted and
+#     ephemeral, which is what keeps a public repository safe;
+#   - publishes nothing. Packages are ad-hoc signed (macOS) or unsigned
+#     (Linux) run artifacts. A passing run here is NOT a release and does not
+#     satisfy docs/evidence/ci-release-policy.md (no signed tag, no release
+#     authority signature, no publication approval).
+#
+# The gate scripts are the unchanged repository scripts; only the runner and
+# the host plumbing differ. If these jobs pass, they are the definitions to
+# port into verify.yml. If they fail, the job log names what a runner host
+# actually has to provide.
+name: native-trial
+
+on:
+  push:
+    branches: ["platform/t_e35602dc-native-trial"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: short
+  PROFILE: pr
+
+jobs:
+  macos-native-smoke:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: bootstrap toolchain
+        run: |
+          set -eu
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0
+            . "$HOME/.cargo/env"
+          fi
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: runner facts (must be arm64)
+        run: |
+          set -eu
+          uname -a
+          sw_vers
+          id -un
+          echo "launchd manager: $(launchctl managername 2>/dev/null || echo unknown)"
+          df -h / | tail -n 1
+          test "$(uname -m)" = "arm64"
+      - name: macOS feature suite (macos-shell) + supervised native smoke
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          bash scripts/ci/macos-native-gate.sh --profile "$PROFILE"
+      - name: retain evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: evidence-macos-native-smoke
+          path: target/evidence/
+          if-no-files-found: error
+          retention-days: 30
+
+  linux-native-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: bootstrap toolchain
+        run: |
+          set -eu
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0
+            . "$HOME/.cargo/env"
+          fi
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: install native deps (Xvfb + D-Bus + GTK build dependencies)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb dbus pkg-config libgtk-3-dev libgtksourceview-4-dev libwebkit2gtk-4.1-dev
+      - name: Linux feature suite (linux-gtk) under isolated Xvfb/D-Bus
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          bash scripts/ci/linux-native-gate.sh --profile "$PROFILE"
+      - name: retain evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: evidence-linux-native-smoke
+          path: target/evidence/
+          if-no-files-found: error
+          retention-days: 30
+
+  package-macos:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: bootstrap toolchain
+        run: |
+          set -eu
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0
+            . "$HOME/.cargo/env"
+          fi
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: build featured release candidate
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          cargo build --locked --release -p rutile-app --features macos-shell --bin rutile
+      - name: package + inspect + smoke-row + SBOM + evidence (never publication)
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          bash scripts/ci/package-inspect.sh \
+            --candidate target/release/rutile \
+            --kind macos \
+            --profile "$PROFILE" \
+            --job package-macos
+      - name: retain packages
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: packages-macos
+          path: |
+            target/evidence/**/packages/
+            target/evidence/**/smoke/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: retain evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: evidence-package-macos
+          path: target/evidence/
+          if-no-files-found: error
+          retention-days: 30
+
+  package-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: bootstrap toolchain
+        run: |
+          set -eu
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0
+            . "$HOME/.cargo/env"
+          fi
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: install packaging + GUI deps (Xvfb, D-Bus, rpm, zstd, GTK)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb dbus rpm dpkg-dev zstd file pkg-config libgtk-3-dev libgtksourceview-4-dev libwebkit2gtk-4.1-dev
+      - name: build featured release candidate
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          cargo build --locked --release -p rutile-app --features linux-gtk --bin rutile
+      - name: package + inspect + smoke-row + SBOM + evidence (never publication)
+        # The package smoke-row launches the installed binary, so Linux needs a
+        # display and a session bus: a hosted image has neither, so the gate
+        # runs under a private Xvfb display and an isolated D-Bus session here.
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          xvfb-run -a dbus-run-session -- bash scripts/ci/package-inspect.sh \
+            --candidate target/release/rutile \
+            --kind linux \
+            --profile "$PROFILE" \
+            --job package-linux
+      - name: retain packages
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: packages-linux
+          path: |
+            target/evidence/**/packages/
+            target/evidence/**/smoke/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: retain evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: evidence-package-linux
+          path: target/evidence/
+          if-no-files-found: error
+          retention-days: 30
