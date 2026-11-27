@@ -299,6 +299,26 @@ tests_passed=0
 tests_failed=0
 overall_failed=0
 
+# failure_signature <stage_out> <stage_err>: the most localised failure marker in
+# a stage log. The first stderr line is usually progress output (`Compiling …`),
+# which names nothing a reader can act on, so prefer a real source location
+# (rustc/cargo-deny `--> path:line:col`, rust panic `panicked at path:line:col`),
+# then an `error…:` line, then the first non-empty line of either stream. The
+# gate-result carries this so the artifact alone says which target and line
+# failed, not only the 90-day public job log.
+failure_signature() {
+  local stage_out="$1" stage_err="$2" sig=""
+  sig="$(grep -m1 -hoE 'panicked at [^ ]+:[0-9]+(:[0-9]+)?|--> [^ ]+:[0-9]+(:[0-9]+)?' \
+    "$stage_err" "$stage_out" 2>/dev/null | head -n 1 || true)"
+  if [ -z "$sig" ]; then
+    sig="$(grep -m1 -hE '^error(\[[A-Za-z0-9-]+\])?: ' "$stage_err" "$stage_out" 2>/dev/null | head -n 1 || true)"
+  fi
+  if [ -z "$sig" ]; then
+    sig="$(grep -m1 -hE '[^[:space:]]' "$stage_err" "$stage_out" 2>/dev/null | head -n 1 || true)"
+  fi
+  printf '%s' "$sig" | tr '\t\n' '  ' | cut -c1-160
+}
+
 # record_stage <label> <code> <stage_out> <stage_err>
 # Appends one honest run row and folds the bounded stage logs into the combined
 # job logs (the 16 KiB cap is applied at emit time).
@@ -313,7 +333,7 @@ record_stage() {
     err_line=""
   else
     status="failed"; tests_failed=$((tests_failed + 1)); overall_failed=1
-    err_line="$(head -n 1 "$stage_err" | tr '\t\n' '  ' | cut -c1-160)"
+    err_line="$(failure_signature "$stage_out" "$stage_err")"
   fi
   printf '%s\t%s\t0\t0\t0\t%s\n' "$run_n" "$status" "$err_line" >>"$runs_tsv"
   rm -f "$stage_out" "$stage_err"
