@@ -73,6 +73,14 @@ jobs:
           fi
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: install Linux GTK build dependencies
+        # clippy checks every workspace crate, and on Linux that pulls in the
+        # GTK3 / GtkSourceView 4 / WebKitGTK 4.1 stack (docs/plan/build-plan.md).
+        # The Forgejo runner image carried these; the GitHub-hosted image does
+        # not, and the first run failed in glib-sys for that reason.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libgtk-3-dev libgtksourceview-4-dev libwebkit2gtk-4.1-dev
       - name: portable gate (fmt + clippy -D warnings + docs + test + xtask-test)
         # portable-gate.sh emits one gate-result whose runs[] includes an
         # xtask-test row (the test stage was expanded to run cargo test -p xtask
