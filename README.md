@@ -138,7 +138,7 @@ Documents labeled **Current** describe the live code. Documents labeled **Histor
 
 ## Source and contributing
 
-Authority remote: [git.kyanitelabs.tech/simon/feathermark](https://git.kyanitelabs.tech/simon/feathermark) (private, maintainers only). GitHub ([KyaniteLabs/rutile](https://github.com/KyaniteLabs/rutile)) is the public mirror; file public issues there. Agent and contributor rules: [`AGENTS.md`](AGENTS.md).
+Authority remote: [git.kyanitelabs.tech/simon/feathermark](https://git.kyanitelabs.tech/simon/feathermark) (private, maintainers only). GitHub ([KyaniteLabs/rutile](https://github.com/KyaniteLabs/rutile)) is the public mirror; file public issues there. Agent and contributor rules: [`AGENTS.md`](AGENTS.md). Contributing: [`CONTRIBUTING.md`](https://github.com/KyaniteLabs/.github/blob/main/CONTRIBUTING.md).
 
 ## License
 
