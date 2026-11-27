@@ -1670,6 +1670,10 @@ mod tests {
 
     /// Build a macOS zip request with the expected executable hash set to the
     /// hash of `binary_contents`.
+    ///
+    /// Only the macOS-gated smoke tests use this helper, so it must be gated
+    /// too: `--all-targets` lints on Linux and an ungated helper is dead code.
+    #[cfg(target_os = "macos")]
     fn macos_zip_request(
         temp: &Path,
         package_bytes: &[u8],
@@ -1727,6 +1731,9 @@ mod tests {
         }
     }
 
+    /// Only the macOS-gated smoke tests use this helper (see
+    /// `macos_zip_request`).
+    #[cfg(target_os = "macos")]
     fn failed(code: i32) -> StageOutcome {
         StageOutcome {
             status: StageStatus::Failed,

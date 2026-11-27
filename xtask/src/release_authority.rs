@@ -242,7 +242,9 @@ fn read_key_text_nofollow(
             path.display().to_string(),
         ));
     }
-    if require_private && (stat.st_mode as u32 & 0o077) != 0 {
+    // `libc::mode_t` is `u32` on Linux and `u16` on macOS; the group/other
+    // permission bits are used as `mode_t` constants so this is typed on both.
+    if require_private && (stat.st_mode & (libc::S_IRWXG | libc::S_IRWXO)) != 0 {
         return Err(ReleaseAuthorityError::UnsafeKeyFile(
             path.display().to_string(),
         ));

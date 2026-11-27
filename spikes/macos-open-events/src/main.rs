@@ -2,21 +2,36 @@
 //!
 //! Proves: open URL classifier, `EventLoopProxy<MacUserEvent>` wake, and cold-launch
 //! CLI open. Does not replace winit's `WinitApplicationDelegate` (that breaks the loop).
+//!
+//! This proof is macOS-only: it enables `rutile-app/macos-shell`, which is a hard
+//! `compile_error!` on other targets. Its macOS-only items (and dependencies, see
+//! `Cargo.toml`) are gated so `cargo clippy --workspace --all-targets` stays
+//! meaningful on Linux, where the crate compiles to a stub `main`.
 
+#[cfg(target_os = "macos")]
 use std::path::PathBuf;
+#[cfg(target_os = "macos")]
 use std::sync::mpsc;
+#[cfg(target_os = "macos")]
 use std::time::Duration;
 
+#[cfg(target_os = "macos")]
 use iced_winit::winit::application::ApplicationHandler;
+#[cfg(target_os = "macos")]
 use iced_winit::winit::event::WindowEvent;
+#[cfg(target_os = "macos")]
 use iced_winit::winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+#[cfg(target_os = "macos")]
 use iced_winit::winit::platform::run_on_demand::EventLoopExtRunOnDemand;
+#[cfg(target_os = "macos")]
 use iced_winit::winit::window::WindowId;
+#[cfg(target_os = "macos")]
 use rutile_app::platform::macos::{
     AppKitMainThread, MacOpenRequest, MacUserEvent, ProductSession, bind_open_proxy,
     forward_open_urls,
 };
 
+#[cfg(target_os = "macos")]
 fn main() {
     if let Err(error) = run_proof() {
         eprintln!("macos-open-events-spike failed: {error}");
@@ -25,10 +40,22 @@ fn main() {
     println!("macos-open-events-spike-ok hook=user-event-proxy winit=0.30.13");
 }
 
+/// The proof needs AppKit and `rutile-app`'s macOS shell; make a Linux run say
+/// so instead of pretending it proved anything.
+#[cfg(not(target_os = "macos"))]
+fn main() {
+    eprintln!(
+        "macos-open-events-spike is macOS-only (proves AppKit open-event delivery); nothing to prove on this platform"
+    );
+    std::process::exit(2);
+}
+
+#[cfg(target_os = "macos")]
 struct ProofRunner {
     saw_user_event: bool,
 }
 
+#[cfg(target_os = "macos")]
 impl ApplicationHandler<MacUserEvent> for ProofRunner {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         event_loop.set_control_flow(ControlFlow::Poll);
@@ -51,6 +78,7 @@ impl ApplicationHandler<MacUserEvent> for ProofRunner {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn run_proof() -> Result<(), String> {
     AppKitMainThread::claim().map_err(|error| error.to_string())?;
 

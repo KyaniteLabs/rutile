@@ -1371,7 +1371,9 @@ fn validate_dirfd(
             "output parent must be a real directory".into(),
         ));
     }
-    if (stat.st_mode as u32 & 0o022) != 0 {
+    // `libc::mode_t` is `u32` on Linux and `u16` on macOS; the group/other
+    // write bits are used as `mode_t` constants so this is typed on both.
+    if (stat.st_mode & (libc::S_IWGRP | libc::S_IWOTH)) != 0 {
         return Err(EvidenceBindError::Publish(
             "output parent path traverses a writable directory".into(),
         ));

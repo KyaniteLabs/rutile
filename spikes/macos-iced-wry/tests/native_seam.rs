@@ -1,6 +1,12 @@
 use std::sync::{Arc, Mutex};
 
-use macos_iced_wry_spike::{AppKitMainThread, CANDIDATE, MacShell};
+use macos_iced_wry_spike::{CANDIDATE, MacShell};
+
+// `AppKitMainThread::claim` only exists on macOS, and the single test that
+// uses it is `#[cfg(target_os = "macos")]`; importing it unconditionally is
+// an unused import on Linux (and `-D warnings` fails the gate).
+#[cfg(target_os = "macos")]
+use macos_iced_wry_spike::AppKitMainThread;
 
 #[cfg(feature = "macos-iced")]
 use macos_iced_wry_spike::{
