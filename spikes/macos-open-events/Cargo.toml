@@ -9,6 +9,10 @@ license.workspace = true
 name = "macos-open-events-spike"
 path = "src/main.rs"
 
-[dependencies]
-rutile-app = { path = "../../crates/rutile-app", version = "=0.2.3", default-features = false, features = ["macos-shell"] }
+# This proof is macOS-only. Its two dependencies live in the target table so a
+# Linux `cargo clippy --workspace --all-targets` does not enable
+# `rutile-app/macos-shell`, which is a hard `compile_error!` off macOS. The
+# source is gated the same way and compiles to a stub on other platforms.
+[target.'cfg(target_os = "macos")'.dependencies]
 iced_winit = "=0.14.0"
+rutile-app = { path = "../../crates/rutile-app", version = "=0.2.3", default-features = false, features = ["macos-shell"] }
