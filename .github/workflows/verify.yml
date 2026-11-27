@@ -1,0 +1,300 @@
+# SPDX-License-Identifier: MIT
+#
+# Rutile verify pipeline on GitHub Actions.
+#
+# GitHub is this repository's trunk and the only host that runs CI.
+# Ported from .forgejo/workflows/verify.yml when the private Forgejo copy was
+# retired (2026-11-27). Same gate scripts, same evidence contract, same
+# fail-closed fan-in; only the host-specific plumbing changed (runner labels,
+# action pins, artifact API).
+#
+# Every job emits one rutile.gate-result.v1 document beneath
+#   target/evidence/<commit>/<job>/run-<ms>-<pid>-<n>/gate-result.json
+# and uploads the evidence subtree. The final evidence-aggregate job merges all
+# evidence, validates every gate-result (fail-on-skip for the required job set),
+# and emits its own gate-result attesting the whole run.
+#
+# Ported: the runner-agnostic gates (fmt, clippy -D warnings, docs, test,
+# xtask-test, production build, cargo-deny for the workspace and the fuzz crate,
+# bounded fuzz smoke) and the evidence fan-in.
+#
+# NOT ported: macos-native-smoke, linux-native-smoke and package-{macos,linux}.
+# They need provisioned self-hosted runners (macOS arm64 with a display session;
+# Linux x11 with Xvfb + D-Bus) that this repository does not have on GitHub.
+# Their definitions stay in .forgejo/workflows/verify.yml until those runners
+# exist. Every run says so with a notice in the evidence-aggregate job, so a
+# green portable run is never read as a native-gate pass.
+#
+# Known state: the two cargo-deny jobs are red while the dependency tree carries
+# open RustSec advisories. That red is labelled on the run and never silenced;
+# evidence-aggregate requires both jobs.
+name: verify
+
+on:
+  workflow_call:
+    inputs:
+      profile:
+        description: "pr or release; release re-runs every gate at ship profile"
+        type: string
+        default: pr
+  push:
+    branches: [main, "codex/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: short
+  # pr for normal push/PR runs; release when called from a release workflow.
+  PROFILE: ${{ inputs.profile || 'pr' }}
+  # The gate scripts read the runner identity from FORGEJO_RUNNER_NAME, then
+  # RUNNER_NAME, then HOSTNAME. GitHub sets RUNNER_NAME on every runner.
+
+jobs:
+  # --- portable, runner-agnostic gates ---------------------------------------
+  portable:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: bootstrap toolchain
+        run: |
+          set -eu
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0
+            . "$HOME/.cargo/env"
+          fi
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: install Linux GTK build dependencies
+        # clippy checks every workspace crate, and on Linux that pulls in the
+        # GTK3 / GtkSourceView 4 / WebKitGTK 4.1 stack (docs/plan/build-plan.md).
+        # The Forgejo runner image carried these; the GitHub-hosted image does
+        # not, and the first run failed in glib-sys for that reason.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libgtk-3-dev libgtksourceview-4-dev libwebkit2gtk-4.1-dev
+      - name: portable gate (fmt + clippy -D warnings + docs + test + xtask-test)
+        # portable-gate.sh emits one gate-result whose runs[] includes an
+        # xtask-test row (the test stage was expanded to run cargo test -p xtask
+        # inline). There is no separate post-gate xtask step: a failure inside
+        # the gate is the gate's own run row, never a false-green afterthought.
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          bash scripts/ci/portable-gate.sh --stage lint,docs,test --profile "$PROFILE" --job portable
+      - name: retain evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: evidence-portable
+          path: target/evidence/
+          if-no-files-found: error
+          retention-days: 30
+
+  production-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: bootstrap toolchain
+        run: |
+          set -eu
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0
+            . "$HOME/.cargo/env"
+          fi
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy --no-self-update
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: production build (no test-control, separate target root)
+        # Emits gate-result; the clean artifact lands in target/prod/release/.
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          bash scripts/ci/portable-gate.sh --stage build --profile "$PROFILE" --job production-build
+      - name: retain clean production binary
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: production-binary
+          path: target/prod/release/rutile
+          if-no-files-found: error
+          retention-days: 30
+      - name: retain evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: evidence-production-build
+          path: target/evidence/
+          if-no-files-found: error
+          retention-days: 30
+
+  dependency-policy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: bootstrap toolchain + cargo-deny (pinned)
+        run: |
+          set -eu
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0
+            . "$HOME/.cargo/env"
+          fi
+          rustup toolchain install 1.88.0 --profile minimal --no-self-update
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          cargo install cargo-deny --version 0.20.2 --locked
+      - name: workspace dependency policy (cargo-deny check, deny warnings)
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          bash scripts/ci/portable-gate.sh --stage deny --profile "$PROFILE" --job dependency-policy
+      - name: "label: deny stage red (expected while the open advisories are unfixed)"
+        # A label, not a silence: this job stays failed and evidence-aggregate
+        # requires it. Remove this step together with the advisory fix.
+        if: failure()
+        run: |
+          echo "::warning title=deny stage is red::cargo-deny denies warnings and the dependency tree carried open RustSec advisories when CI moved to GitHub (Engineering owns the fix, due 2026-12-08). Red is expected for those advisories only. Read the cargo-deny output above: any advisory outside that set, or any non-advisory deny failure, is a new finding."
+          echo "### deny stage: red (labelled, not silenced)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Expected while the open RustSec advisories are unfixed (Engineering, due 2026-12-08). The job is required by evidence-aggregate. A failure that is not one of those advisories is a new finding." >> "$GITHUB_STEP_SUMMARY"
+      - name: retain evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: evidence-dependency-policy
+          path: target/evidence/
+          if-no-files-found: error
+          retention-days: 30
+
+  fuzz-dependency-policy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: bootstrap toolchain + cargo-deny (pinned)
+        run: |
+          set -eu
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0
+            . "$HOME/.cargo/env"
+          fi
+          rustup toolchain install 1.88.0 --profile minimal --no-self-update
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          cargo install cargo-deny --version 0.20.2 --locked
+      - name: fuzz crate dependency policy (cargo-deny check, deny warnings)
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          bash scripts/ci/portable-gate.sh --stage fuzz-deny --profile "$PROFILE" --job fuzz-dependency-policy
+      - name: "label: deny stage red (expected while the open advisories are unfixed)"
+        if: failure()
+        run: |
+          echo "::warning title=deny stage is red::cargo-deny denies warnings and the fuzz dependency tree carried open RustSec advisories when CI moved to GitHub (Engineering owns the fix, due 2026-12-08). Red is expected for those advisories only. Any other deny failure is a new finding."
+          echo "### deny stage: red (labelled, not silenced)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Expected while the open RustSec advisories are unfixed (Engineering, due 2026-12-08). The job is required by evidence-aggregate." >> "$GITHUB_STEP_SUMMARY"
+      - name: retain evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: evidence-fuzz-dependency-policy
+          path: target/evidence/
+          if-no-files-found: error
+          retention-days: 30
+
+  fuzz-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: bootstrap toolchains + cargo-fuzz (pinned)
+        run: |
+          set -eu
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0
+            . "$HOME/.cargo/env"
+          fi
+          rustup toolchain install 1.88.0 --profile minimal --no-self-update
+          rustup toolchain install nightly-2026-07-01 --profile minimal --component llvm-tools-preview
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          # cargo-fuzz's tree needs rustc >= 1.91 at install time (cargo-platform
+          # 0.3.3); install under the nightly toolchain this stage already uses.
+          rustup run nightly-2026-07-01 cargo install cargo-fuzz --version 0.13.2 --locked
+      - name: bounded fuzz smoke (60s/target)
+        # Each fuzz target runs for max_total_time=60s; the libFuzzer harness is
+        # the oracle. Emits one gate-result across all targets.
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          bash scripts/ci/portable-gate.sh --stage fuzz --profile "$PROFILE" --job fuzz-smoke
+      - name: retain evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: evidence-fuzz-smoke
+          path: target/evidence/
+          if-no-files-found: error
+          retention-days: 30
+
+  # --- evidence fan-in / final gate ------------------------------------------
+  evidence-aggregate:
+    needs:
+      - portable
+      - production-build
+      - dependency-policy
+      - fuzz-dependency-policy
+      - fuzz-smoke
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: "notice: gates this host does not run"
+        if: always()
+        run: |
+          echo "::notice title=native gates not run::macos-native-smoke, linux-native-smoke and package-macos/package-linux need provisioned self-hosted runners that this repository does not have on GitHub. Their definitions stay in .forgejo/workflows/verify.yml. This run covers the portable gates only; a green portable run is not a native-gate pass."
+          echo "### Native gates not run on this host" >> "$GITHUB_STEP_SUMMARY"
+          echo "macos-native-smoke, linux-native-smoke and package-macos/package-linux need provisioned self-hosted runners. This run covers the portable gates only." >> "$GITHUB_STEP_SUMMARY"
+      - name: merge per-job evidence
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: target/evidence
+          pattern: evidence-*
+          merge-multiple: true
+      - name: finalize + validate (fail-on-skip required rows)
+        # Validates every gate-result; fails closed if any required job is
+        # missing, failed, or structurally invalid. Passes the caller profile
+        # (pr) to the gate-result. No --provenance in the verify pipeline:
+        # evidence bind is a truthful PR-time skip.
+        run: |
+          bash scripts/ci/evidence-finalize.sh \
+            --required portable,production-build,dependency-policy,fuzz-dependency-policy,fuzz-smoke \
+            --profile "$PROFILE" \
+            --job evidence-aggregate
+      - name: retain final evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: evidence-final
+          path: target/evidence/
+          if-no-files-found: error
+          retention-days: 30
