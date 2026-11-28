@@ -28,10 +28,10 @@ shared tab data plane but no GTK tab chrome. Sequence:
 
 | Item | Value |
 |---|---|
-| Remote (authority) | `git.kyanitelabs.tech:simon/feathermark.git` (Forgejo `origin`) |
+| Remote (authority) | `KyaniteLabs/rutile` on GitHub — `main` is trunk. The private Forgejo copy `simon/feathermark` is archived, read-only, and not an authority |
 | Branch | `main` |
-| Tip | `d727952` — merge of PR #143; product tip #136 `07f0094` (docs #137–#138, #143 and release/tooling #139–#142 since) |
-| GitHub mirror | `KyaniteLabs/rutile` `main` = same SHA (re-verified 2026-08-27) |
+| Tip | GitHub `main` — read the branch. The last Forgejo tip this file recorded is `d727952` (merge of PR #143, reconciled 2026-08-27) |
+| GitHub | `KyaniteLabs/rutile` `main` is the trunk, not a mirror |
 | Workspace / crate version | 0.2.3 |
 | Rust | 1.88.0, edition 2024 |
 | Frozen files | `crates/rutile-core/src/render.rs`, `security.rs`, `crates/rutile-types/src/safe_link.rs` |
