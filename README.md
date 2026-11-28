@@ -37,7 +37,7 @@ Yes on macOS (parked documents + Iced strip). Linux has the same reducer but no 
 
 ## Agent surface
 
-Read `AGENTS.md` and `docs/handoff/current-state.md` before changing code. Frozen files: `crates/rutile-core/src/render.rs`, `crates/rutile-core/src/security.rs`, `crates/rutile-types/src/safe_link.rs`. This repository's `main` is where changes land, by pull request on GitHub `KyaniteLabs/rutile`. The private Forgejo copy `simon/feathermark` is not an authority and takes no direct work; it is archived — read-only, its `main` equal to GitHub `main` (`ae1821b5`) as read back on 2026-11-27.
+Read `AGENTS.md` and `docs/handoff/current-state.md` before changing code. Frozen files: `crates/rutile-core/src/render.rs`, `crates/rutile-core/src/security.rs`, `crates/rutile-types/src/safe_link.rs`. This repository's `main` is where changes land, by pull request on GitHub `KyaniteLabs/rutile`. The private Forgejo copy `simon/feathermark` is not an authority and takes no direct work; it is archived and read-only, and no longer tracks GitHub `main`.
 
 <!-- s-plus-geo:end -->
 
@@ -138,7 +138,7 @@ Documents labeled **Current** describe the live code. Documents labeled **Histor
 
 ## Source and contributing
 
-This repository's `main` is where changes land, by pull request on GitHub ([KyaniteLabs/rutile](https://github.com/KyaniteLabs/rutile)); file public issues there. The private Forgejo copy [git.kyanitelabs.tech/simon/feathermark](https://git.kyanitelabs.tech/simon/feathermark) is not an authority and takes no direct work; it is archived — read-only, its `main` equal to GitHub `main` (`ae1821b5`) as read back on 2026-11-27. Agent and contributor rules: [`AGENTS.md`](AGENTS.md).
+This repository's `main` is where changes land, by pull request on GitHub ([KyaniteLabs/rutile](https://github.com/KyaniteLabs/rutile)); file public issues there. The private Forgejo copy [git.kyanitelabs.tech/simon/feathermark](https://git.kyanitelabs.tech/simon/feathermark) is not an authority and takes no direct work; it is archived and read-only, and no longer tracks GitHub `main`. Agent and contributor rules: [`AGENTS.md`](AGENTS.md).
 
 ## License
 
