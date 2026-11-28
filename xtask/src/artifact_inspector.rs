@@ -750,7 +750,15 @@ impl ArtifactInspector {
                     break;
                 }
             };
-            let name = entry.name().to_string();
+            // zip 9 returns the entry name as a result: a name that cannot be
+            // decoded is a malformed archive, never an empty string.
+            let name = match entry.name() {
+                Ok(name) => name.to_string(),
+                Err(error) => {
+                    push(report, FindingCode::ManifestMalformed, error.to_string());
+                    continue;
+                }
+            };
             if entry.is_dir() {
                 continue;
             }
